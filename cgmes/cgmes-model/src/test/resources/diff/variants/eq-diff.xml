@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:cim="http://iec.ch/TC57/2013/CIM-schema-cim16#" xmlns:dm="http://iec.ch/TC57/61970-552/DifferenceModel/1#" xmlns:md="http://iec.ch/TC57/61970-552/ModelDescription/1#">
+    <dm:DifferenceModel rdf:about="urn:uuid:eq-diff">
+        <md:Model.profile>http://entsoe.eu/CIM/EquipmentCore/3/1</md:Model.profile>
+        <dm:reverseDifferences rdf:parseType="Statements">
+            <rdf:Description rdf:about="#_LINE1">
+                <cim:ACLineSegment.r>1.0</cim:ACLineSegment.r>
+            </rdf:Description>
+        </dm:reverseDifferences>
+        <dm:forwardDifferences rdf:parseType="Statements">
+            <rdf:Description rdf:about="#_LINE1">
+                <cim:ACLineSegment.r>2.0</cim:ACLineSegment.r>
+            </rdf:Description>
+        </dm:forwardDifferences>
+    </dm:DifferenceModel>
+</rdf:RDF>

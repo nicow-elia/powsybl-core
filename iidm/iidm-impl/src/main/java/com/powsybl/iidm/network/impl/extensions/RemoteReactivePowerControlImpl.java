@@ -14,6 +14,7 @@ import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.Terminal;
 import com.powsybl.iidm.network.extensions.RemoteReactivePowerControl;
 import com.powsybl.iidm.network.impl.AbstractMultiVariantIdentifiableExtension;
+import com.powsybl.iidm.network.impl.NetworkImpl;
 import com.powsybl.iidm.network.impl.TerminalExt;
 import gnu.trove.list.array.TDoubleArrayList;
 import org.slf4j.Logger;
@@ -59,14 +60,30 @@ public class RemoteReactivePowerControlImpl extends AbstractMultiVariantIdentifi
 
     @Override
     public RemoteReactivePowerControl setTargetQ(double targetQ) {
-        this.targetQ.set(getVariantIndex(), targetQ);
+        int variantIndex = getVariantIndex();
+        double oldTargetQ = this.targetQ.get(variantIndex);
+        if (oldTargetQ != targetQ) {
+            this.targetQ.set(variantIndex, targetQ);
+            notifyUpdate("targetQ", oldTargetQ, targetQ);
+        }
         return this;
     }
 
     @Override
     public RemoteReactivePowerControl setEnabled(boolean enabled) {
-        this.enabled.set(getVariantIndex(), enabled);
+        int variantIndex = getVariantIndex();
+        boolean oldEnabled = this.enabled.get(variantIndex);
+        if (oldEnabled != enabled) {
+            this.enabled.set(variantIndex, enabled);
+            notifyUpdate("enabled", oldEnabled, enabled);
+        }
         return this;
+    }
+
+    private void notifyUpdate(String attribute, Object oldValue, Object newValue) {
+        NetworkImpl network = (NetworkImpl) getExtendable().getNetwork();
+        String variantId = getVariantManagerHolder().getVariantManager().getWorkingVariantId();
+        network.getListeners().notifyExtensionUpdate(this, attribute, variantId, oldValue, newValue);
     }
 
     @Override

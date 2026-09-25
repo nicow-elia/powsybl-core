@@ -8,6 +8,7 @@
 
 package com.powsybl.cgmes.model;
 
+import com.powsybl.cgmes.model.diff.DifferenceModelParser;
 import com.powsybl.commons.compress.SafeZipInputStream;
 import com.powsybl.commons.datasource.CompressionFormat;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
@@ -16,6 +17,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.zip.ZipInputStream;
@@ -98,20 +100,54 @@ public class CgmesOnDataSource {
         }
     }
 
-    private <T> T loadInputStreamAndGetNamespace(String n, Function<InputStream, T> namespaceGetter) {
-        try (InputStream in = dataSource.newInputStream(n)) {
-            String fileExtension = n.substring(n.lastIndexOf('.') + 1);
+    /**
+     * Open one file of this data source and hand its content to a reader.
+     *
+     * <p>A file whose name ends in {@code .zip} is transparently entered: the reader sees the content of its single
+     * entry, not the archive. This is the only way content of a CGMES data source is read, so that every reader
+     * &mdash; namespace sniffing, difference model detection, difference model parsing &mdash; treats a zipped and
+     * an unzipped instance file the same way.</p>
+     *
+     * @param name   the name of the file inside the data source
+     * @param reader what to do with its content. The stream it is given is closed afterwards
+     * @return whatever the reader returned
+     * @throws CgmesModelException if the file cannot be opened or read
+     */
+    public <T> T readFile(String name, Function<InputStream, T> reader) {
+        try (InputStream in = dataSource.newInputStream(name)) {
+            String fileExtension = name.substring(name.lastIndexOf('.') + 1);
             if (fileExtension.equals(CompressionFormat.ZIP.getExtension())) {
                 try (SafeZipInputStream zis = new SafeZipInputStream(new ZipInputStream(in), 1, 1024000L)) {
                     zis.getNextEntry();
-                    return namespaceGetter.apply(zis);
+                    return reader.apply(zis);
                 }
             } else {
-                return namespaceGetter.apply(in);
+                return reader.apply(in);
             }
         } catch (IOException e) {
             throw new CgmesModelException(String.format(LISTING_CGMES_NAMES_IN_DATA_SOURCE, dataSource), e);
         }
+    }
+
+    private <T> T loadInputStreamAndGetNamespace(String n, Function<InputStream, T> namespaceGetter) {
+        return readFile(n, namespaceGetter);
+    }
+
+    /**
+     * The names of the files of this data source that hold an IEC 61970-552 difference model, sorted.
+     *
+     * <p>A difference model is a CGMES document like any other &mdash; it declares the RDF and a CIM namespace and
+     * therefore appears in {@link #names()} &mdash; so telling the two apart needs a look at the first elements of
+     * each file. That is one extra streamed read per file, stopping at the second start element.</p>
+     */
+    public Set<String> differenceModelNames() {
+        Set<String> found = new TreeSet<>();
+        for (String name : names()) {
+            if (DifferenceModelParser.isDifferenceModel(dataSource, name)) {
+                found.add(name);
+            }
+        }
+        return found;
     }
 
     private boolean containsValidNamespace(String name) {

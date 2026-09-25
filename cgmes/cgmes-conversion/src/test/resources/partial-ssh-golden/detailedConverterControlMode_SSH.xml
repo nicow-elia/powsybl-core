@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:entsoe="http://entsoe.eu/CIM/SchemaExtension/3/1#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:cim="http://iec.ch/TC57/2013/CIM-schema-cim16#" xmlns:md="http://iec.ch/TC57/61970-552/ModelDescription/1#">
+    <md:FullModel rdf:about="urn:uuid:00000000-0000-0000-0000-000000000001">
+        <md:Model.scenarioTime>2024-02-21T11:00:00Z</md:Model.scenarioTime>
+        <md:Model.created>2026-09-17T08:00:00Z</md:Model.created>
+        <md:Model.description>Mixed bipole</md:Model.description>
+        <md:Model.version>2</md:Model.version>
+        <md:Model.DependentOn rdf:resource="urn:uuid:mixed_bipole_EQ"/>
+        <md:Model.Supersedes rdf:resource="urn:uuid:mixed_bipole_SSH"/>
+        <md:Model.profile>http://entsoe.eu/CIM/SteadyStateHypothesis/1/1</md:Model.profile>
+        <md:Model.modelingAuthoritySet>powsybl.org</md:Model.modelingAuthoritySet>
+    </md:FullModel>
+    <cim:CsConverter rdf:about="#_CSC_1_1">
+        <cim:ACDCConverter.targetPpcc>0</cim:ACDCConverter.targetPpcc>
+        <cim:ACDCConverter.targetUdc>500</cim:ACDCConverter.targetUdc>
+        <cim:ACDCConverter.p>0</cim:ACDCConverter.p>
+        <cim:ACDCConverter.q>0</cim:ACDCConverter.q>
+        <cim:CsConverter.operatingMode rdf:resource="http://iec.ch/TC57/2013/CIM-schema-cim16#CsOperatingModeKind.inverter"/>
+        <cim:CsConverter.pPccControl rdf:resource="http://iec.ch/TC57/2013/CIM-schema-cim16#CsPpccControlKind.dcVoltage"/>
+    </cim:CsConverter>
+</rdf:RDF>

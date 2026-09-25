@@ -9,6 +9,7 @@ package com.powsybl.iidm.network.tck.extensions;
 
 import com.powsybl.commons.PowsyblException;
 import com.powsybl.iidm.network.*;
+import com.powsybl.iidm.network.events.ExtensionUpdateNetworkEvent;
 import com.powsybl.iidm.network.extensions.RemoteReactivePowerControl;
 import com.powsybl.iidm.network.extensions.RemoteReactivePowerControlAdder;
 import org.junit.jupiter.api.Test;
@@ -232,6 +233,37 @@ public abstract class AbstractRemoteReactivePowerControlTest {
         l2.remove();
         // extension should be removed
         assertNull(g.getExtension(RemoteReactivePowerControl.class));
+    }
+
+    /**
+     * The reactive power target and the state of a remote reactive power control are steady state values that an
+     * exchange format such as CGMES carries, so a change of either has to be observable from a network listener.
+     */
+    @Test
+    public void targetQAndEnabledNotificationTest() {
+        Network network = createNetwork();
+        Generator g = network.getGenerator("g4");
+        Line l = network.getLine("l34");
+        RemoteReactivePowerControl control = g.newExtension(RemoteReactivePowerControlAdder.class)
+                .withTargetQ(200.0)
+                .withRegulatingTerminal(l.getTerminal(TwoSides.ONE))
+                .withEnabled(true)
+                .add();
+
+        NetworkEventRecorder eventRecorder = new NetworkEventRecorder();
+        network.addListener(eventRecorder);
+        control.setTargetQ(210.0);
+        control.setEnabled(false);
+        assertEquals(List.of(
+                        new ExtensionUpdateNetworkEvent("g4", RemoteReactivePowerControl.NAME, "targetQ", INITIAL_VARIANT_ID, 200.0, 210.0),
+                        new ExtensionUpdateNetworkEvent("g4", RemoteReactivePowerControl.NAME, "enabled", INITIAL_VARIANT_ID, true, false)),
+                eventRecorder.getEvents());
+
+        // Setting the same values again is not a change and must not be reported
+        eventRecorder.reset();
+        control.setTargetQ(210.0);
+        control.setEnabled(false);
+        assertEquals(List.of(), eventRecorder.getEvents());
     }
 
     @Test

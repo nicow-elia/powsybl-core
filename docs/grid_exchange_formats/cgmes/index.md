@@ -4,6 +4,7 @@
 :hidden:
 format_specification.md
 triple_store.md
+rdf_database.md
 import.md
 post_processor.md
 export.md

@@ -7,8 +7,6 @@
  */
 package com.powsybl.cgmes.conversion.export;
 
-import com.powsybl.cgmes.conversion.CgmesExport;
-import com.powsybl.cgmes.extensions.CgmesMetadataModels;
 import com.powsybl.cgmes.model.CgmesMetadataModel;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.PowsyblException;
@@ -16,26 +14,23 @@ import com.powsybl.commons.exceptions.UncheckedXmlStreamException;
 import com.powsybl.commons.xml.XmlUtil;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.events.NetworkEvent;
-import com.powsybl.iidm.network.events.UpdateNetworkEvent;
 
 import javax.xml.stream.XMLStreamException;
 import javax.xml.stream.XMLStreamWriter;
 import java.io.BufferedOutputStream;
+import java.io.BufferedWriter;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
+import java.time.ZonedDateTime;
 import java.util.Collection;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
-import java.util.Optional;
-import java.util.Set;
 
 /**
  * Exports the changes recorded on a network as a partial CGMES .ssh file.
@@ -63,6 +58,13 @@ import java.util.Set;
  * replaces and the equipment model it applies to. A merged network has one of each per subnetwork, so it cannot be
  * exported as a whole, subnetworks have to be passed in one at a time.</p>
  *
+ * <p>The receiving side applies the file through the network update workflow, which needs
+ * {@code iidm.import.cgmes.use-previous-values-during-update} so that it keeps its current value for everything the
+ * partial file does not mention. Two further import parameters have to match on both sides for the changes that
+ * depend on them: {@code iidm.import.cgmes.create-active-power-control-extension} for participation factors and
+ * {@code iidm.import.cgmes.use-detailed-dc-model} for the converters of the detailed DC model. What is supported,
+ * what is only accepted, and what is reported as unsupported is listed in the CGMES export documentation.</p>
+ *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 public final class PartialSshExport {
@@ -88,72 +90,152 @@ public final class PartialSshExport {
     public static final class ExportOptions {
 
         private UnsupportedChangeBehavior unsupportedChangeBehavior = UnsupportedChangeBehavior.FAIL;
-        private String modelId;
-        private String description;
-        private Integer version;
-        private String modelingAuthoritySet;
-        private boolean clearDependencies;
-        private boolean supersedePreviousSshModel = true;
-        private final Set<String> dependentOn = new LinkedHashSet<>();
-        private final Set<String> supersedes = new LinkedHashSet<>();
+        private final ModelHeaderSettings header = new ModelHeaderSettings();
+        private String variant;
+        private boolean rejectSharedChanges;
 
         public ExportOptions setUnsupportedChangeBehavior(UnsupportedChangeBehavior unsupportedChangeBehavior) {
             this.unsupportedChangeBehavior = Objects.requireNonNull(unsupportedChangeBehavior);
             return this;
         }
 
+        /**
+         * @return what happens to a change that cannot be written into a partial steady state hypothesis
+         */
+        public UnsupportedChangeBehavior getUnsupportedChangeBehavior() {
+            return unsupportedChangeBehavior;
+        }
+
+        /**
+         * Export the state of one variant of the network.
+         *
+         * <p>Changes recorded on another variant are dropped, and the export runs with this variant selected so
+         * that the values it writes are the values of that variant. The working variant of the calling thread is
+         * restored afterwards.</p>
+         *
+         * @param variant the variant to export, or {@code null} for the working variant, which is the default
+         * @return this
+         */
+        public ExportOptions setVariant(String variant) {
+            this.variant = variant;
+            return this;
+        }
+
+        /**
+         * @return the variant this export describes, or {@code null} for the working one
+         */
+        public String getVariant() {
+            return variant;
+        }
+
+        /**
+         * Whether a change that is not stored per variant in IIDM is an unsupported change.
+         *
+         * <p>Off by default. See {@code CgmesDiffExport.ExportOptions.setRejectSharedChanges}: a change of an
+         * impedance, of an operational limit or of a property belongs to every variant of the network.</p>
+         *
+         * @param rejectSharedChanges whether changes without a variant are refused
+         * @return this
+         */
+        public ExportOptions setRejectSharedChanges(boolean rejectSharedChanges) {
+            this.rejectSharedChanges = rejectSharedChanges;
+            return this;
+        }
+
+        /**
+         * @return whether changes that belong to every variant are refused
+         */
+        public boolean isRejectSharedChanges() {
+            return rejectSharedChanges;
+        }
+
+        /**
+         * An independent copy of these options.
+         *
+         * @return the copy
+         */
+        public ExportOptions copy() {
+            ExportOptions copy = new ExportOptions();
+            copy.unsupportedChangeBehavior = unsupportedChangeBehavior;
+            copy.variant = variant;
+            copy.rejectSharedChanges = rejectSharedChanges;
+            header.copyInto(copy.header);
+            return copy;
+        }
+
         /** Set the identifier of the exported model, instead of generating one. */
         public ExportOptions setModelId(String modelId) {
-            this.modelId = modelId;
+            header.setModelId(modelId);
             return this;
         }
 
         public ExportOptions setDescription(String description) {
-            this.description = description;
+            header.setDescription(description);
             return this;
         }
 
         /** Set the version of the exported model, instead of incrementing the version of the source SSH. */
         public ExportOptions setVersion(int version) {
-            this.version = version;
+            header.setVersion(version);
             return this;
         }
 
         public ExportOptions setModelingAuthoritySet(String modelingAuthoritySet) {
-            this.modelingAuthoritySet = modelingAuthoritySet;
+            header.setModelingAuthoritySet(modelingAuthoritySet);
+            return this;
+        }
+
+        /**
+         * Set the point in time the exported state describes, instead of the case date of the network.
+         *
+         * <p>The scenario time is part of the identity of a model: two files describing the same grid at two
+         * different moments are two models, and a receiver uses it to order what it applies.</p>
+         */
+        public ExportOptions setScenarioTime(ZonedDateTime scenarioTime) {
+            header.setScenarioTime(scenarioTime);
+            return this;
+        }
+
+        /**
+         * Set the creation time of the exported model, instead of the time at which the file is written.
+         *
+         * <p>Setting it makes an export reproducible, and lets a caller writing a file on behalf of an earlier
+         * event date it with that event rather than with now.</p>
+         */
+        public ExportOptions setCreated(ZonedDateTime created) {
+            header.setCreated(created);
             return this;
         }
 
         /** Drop the dependencies inherited from the source SSH, keeping only those added explicitly. */
         public ExportOptions clearDependencies() {
-            clearDependencies = true;
-            dependentOn.clear();
+            header.clearDependencies();
             return this;
         }
 
         public ExportOptions addDependentOn(String modelId) {
-            dependentOn.add(modelId);
+            header.addDependentOn(modelId);
             return this;
         }
 
         public ExportOptions addDependentOn(Collection<String> modelIds) {
-            dependentOn.addAll(modelIds);
+            header.addDependentOn(modelIds);
             return this;
         }
 
         /** Whether the exported model declares that it supersedes the SSH the network was imported from. */
         public ExportOptions setSupersedePreviousSshModel(boolean supersedePreviousSshModel) {
-            this.supersedePreviousSshModel = supersedePreviousSshModel;
+            header.setSupersedePreviousModel(supersedePreviousSshModel);
             return this;
         }
 
         public ExportOptions addSupersedes(String modelId) {
-            supersedes.add(modelId);
+            header.addSupersedes(modelId);
             return this;
         }
 
         public ExportOptions addSupersedes(Collection<String> modelIds) {
-            supersedes.addAll(modelIds);
+            header.addSupersedes(modelIds);
             return this;
         }
     }
@@ -236,45 +318,63 @@ public final class PartialSshExport {
         Objects.requireNonNull(exportOptions);
         checkSingleGridModel(network);
 
-        CgmesExportContext context = new CgmesExportContext(network);
-        CgmesMetadataModel model = initializeExportMetadata(network, context, exportOptions);
-        PartialSshEventTranslator translator = new PartialSshEventTranslator(network, context, exportOptions.unsupportedChangeBehavior);
-        PartialSshUpdates updates = translator.translateAll(compactEvents(events));
+        try (ExportVariantScope scope = ExportVariantScope.enter(network, exportOptions.getVariant())) {
+            CgmesExportContext context = new CgmesExportContext(network);
+            if (exportOptions.header.getScenarioTime() != null) {
+                context.setScenarioTime(exportOptions.header.getScenarioTime());
+            }
+            context.setModelCreated(exportOptions.header.getCreated());
+            CgmesMetadataModel model =
+                    exportOptions.header.initialize(network, CgmesSubset.STEADY_STATE_HYPOTHESIS, context);
+            CgmesChangeTranslator translator =
+                    new CgmesChangeTranslator(network, context, exportOptions.unsupportedChangeBehavior)
+                            .setRejectSharedChanges(exportOptions.isRejectSharedChanges());
+            CgmesPropertyBuffer updates =
+                    translator.translateAll(compactEvents(ofSelectedVariant(events, exportOptions.getVariant())));
 
-        try {
-            XMLStreamWriter writer = XmlUtil.initializeWriter(true, "    ", outputStream);
-            write(updates, writer, context, model, network);
-        } catch (XMLStreamException e) {
-            throw new UncheckedXmlStreamException(e);
+            try {
+                // Buffered UTF-8 under the StAX writer: over a bare OutputStream the JDK writer emits one byte per
+                // call. The same bytes; the flush pushes them through to the stream, which is not closed
+                Writer out = new BufferedWriter(new OutputStreamWriter(outputStream, StandardCharsets.UTF_8));
+                XMLStreamWriter writer = XmlUtil.initializeWriter(true, "    ", out);
+                write(updates, writer, context, model, network);
+                writer.flush();
+            } catch (XMLStreamException e) {
+                throw new UncheckedXmlStreamException(e);
+            }
+            return List.copyOf(translator.exportedEvents());
         }
-        return List.copyOf(translator.exportedEvents());
     }
 
     /**
      * Keep, for every updated attribute, only the last recorded change.
      *
-     * <p>The relative order of the retained changes is the order of their last occurrence. Events that are not
-     * attribute updates are all retained, since they cannot be identified by an attribute.</p>
+     * <p>Attributes of an extension are compacted the same way, under the name of their extension, so that a
+     * repeated change of a participation factor collapses like a repeated change of a setpoint. The relative order
+     * of the retained changes is the order of their last occurrence. Events that are neither an attribute update nor
+     * an extension attribute update are all retained, since they cannot be identified by an attribute.</p>
+     *
+     * <p>Compaction is per (identifiable, attribute key); limit events are keyed per operational limits group and,
+     * for a temporary limit, per acceptable duration, because IIDM reports all of them under a single attribute name
+     * and two changes of two groups do not describe the same value.</p>
      */
     public static List<NetworkEvent> compactEvents(Collection<NetworkEvent> events) {
-        Objects.requireNonNull(events);
+        return EventCompactor.compact(events, null).events();
+    }
 
-        List<NetworkEvent> reversedEvents = new ArrayList<>(events);
-        Collections.reverse(reversedEvents);
-        List<NetworkEvent> compactedEvents = new ArrayList<>(reversedEvents.size());
-        Set<UpdateKey> retainedUpdates = new HashSet<>();
-        for (NetworkEvent event : reversedEvents) {
-            Objects.requireNonNull(event);
-            if (event instanceof UpdateNetworkEvent updateEvent) {
-                if (retainedUpdates.add(new UpdateKey(updateEvent.id(), updateEvent.attribute()))) {
-                    compactedEvents.add(event);
-                }
-            } else {
-                compactedEvents.add(event);
-            }
+    /**
+     * The changes that belong to the selected variant; naming a variant is a selection, not a rejection.
+     */
+    private static Collection<NetworkEvent> ofSelectedVariant(Collection<NetworkEvent> events, String variant) {
+        if (variant == null) {
+            return events;
         }
-        Collections.reverse(compactedEvents);
-        return compactedEvents;
+        return events.stream()
+                .filter(event -> {
+                    String eventVariant = CgmesChangeTranslator.variantIdOf(event);
+                    return eventVariant == null || eventVariant.equals(variant);
+                })
+                .toList();
     }
 
     /**
@@ -289,53 +389,7 @@ public final class PartialSshExport {
         }
     }
 
-    private static CgmesMetadataModel initializeExportMetadata(Network network, CgmesExportContext context, ExportOptions exportOptions) {
-        CgmesMetadataModel model = CgmesExport.initializeModelForExport(network, CgmesSubset.STEADY_STATE_HYPOTHESIS, context, true, false);
-        Optional<CgmesMetadataModel> sourceSshModel = getSourceSshModel(network);
-
-        if (exportOptions.description != null) {
-            model.setDescription(exportOptions.description);
-        }
-        if (exportOptions.version != null) {
-            model.setVersion(exportOptions.version);
-        } else {
-            sourceSshModel.ifPresent(sourceModel -> model.setVersion(sourceModel.getVersion() + 1));
-        }
-        if (exportOptions.modelingAuthoritySet != null) {
-            model.setModelingAuthoritySet(exportOptions.modelingAuthoritySet);
-        }
-
-        if (exportOptions.modelId != null) {
-            model.setId(exportOptions.modelId);
-        } else {
-            CgmesExportUtil.initializeModelId(network, model, context);
-        }
-
-        if (exportOptions.clearDependencies) {
-            model.clearDependencies();
-        }
-        model.addDependentOn(exportOptions.dependentOn);
-
-        model.clearSupersedes();
-        if (exportOptions.supersedePreviousSshModel) {
-            sourceSshModel.map(CgmesMetadataModel::getId)
-                    .filter(id -> id != null && !id.isEmpty())
-                    .filter(id -> !id.equals(model.getId()))
-                    .ifPresent(model::addSupersedes);
-        }
-        exportOptions.supersedes.stream()
-                .filter(id -> !id.equals(model.getId()))
-                .forEach(model::addSupersedes);
-
-        return model;
-    }
-
-    private static Optional<CgmesMetadataModel> getSourceSshModel(Network network) {
-        CgmesMetadataModels networkModels = network.getExtension(CgmesMetadataModels.class);
-        return networkModels != null ? networkModels.getModelForSubset(CgmesSubset.STEADY_STATE_HYPOTHESIS) : Optional.empty();
-    }
-
-    private static void write(PartialSshUpdates updates, XMLStreamWriter writer, CgmesExportContext context,
+    private static void write(CgmesPropertyBuffer updates, XMLStreamWriter writer, CgmesExportContext context,
                               CgmesMetadataModel model, Network network) throws XMLStreamException {
         String cimNamespace = context.getCim().getNamespace();
         CgmesExportUtil.writeRdfRoot(cimNamespace, context.getCim().getEuPrefix(), context.getCim().getEuNamespace(), writer);
@@ -344,8 +398,5 @@ public final class PartialSshExport {
         }
         updates.write(cimNamespace, writer, context);
         writer.writeEndDocument();
-    }
-
-    private record UpdateKey(String identifiableId, String attribute) {
     }
 }

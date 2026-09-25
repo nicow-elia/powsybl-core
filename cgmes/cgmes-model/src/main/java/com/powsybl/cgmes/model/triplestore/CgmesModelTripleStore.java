@@ -12,6 +12,7 @@ import com.google.re2j.Matcher;
 import com.google.re2j.Pattern;
 import com.powsybl.cgmes.model.*;
 import com.powsybl.commons.datasource.DataSource;
+import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.triplestore.api.*;
 import org.apache.commons.lang3.EnumUtils;
@@ -63,6 +64,20 @@ public class CgmesModelTripleStore extends AbstractCgmesModel {
     public void setQueryCatalog(String queryCatalogName) {
         this.invalidateCaches();
         this.queryCatalog = queryCatalogFor(this.cimVersion, queryCatalogName);
+    }
+
+    @Override
+    public void read(ReadOnlyDataSource mainDataSource, ReadOnlyDataSource alternativeDataSourceForBoundary, ReportNode reportNode) {
+        // One code path with the database loading: CgmesTripleStoreLoader is "CGMES files -> any triple store",
+        // and a file import is that, with parallelism 1, on a local store. Keeping a second copy of the same
+        // loop here is how the two would drift apart.
+        invalidateCaches();
+        nodeBreaker = null;
+        setBasename(CgmesModel.baseName(mainDataSource));
+        // The namespace this model was built with, not one sniffed again: CgmesModelFactory may have taken it
+        // from the boundary because the main data source declares none.
+        CgmesTripleStoreLoader.load(mainDataSource, alternativeDataSourceForBoundary, tripleStore, 1, reportNode,
+                cimNamespace);
     }
 
     @Override
@@ -701,7 +716,10 @@ public class CgmesModelTripleStore extends AbstractCgmesModel {
     }
 
     private String getBaseUri(String baseName) {
-        if (tripleStore.getImplementationName().equals("rdf4j")) {
+        // Every rdf4j-based implementation resolves rdf:ID="_x" against <base> to <base>/#_x, the remote ones
+        // (rdf4j-sparql) included, because the statements they hold were parsed by the very same rdf4j parser.
+        // Matching on the exact name "rdf4j" would hand a remote store the wrong base for its updates.
+        if (tripleStore.getImplementationName().startsWith("rdf4j")) {
             return baseName.concat("/#");
         } else {
             return baseName.concat("#");

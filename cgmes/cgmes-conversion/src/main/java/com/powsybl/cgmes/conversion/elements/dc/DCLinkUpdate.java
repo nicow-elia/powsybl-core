@@ -139,9 +139,19 @@ public class DCLinkUpdate {
             double pDcInverter = -1 * (Math.abs(getTargetPpccInverter()) + getPoleLossesInverter().value());
             double pDcRectifier = Math.abs(pDcInverter) + resistiveLossesFromPdcInverter(pDcInverter);
             targetP = pDcRectifier + getPoleLossesRectifier().value();
+        } else if (rectifierConverter().containsKey(TARGET_PPCC)) {
+            targetP = 0.0; // an explicit setpoint of zero is a setpoint, not a missing value
         } else {
             targetP = defaultData.targetP();
         }
+    }
+
+    /**
+     * The converter of the rectifier side, the only one whose targetPpcc carries the setpoint of the link: the
+     * inverter side always writes a targetPpcc of zero, so its presence says nothing about the setpoint.
+     */
+    private PropertyBag rectifierConverter() {
+        return mode == SIDE_1_RECTIFIER_SIDE_2_INVERTER ? converter1 : converter2;
     }
 
     private void computeLossFactors() {

@@ -49,6 +49,291 @@ However, before each update, we must create a new variant by cloning the initial
 At the end, PowSyBl will contain the operational data for all 24 hours, with each hour recorded in a different variant.
 
 
+(cgmes-import-difference-model)=
+## Difference model update
+
+A difference model is an IEC 61970-552 `dm:DifferenceModel` document: it says what a CGMES model said *before* a
+change and what it says *after* it, as two lists of statements. PowSyBl writes such documents from a recorded change
+log (see [difference model export](export.md#cgmes-difference-model-export)) and reads them back here. Difference
+models can also come from an [RDF database](rdf_database.md#difference-models-in-the-database) &mdash; where a
+state is addressed by `(scenario, timestep, version)`, see
+[versioning](rdf_database.md#versioning-snapshots-versions-and-timesteps) and
+[timesteps](rdf_database.md#timesteps-the-outer-dimension) &mdash; rather than from
+documents: the stored differences between the version a network holds and the version it is to reach are fetched and
+applied by the very same code.
+
+Applying one *in place* means feeding its forward statements through the ordinary network update workflow: no file is
+re-read, no network is rebuilt, and the result is exactly what the partial SSH file of the same change would have
+produced. Previous values are always used, because a difference is partial by definition.
+
+### Usage
+
+`network.update` detects a difference model on its own, so nothing has to be said about it:
+
+```java
+Network network = Network.read(originalDataSource);
+network.update(new GenericReadOnlyDataSource(directory, "case"));   // holds case_SSH_DIFF.xml
+```
+
+The file names are free &mdash; the detection reads the first elements of each file rather than its name &mdash; and a
+zip of difference models works like any other CGMES data source. A data source that mixes difference models with full
+or partial files is refused, because nothing would define the order in which they apply.
+
+The direct API adds the decision function, the undo and the explicit options:
+
+```java
+DifferenceModelSet differences = CgmesDiffImport.read(dataSource);
+
+// Nothing is modified: this answers whether the fast route is possible and why not
+Decision decision = CgmesDiffImport.canApplyInPlace(network, differences);
+if (decision.route() == Route.FAST) {
+    CgmesDiffImport.apply(network, differences, parameters, ReportNode.NO_OP);
+    // ... and back again
+    CgmesDiffImport.revert(network, differences, parameters, ReportNode.NO_OP);
+} else {
+    LOGGER.warn("Not applicable in place: {}", decision.reasons());
+}
+```
+
+`apply` also takes a single `DifferenceModel`, an `InputStream`, a `Path` or a `String`, and throws
+`CgmesDiffNotApplicableException` &mdash; which carries the decision &mdash; when the fast route is impossible. The
+network is never modified in that case: every check runs before the first mutation.
+
+### How the fast route works
+
+1. the document is parsed into statements by `DifferenceModelParser`, a streaming reader that never builds a graph;
+2. `FastRouteCapabilities` decides, from the document alone, whether every property is one an update query reads;
+3. every subject is resolved against the network &mdash; by identifier, by CGMES alias (terminals, tap changers) or by
+   the properties the importer left on the equipment (regulating controls, generating units, equivalent injections)
+   &mdash; which also decides the CIM class to write;
+4. properties an update query only reads *together* with others are completed from the receiving network, through the
+   very mapping the change exporter uses (`CgmesObjectDump`), so that a minimal difference of a third party applies;
+5. the result is written as one synthetic partial SSH document per profile into a fresh in-memory triple store and
+   handed to the ordinary update workflow;
+6. a difference of the equipment profile alone carries no dated steady state model, so `caseDate` and
+   `forecastDistance` are restored afterwards instead of being taken from a store that holds no date;
+7. the equipment statements no update query reads &mdash; branch impedances and the limits of a voltage level that
+   has no `VoltageLimit` objects &mdash; are applied with plain IIDM setters, mirroring exactly what the conversion
+   of a full equipment model does with the same values. They are validated while the plan is built, so a refusal
+   still costs nothing;
+8. after a CGMES 2.4.15 equipment difference, the equipment values the update workflow falls back on
+   (`CGMES.normalValue_*`, `CGMES.high|lowVoltageLimit`) are moved with it. In CGMES 2.4.15 a limit value *is* an
+   equipment value, and without this a later steady state update carrying no value for that limit would quietly
+   restore the value the difference replaced.
+
+Step 5 is what makes this robust: from there on the fast route *is* the partial SSH update path, with the same reader,
+the same SPARQL queries and the same conversion code, so the two cannot drift apart.
+
+### Updatable properties
+
+| CIM classes | properties read together |
+| --- | --- |
+| `Switch`, `Breaker`, `Disconnector`, `LoadBreakSwitch`, `ProtectedSwitch`, `GroundDisconnector`, `Jumper` | `Switch.open` |
+| `Terminal` | `ACDCTerminal.connected` |
+| `DCTerminal`, `ACDCConverterDCTerminal` | `ACDCTerminal.connected` |
+| `EnergyConsumer`, `ConformLoad`, `NonConformLoad`, `StationSupply` | `EnergyConsumer.p`, `EnergyConsumer.q` |
+| `EnergySource` | `EnergySource.activePower`, `EnergySource.reactivePower` |
+| `AsynchronousMachine` | `RotatingMachine.p`, `RotatingMachine.q` (+ optional `AsynchronousMachine.asynchronousMachineType`, `RegulatingCondEq.controlEnabled`) |
+| `SynchronousMachine` | `RotatingMachine.p`; `RotatingMachine.q`, `SynchronousMachine.referencePriority`, `SynchronousMachine.operatingMode`, `RegulatingCondEq.controlEnabled` |
+| `ExternalNetworkInjection` | `ExternalNetworkInjection.p`, `.q`, `.referencePriority`, `RegulatingCondEq.controlEnabled` |
+| `EquivalentInjection` | `EquivalentInjection.p`, `.q` (+ optional `.regulationStatus`, `.regulationTarget`) |
+| `GeneratingUnit` and its subclasses | `GeneratingUnit.normalPF` |
+| `StaticVarCompensator` | `StaticVarCompensator.q`, `RegulatingCondEq.controlEnabled` |
+| `LinearShuntCompensator`, `NonlinearShuntCompensator` | `ShuntCompensator.sections`, `RegulatingCondEq.controlEnabled` |
+| `RatioTapChanger` | `TapChanger.step`, `TapChanger.controlEnabled` |
+| `PhaseTapChanger*` (five flavours) | `TapChanger.step`, `TapChanger.controlEnabled` |
+| `RegulatingControl`, `TapChangerControl` | `RegulatingControl.enabled`, `.targetValue`, `.targetValueUnitMultiplier`, `.discrete` (+ optional `.targetDeadband`) |
+| `CsConverter` | `ACDCConverter.targetPpcc`, `.targetUdc`, `.p`, `.q`; `CsConverter.operatingMode`, `CsConverter.pPccControl` |
+| `VsConverter` | `ACDCConverter.*` as above; `VsConverter.pPccControl`, `.qPccControl` (+ optional `.targetQpcc`, `.targetUpcc`) |
+| `ControlArea` | `ControlArea.netInterchange` (+ optional `ControlArea.pTolerance`) |
+| `CurrentLimit`, `ActivePowerLimit`, `ApparentPowerLimit`, `VoltageLimit` | `<Class>.value` |
+
+Properties inside one cell are read by one SPARQL block, so stating one of them without the others would silently do
+nothing. The importer completes the missing ones from the receiving network instead, which is what makes a minimal
+difference applicable. The state variable properties of the update catalogue (`SvPowerFlow.*`, `SvVoltage.*`,
+`SvInjection.*`, `SvTapStep.*`, `SvShuntCompensatorSections.*`, `Terminal.TopologicalNode`,
+`ACDCConverter.poleLossP`) are explicitly outside the in-place route.
+
+The limit values above belong to the equipment profile in CGMES 2.4.15 and to the steady state hypothesis in
+CGMES 3; a document that puts them in the other profile of its CIM version is refused, because the receiver would
+never read them.
+
+These equipment properties have no update query at all and are applied with IIDM setters after the update workflow,
+which is why they are listed separately:
+
+| CIM classes | properties applied with a setter |
+| --- | --- |
+| `ACLineSegment` | `ACLineSegment.r`, `.x`, `.gch`, `.bch` |
+| `SeriesCompensator` | `SeriesCompensator.r`, `.x` |
+| `EquivalentBranch` | `EquivalentBranch.r`, `.x`, `.r21`, `.x21` |
+| `VoltageLevel` | `VoltageLevel.highVoltageLimit`, `.lowVoltageLimit` |
+
+`gch` and `bch` are split equally over the two ends of a line and taken as they stand on a boundary line, which is
+exactly what the conversion of a full equipment model does. An `EquivalentBranch` states the impedance of both
+directions and a conversion refuses one whose `r21`/`x21` differ from its `r`/`x`, so a difference of such a branch
+carries all four and each of them sets the single IIDM value. A subject whose CGMES class is a transformer, or a line
+the import represented as a switch, is refused: CGMES holds a transformer impedance per end, and a switch has none.
+
+### Accepted document variants
+
+The reader compares namespace URIs and local names, never prefixes, and accepts everything IEC 61970-552 leaves free:
+
+- the `preconditions`, `forwardDifferences` and `reverseDifferences` containers in any order, repeated, empty or absent;
+- a model description that is missing entirely, in which case the profile is taken from the file name;
+- subjects written as a typed node element or as an `rdf:Description` with an explicit `rdf:type`;
+- identifiers written as `#_abc`, `urn:uuid:abc` or `abc`, which are all the same subject;
+- properties of a foreign namespace, which are carried as absolute IRIs (and reported as not updatable).
+
+Blank nodes, nested descriptions, a `md:FullModel` document and a document holding two difference models are rejected
+rather than half understood.
+
+### Supersedes check and model metadata
+
+A difference is a delta on a named base, so applying it to a network holding a different model of that profile would
+silently corrupt it. By default the `md:Model.Supersedes` of the difference therefore has to name the model the
+network is at; the check is skipped when the difference declares no `Supersedes` or the network holds no model of the
+profile, and it can be switched off with `iidm.import.cgmes.diff.check-supersedes`.
+
+After a successful apply the network holds the difference as its model of that profile &mdash; identifier, version,
+description, modeling authority, profiles, `DependentOn` and `Supersedes` &mdash; exactly as an SSH file update would
+register it, with the models of the other profiles kept and `caseDate`/`forecastDistance` following the header. Values
+a foreign header leaves out are filled in from the model the network was at. Chains work: a difference exported with
+`chainAfter` applies on top of the previous one, and reverting them in reverse order walks back.
+
+Undoing has the mirror rule: only a network that is **at** a difference may undo it, so `revert` refuses when the
+network holds another model of the profile. Without that, undoing the first difference of a chain while the network
+is at the second one would leave a network whose metadata names a predecessor and whose content is neither &mdash;
+the same silent corruption the forward check prevents. The same parameter switches both checks off.
+
+A revert registers the *predecessor* named by `Supersedes`, because that is the model the network is at again. Its
+description and version are not carried by the difference, so the version is decremented and the other header values
+are kept; that is an approximation a layer holding the real metadata can overwrite.
+
+### Reverse differences and preconditions
+
+By default they are parsed and never evaluated: applying a difference means *replacing* the value of a property, not
+merging a delta into an unknown state. `iidm.import.cgmes.diff.check-reverse` turns them into a check against the
+receiving network &mdash; `warn` reports every mismatch and applies anyway, `fail` refuses. Values are compared as
+numbers within a relative tolerance where they parse as such; a property the receiver has no mapping for is reported
+as not verifiable and never fails the check.
+
+### Limitations
+
+- **Steady state hypothesis and a part of the equipment profile.** The equipment values a difference can carry are
+  the operational limit values, the voltage level limits and the impedances of lines, series compensators,
+  equivalent branches and boundary lines. Everything else of the equipment profile needs the slow route, and state
+  variables are never applied statement by statement.
+- **Transformer impedances are cut.** CGMES holds them per `PowerTransformerEnd` plus the tap step corrections, and
+  the import folds both ends into one IIDM value depending on import options the network does not remember, so
+  neither direction can be produced faithfully. See the
+  [export limitations](export.md#cgmes-difference-model-export) for the full reasoning.
+- **A `TieLine` has no impedance of its own**; its two `BoundaryLine`s do, and those are supported.
+- **Adding, removing or renaming a limit, and selecting another operational limits group**, are structural changes
+  CGMES models with objects, so they are refused.
+- **A voltage limit outside the range of its voltage level is dropped by the conversion**, exactly as it is when a
+  full file carries it. The export refuses to write one for that reason.
+- **A permanent limit the import synthesized** for a CGMES set that has none is not a CGMES object, so no difference
+  can carry it; the receiving import derives its own from `missing-permanent-limit-percentage`.
+- **No creation or removal.** A difference that introduces or removes an object, or rewires topology, is not an update
+  of a live network. `canApplyInPlace` says so before anything is touched.
+- **Properties are single valued**, which is what `CgmesStatement` assumes throughout.
+- **A header declaring several profiles stays one model** of the profile with the highest priority; the statements of
+  the other profile are then reported as not updatable.
+- **`use-detailed-dc-model` has to be passed** exactly as for any SSH update, because it decides which DC objects the
+  network holds.
+- **State variables are reset** for the equipment the difference touches, exactly as any SSH update resets them.
+- **A terminal of equipment the update workflow has no pass for** &mdash; a battery, a busbar section &mdash; is
+  accepted and then silently ignored, exactly as a partial SSH file carrying it would be.
+- **A terminal the difference does not mention keeps its connection state** when
+  `iidm.import.cgmes.use-previous-values-during-update` is on. Without that flag an update still defaults an unstated
+  terminal to connected, which is what a full instance file means when it omits `cim:ACDCTerminal.connected`.
+- **A minimal difference (`CHANGED_ONLY`) of a regulation mode flip cannot be undone.** Minimizing drops every
+  property that says the same thing in both directions, which assumes that a property the difference does not state
+  does not change. That assumption breaks where the importer *clears* a property as a side effect: a voltage source
+  converter that switches from voltage to reactive control keeps its `cim:VsConverter.targetUpcc` in both directions
+  of the change &mdash; the sender never touched it &mdash; so it is dropped, while the update sets the receiver's
+  voltage setpoint to zero because the converter no longer controls voltage. Undoing then finds the target neither
+  in the document nor in the network, and the converter **stays in reactive control**: it is the regulation mode
+  that is not restored, not merely an inactive setpoint. The same shape applies to the mode of a static var
+  compensator and of a generator. The forward direction is correct in every case, and `FULL_OBJECT`, which states
+  whole consistency groups, undoes the same change exactly, so use it for changes that flip a regulation mode.
+
+### Applying a difference to one network variant
+
+`CgmesDiffImport.Options.setVariantSafeOnly(true)` restricts an in-place update to the state IIDM stores **per
+network variant**. Every statement whose IIDM target is a single field of the network — an operational limit value,
+a voltage limit, a branch impedance, the rating of an HVDC line in the default simplified DC model, an IIDM
+property — then blocks the update with a reason naming that field, instead of leaking into the other variants of
+the same network. Four cases depend on the receiving network and are decided against it before anything is
+written: a reference priority that would create the `ReferencePriorities` extension, a participation factor on a
+generator without `ActivePowerControl`, switching the regulation of a tap changer that has no
+`loadTapChangingCapabilities` on, and a voltage source converter of the simplified DC model. The flag also
+requires the scoped update, because the full update writes properties and validation levels that belong to the
+whole network.
+
+There is no import parameter for it: it is set by the layer that binds a variant to a stored state, see
+[the RDF database](rdf_database.md), and `Network.update(dataSource)` has no variant to name. The authoritative
+table of what is and is not per variant is in that document.
+
+### Performance
+
+Measured on the CGMES 3 `svedala` model (2342 switches), best of ten runs after warm up, 8 cores. One run is one
+apply, alternating between the difference and its inverse so that it always does real work:
+
+| what | time |
+| --- | --- |
+| apply 1 switch change | 3.7 ms (parse 0.4, plan 0.1, store 1.4, update 3.3) |
+| apply 500 switch changes | 11.6 ms (parse 1.9, plan 2.1, store 4.1, update 5.3) |
+| apply 127 mixed equipment changes | 18.4 ms |
+| the same 500 changes as a partial SSH file | 15.6 ms |
+| apply 18 operational limit changes of the CGMES 2.4.15 micro grid | 4.9 ms |
+| apply 90 line impedance changes of svedala | 3.6 ms (plan 0.3, store 0.7, update 2.4, setters 0.07) |
+| apply 140 mixed equipment and steady state changes | 9.8 ms |
+| `Network.read(svedala)` | 1054 ms |
+
+Applying a difference is roughly three hundred times cheaper than reading the model again for a single change, and
+cheaper than the partial SSH file of the same change. The dominant cost is fixed rather than proportional to the
+change: it is the **preparation and evaluation of the SPARQL queries** of the update workflow against the synthetic
+store, each of which rdf4j parses again, plus the RDF/XML parse of that store. Two things keep it small:
+
+- the update is restricted to the equipment the difference names, so the passes over the kinds of equipment it does
+  not touch are skipped before they query anything, and the ten caches of the update workflow are built one by one
+  on first use rather than up front. Together these take a single change from 8.6 ms to 3.7 ms; a full file update
+  is unaffected, because it reads all of them anyway;
+- the equipment statements applied with IIDM setters cost almost nothing (0.07 ms for ninety lines): the fixed cost
+  of an apply is the RDF and SPARQL machinery, not the setters. The index of the CGMES limit identifiers is built
+  once per apply and only when a limit subject has to be resolved through it;
+- walking the network is not part of the cost either. Restricting the walk is worth about 4 ms of the numbers above
+  on this model (10.0 ms scoped against 14.1 ms unscoped for one change, measured during review) and grows with the
+  size of the model, which is why it is done although the budget would allow the full walk here.
+
+With state variables present the restriction is a deliberate deviation from a file driven update: the state
+variables of equipment the difference does not touch are kept instead of being reset.
+
+### Slow route and long-term vision
+
+**Which difference models does PowSyBl apply?** PowSyBl applies a CGMES difference model *in place* when every change
+maps onto the network update workflow (the operating values a partial SSH can carry, plus the equipment values added
+over time). `CgmesDiffImport.canApplyInPlace` answers this for any difference model before anything is modified, and
+lists the blocking statements otherwise.
+
+**What about everything else?** Applying an arbitrary difference model &mdash; adding or removing objects, rewiring
+topology, touching attributes the update workflow does not read &mdash; is the generic RDF operation
+*base graph &minus; reverse + forward*. It has no power-system semantics and is independent of PowSyBl; it does not
+belong in the CGMES importer. General difference-model application is owned by RDF tooling: OpenCGMES
+(`CimDatasetGraph.differenceModelToFullModel` / `FastDeltaGraph` + `CimXmlWriter`) for files, or SPARQL UPDATE in a
+graph database. The result is a regular CGMES model that the regular importer reads. PowSyBl will not keep original
+files around, will not grow a second RDF engine, and will never apply structural differences to a live network.
+
+**What PowSyBl owns:** (1) the in-place fast route and its steadily widened coverage, (2) the decision function, so
+that callers and databases can route a difference without trying, (3) a small statement applier for *its own* triple
+store, `CgmesDiffImport.applyToTripleStore(store, difference, contextName, baseName)`, which replaces property values
+inside one named graph through SPARQL UPDATE and therefore works on an in-memory store as well as on a remote
+repository, and (4) with the RDF database integration, a database-side merge fallback: when a path of differences is
+not fast, the base graphs are already at hand in the store, the differences are merged there and the conversion is
+re-run &mdash; a slow route without files. OpenCGMES is also the reference the difference-model file structure is
+validated against.
+
 (cgmes-import-level-of-detail)=
 ## Levels of detail: node/breaker and bus/branch
 
@@ -835,7 +1120,9 @@ By default, it is an empty list.
 One implementation of such a post-processor is available in PowSyBl in the [powsybl-diagram](https://github.com/powsybl/powsybl-diagram) repository, named [CgmesDLImportPostProcessor](./post_processor.md#cgmesdlimportpostprocessor).
 
 **iidm.import.cgmes.powsybl-triplestore**<br>
-Optional property that defines which Triplestore implementation is used. Currently, PowSyBl only supports [RDF4J](https://rdf4j.org/). `rdf4j` by default.
+Optional property that defines which Triplestore implementation is used. `rdf4j` by default, the in-memory
+[RDF4J](https://rdf4j.org/) store. `rdf4j-sparql` writes the statements into a configured remote SPARQL database
+instead, see [RDF database](rdf_database.md).
 
 **iidm.import.cgmes.source-for-iidm-id**<br>
 Optional property that defines if IIDM IDs must be obtained from the CGMES `mRID` (master resource identifier) or the CGMES `rdfID` (Resource Description Framework identifier). The default value is `mRID`.
@@ -878,6 +1165,16 @@ Its default value is `MODELING_AUTHORITY`.
 Optional property that defines the fictitious voltage levels created by line container. If it is set to `true`, a fictitious voltage level is created for each connectivity node inside the line container.
 If it is set to `false`, only one fictitious voltage level is created for each line container.
 `true` by default.
+
+**iidm.import.cgmes.diff.check-reverse**<br>
+Optional property that defines whether the reverse differences and the preconditions of a [difference model](#cgmes-import-difference-model) are checked against the network before the difference is applied.
+`off` by default: applying a difference means replacing the value of a property, not merging a delta into an unknown state.
+With `warn` every mismatch is reported and the difference is applied anyway; with `fail` the difference is refused and the network is left untouched.
+
+**iidm.import.cgmes.diff.check-supersedes**<br>
+Optional property that defines whether the `md:Model.Supersedes` of a [difference model](#cgmes-import-difference-model) has to name the model the network currently holds for that profile.
+`true` by default, because applying a delta on the wrong base corrupts the network silently.
+The check is skipped when the difference declares no `Supersedes` or the network holds no model of that profile.
 
 **iidm.import.cgmes.use-previous-values-during-update**<br>
 Optional property that defines whether the CGMES importer should use previous values to fill in missing SSH attributes during an update.

@@ -10,7 +10,9 @@ package com.powsybl.iidm.network.tck.extensions;
 import com.powsybl.commons.PowsyblException;
 import com.powsybl.iidm.network.Battery;
 import com.powsybl.iidm.network.Network;
+import com.powsybl.iidm.network.NetworkEventRecorder;
 import com.powsybl.iidm.network.VariantManager;
+import com.powsybl.iidm.network.events.ExtensionUpdateNetworkEvent;
 import com.powsybl.iidm.network.extensions.ActivePowerControl;
 import com.powsybl.iidm.network.extensions.ActivePowerControlAdder;
 import com.powsybl.iidm.network.test.BatteryNetworkFactory;
@@ -217,6 +219,34 @@ public abstract class AbstractActivePowerControlTest {
         assertEquals(3.0, activePowerControl.getParticipationFactor(), 0.0);
         assertTrue(activePowerControl.getMaxTargetP().isEmpty());
         assertEquals(11, activePowerControl.getMinTargetP().getAsDouble());
+    }
+
+    /**
+     * The participation factor is a steady state value that an exchange format such as CGMES carries, so a change of
+     * it has to be observable from a network listener like any other change of the extension.
+     */
+    @Test
+    public void participationFactorNotificationTest() {
+        Network network = BatteryNetworkFactory.create();
+        Battery bat = network.getBattery("BAT");
+        bat.newExtension(ActivePowerControlAdder.class)
+                .withDroop(4.0)
+                .withParticipate(true)
+                .withParticipationFactor(1.2)
+                .add();
+        ActivePowerControl<Battery> activePowerControl = bat.getExtension(ActivePowerControl.class);
+
+        NetworkEventRecorder eventRecorder = new NetworkEventRecorder();
+        network.addListener(eventRecorder);
+        activePowerControl.setParticipationFactor(3.0);
+        assertEquals(List.of(new ExtensionUpdateNetworkEvent("BAT", "activePowerControl", "participationFactor",
+                        INITIAL_VARIANT_ID, 1.2, 3.0)),
+                eventRecorder.getEvents());
+
+        // Setting the same value again is not a change and must not be reported
+        eventRecorder.reset();
+        activePowerControl.setParticipationFactor(3.0);
+        assertEquals(List.of(), eventRecorder.getEvents());
     }
 
 }

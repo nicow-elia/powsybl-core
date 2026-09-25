@@ -291,7 +291,7 @@ public class Conversion {
         createTieLinesWhenThereAreMoreThanTwoBoundaryLinesAtBoundaryNodeDuringUpdate(network, updateContext);
         createFictitiousLoadsForSvInjectionsDuringUpdate(network, cgmes, updateContext);
 
-        update(network, updateContext, reportNode);
+        update(network, updateContext, UpdateScope.ALL, reportNode);
     }
 
     private static void removeAllAliasesAndProperties(Network network) {
@@ -329,7 +329,20 @@ public class Conversion {
     }
 
     public void update(Network network, ReportNode reportNode) {
+        update(network, UpdateScope.ALL, reportNode);
+    }
+
+    /**
+     * Update a network with the data of this model, visiting only the equipment of the given scope.
+     *
+     * <p>{@link UpdateScope#ALL} is the ordinary update. A restricted scope is what a difference model update uses:
+     * it knows every object it touches before it starts, so walking the whole network would be pure overhead. A
+     * restricted scope also skips the voltage and angle completion and the final validation check, see
+     * {@link UpdateScope} for when that is legal.</p>
+     */
+    public void update(Network network, UpdateScope scope, ReportNode reportNode) {
         Objects.requireNonNull(network);
+        Objects.requireNonNull(scope);
 
         if (network.getIdentifiables().stream().allMatch(i -> i.getPropertyNames().isEmpty())) {
             throw new ConversionException("The network has no properties and aliases, they have been removed. Update is not allowed.");
@@ -339,10 +352,10 @@ public class Conversion {
         Context updateContext = createUpdateContext(network, reportNode);
 
         addMetadataModels(network, updateContext);
-        update(network, updateContext, reportNode);
+        update(network, updateContext, scope, reportNode);
     }
 
-    private void update(Network network, Context updateContext, ReportNode reportNode) {
+    private void update(Network network, Context updateContext, UpdateScope scope, ReportNode reportNode) {
         // Inspect the contents of the loaded data
         if (LOG.isDebugEnabled()) {
             PropertyBags nts = cgmes.numObjectsByType();
@@ -355,41 +368,47 @@ public class Conversion {
         // Switches are updated first because the subsequent update of the terminals
         // is configurable and, if activated, may modify their state.
         // Then, the update of the terminals can overwrite the state of the switches
-        updateSwitches(network, updateContext);
+        updateSwitches(network, updateContext, scope);
 
-        updateLoads(network, cgmes, updateContext);
-        updateGenerators(network, cgmes, updateContext);
-        updateLines(network, updateContext);
-        updateTransformers(network, updateContext);
-        updateStaticVarCompensators(network, cgmes, updateContext);
-        updateShuntCompensators(network, cgmes, updateContext);
+        updateLoads(network, cgmes, updateContext, scope);
+        updateGenerators(network, cgmes, updateContext, scope);
+        updateLines(network, updateContext, scope);
+        updateTransformers(network, updateContext, scope);
+        updateStaticVarCompensators(network, cgmes, updateContext, scope);
+        updateShuntCompensators(network, cgmes, updateContext, scope);
 
         // Update either simplified or detailed DC model
         if (!updateContext.config().getUseDetailedDcModel()) {
-            updateHvdcLines(network, cgmes, updateContext);
+            updateHvdcLines(network, cgmes, updateContext, scope);
         } else {
-            updateDcSwitches(network, updateContext);
-            updateDcGrounds(network, updateContext);
-            updateDcLines(network, updateContext);
-            updateAcDcConverters(network, cgmes, updateContext);
+            updateDcSwitches(network, updateContext, scope);
+            updateDcGrounds(network, updateContext, scope);
+            updateDcLines(network, updateContext, scope);
+            updateAcDcConverters(network, cgmes, updateContext, scope);
         }
 
-        updateBoundaryLines(network, updateContext);
-        // Fix boundary lines issues
-        updateContext.pushReportNode(CgmesReports.fixingBoundaryLinesIssuesReport(reportNode));
-        handleDangingLineDisconnectedAtBoundary(network, updateContext);
-        adjustMultipleUnpairedBoundaryLinesAtSameBoundaryNode(network, updateContext);
-        updateContext.popReportNode();
+        updateBoundaryLines(network, updateContext, scope);
+        // Fix boundary lines issues. A scoped update runs them only when it touches a boundary line at all:
+        // both passes walk every boundary line of the network and change nothing when none of them was updated.
+        if (scope.containsAny(network.getBoundaryLineStream())) {
+            updateContext.pushReportNode(CgmesReports.fixingBoundaryLinesIssuesReport(reportNode));
+            handleDangingLineDisconnectedAtBoundary(network, updateContext);
+            adjustMultipleUnpairedBoundaryLinesAtSameBoundaryNode(network, updateContext);
+            updateContext.popReportNode();
+        }
 
-        updateVoltageLevels(network, updateContext);
-        updateGrounds(network, updateContext);
-        updateAreas(network, cgmes, updateContext);
+        updateVoltageLevels(network, updateContext, scope);
+        updateGrounds(network, updateContext, scope);
+        updateAreas(network, cgmes, updateContext, scope);
 
-        // Set voltages and angles, then complete
-        updateAndCompleteVoltageAndAngles(network, updateContext);
+        if (scope.isAll()) {
+            // Set voltages and angles, then complete. A scoped update carries no state variables, so the buses it
+            // did not touch keep the voltage and angle they have instead of being reset to undefined.
+            updateAndCompleteVoltageAndAngles(network, updateContext);
 
-        network.runValidationChecks(false, reportNode);
-        network.setMinimumAcceptableValidationLevel(ValidationLevel.STEADY_STATE_HYPOTHESIS);
+            network.runValidationChecks(false, reportNode);
+            network.setMinimumAcceptableValidationLevel(ValidationLevel.STEADY_STATE_HYPOTHESIS);
+        }
 
         // Remove all properties and aliases, this will invalidate all subsequent updates
         if (updateContext.config().getRemovePropertiesAndAliasesAfterImport()) {
@@ -1078,6 +1097,52 @@ public class Conversion {
         public Config setCreateFictitiousVoltageLevelsForEveryNode(boolean b) {
             createFictitiousVoltageLevelsForEveryNode = b;
             return this;
+        }
+
+        /**
+         * Whether the values a previous update left in the network are preferred over the equipment defaults for
+         * everything the current update does not carry. Always on for a difference model update, which is partial
+         * by definition.
+         */
+        /**
+         * A configuration holding the same values as this one.
+         *
+         * <p>What it is for: a caller that keeps one configuration object and hands it to several conversions
+         * &mdash; a database layer applying differences, the Python bindings &mdash; must not see it change under
+         * its feet, and a conversion that needs a flag set differently must not set it on the caller's object. A
+         * copy is the only thread safe way to do that.</p>
+         */
+        public Config copy() {
+            Config other = new Config();
+            other.convertBoundary = convertBoundary;
+            other.createBusbarSectionForEveryConnectivityNode = createBusbarSectionForEveryConnectivityNode;
+            other.convertSvInjections = convertSvInjections;
+            other.storeCgmesModelAsNetworkExtension = storeCgmesModelAsNetworkExtension;
+            other.storeCgmesConversionContextAsNetworkExtension = storeCgmesConversionContextAsNetworkExtension;
+            other.createActivePowerControlExtension = createActivePowerControlExtension;
+            other.createFictitiousSwitchesForDisconnectedTerminalsMode = createFictitiousSwitchesForDisconnectedTerminalsMode;
+            other.ensureIdAliasUnicity = ensureIdAliasUnicity;
+            other.importControlAreas = importControlAreas;
+            other.importNodeBreakerAsBusBreaker = importNodeBreakerAsBusBreaker;
+            other.disconnectNetworkSideOfBoundaryLinesIfBoundaryIsDisconnected = disconnectNetworkSideOfBoundaryLinesIfBoundaryIsDisconnected;
+            other.namingStrategy = namingStrategy;
+            other.xfmr2RatioPhase = xfmr2RatioPhase;
+            other.xfmr2Shunt = xfmr2Shunt;
+            other.xfmr2StructuralRatio = xfmr2StructuralRatio;
+            other.xfmr3RatioPhase = xfmr3RatioPhase;
+            other.xfmr3Shunt = xfmr3Shunt;
+            other.xfmr3StructuralRatio = xfmr3StructuralRatio;
+            other.missingPermanentLimitPercentage = missingPermanentLimitPercentage;
+            other.createFictitiousVoltageLevelsForEveryNode = createFictitiousVoltageLevelsForEveryNode;
+            other.usePreviousValuesDuringUpdate = usePreviousValuesDuringUpdate;
+            other.removePropertiesAndAliasesAfterImport = removePropertiesAndAliasesAfterImport;
+            other.useDetailedDcModel = useDetailedDcModel;
+            other.silenceFrequentIssuesWarnings = silenceFrequentIssuesWarnings;
+            return other;
+        }
+
+        public boolean usePreviousValuesDuringUpdate() {
+            return usePreviousValuesDuringUpdate;
         }
 
         public Config setUsePreviousValuesDuringUpdate(boolean use) {

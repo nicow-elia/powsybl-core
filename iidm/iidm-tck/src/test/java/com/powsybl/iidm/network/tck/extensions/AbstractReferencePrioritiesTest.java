@@ -9,6 +9,7 @@ package com.powsybl.iidm.network.tck.extensions;
 
 import com.powsybl.commons.PowsyblException;
 import com.powsybl.iidm.network.*;
+import com.powsybl.iidm.network.events.ExtensionUpdateNetworkEvent;
 import com.powsybl.iidm.network.extensions.ReferencePriorities;
 import com.powsybl.iidm.network.extensions.ReferencePrioritiesAdder;
 import com.powsybl.iidm.network.extensions.ReferencePriority;
@@ -211,6 +212,36 @@ public abstract class AbstractReferencePrioritiesTest {
                 .setPriority(5)
                 .add());
         assertEquals("The provided terminal does not belong to the connectable LINE_S3S4", thrown.getMessage());
+    }
+
+    /**
+     * The reference priority selects the angle reference of a network, a steady state decision that an exchange
+     * format such as CGMES carries, so setting or withdrawing one has to be observable from a network listener.
+     */
+    @Test
+    public void referencePriorityNotificationTest() {
+        NetworkEventRecorder eventRecorder = new NetworkEventRecorder();
+        network.addListener(eventRecorder);
+
+        ReferencePriority.set(gh1, 7);
+        assertEquals(List.of(new ExtensionUpdateNetworkEvent("GH1", "referencePriorities", "referencePriority",
+                        INITIAL_VARIANT_ID, 1, 7)),
+                eventRecorder.getEvents());
+
+        // A priority set for the first time on an equipment has no previous value
+        eventRecorder.reset();
+        ReferencePriority.set(lineS3S4, TwoSides.ONE, 4);
+        assertEquals(List.of(new ExtensionUpdateNetworkEvent("LINE_S3S4", "referencePriorities", "referencePriority",
+                        INITIAL_VARIANT_ID, null, 4)),
+                eventRecorder.getEvents());
+
+        // Deleting reports one withdrawal per priority the equipment held
+        eventRecorder.reset();
+        lineS2S3.getExtension(ReferencePriorities.class).deleteReferencePriorities();
+        assertEquals(List.of(
+                        new ExtensionUpdateNetworkEvent("LINE_S2S3", "referencePriorities", "referencePriority", INITIAL_VARIANT_ID, 3, null),
+                        new ExtensionUpdateNetworkEvent("LINE_S2S3", "referencePriorities", "referencePriority", INITIAL_VARIANT_ID, 0, null)),
+                eventRecorder.getEvents());
     }
 
 }

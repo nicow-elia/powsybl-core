@@ -235,6 +235,36 @@ public final class CgmesReports {
                 .add();
     }
 
+    /**
+     * The difference model an in-place update is applying, so that a report tells which delta reached the network.
+     *
+     * @param modelId        the identifier of the difference model
+     * @param subset         the identifier of the CGMES profile it describes
+     * @param statementCount how many statements it writes into the network
+     */
+    public static ReportNode applyingDifferenceModelReport(ReportNode reportNode, String modelId, String subset,
+                                                           int statementCount) {
+        return reportNode.newReportNode()
+                .withMessageTemplate("core.cgmes.conversion.applyingDifferenceModel")
+                .withTypedValue("modelId", modelId, TypedValue.URN_UUID)
+                .withTypedValue("cgmesSubset", subset, TypedValue.CGMES_SUBSET)
+                .withUntypedValue("statementCount", statementCount)
+                .add();
+    }
+
+    /**
+     * The equipment statements of a difference model that were applied with IIDM setters, because no CGMES update
+     * query reads them.
+     *
+     * @param statementCount how many statements were applied that way
+     */
+    public static ReportNode appliedDirectEqStatementsReport(ReportNode reportNode, int statementCount) {
+        return reportNode.newReportNode()
+                .withMessageTemplate("core.cgmes.conversion.appliedDirectEqStatements")
+                .withUntypedValue("statementCount", statementCount)
+                .add();
+    }
+
     public static ReportNode readingCgmesTriplestoreReport(ReportNode reportNode) {
         return reportNode.newReportNode()
                 .withMessageTemplate("core.cgmes.conversion.CGMESTriplestore")

@@ -8,6 +8,9 @@
 package com.powsybl.iidm.network.impl;
 
 import com.powsybl.iidm.network.*;
+import com.powsybl.iidm.network.events.OperationalLimitsInfo;
+import com.powsybl.iidm.network.events.PermanentLimitInfo;
+import com.powsybl.iidm.network.events.TemporaryLimitInfo;
 
 import java.util.Objects;
 import java.util.Optional;
@@ -165,14 +168,5 @@ public class OperationalLimitsGroupImpl extends AbstractPropertiesHolder impleme
     @Override
     public boolean isEmpty() {
         return currentLimits == null && apparentPowerLimits == null && activePowerLimits == null;
-    }
-
-    public record PermanentLimitInfo(String name, double value, String groupId, boolean inSelectedGroup) {
-    }
-
-    public record OperationalLimitsInfo(OperationalLimits value, String groupId, boolean inSelectedGroup) {
-    }
-
-    public record TemporaryLimitInfo(double value, String groupId, boolean inSelectedGroup, int acceptableDuration) {
     }
 }

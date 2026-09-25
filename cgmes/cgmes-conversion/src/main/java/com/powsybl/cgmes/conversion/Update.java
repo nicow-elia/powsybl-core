@@ -32,7 +32,23 @@ public final class Update {
     private Update() {
     }
 
-    static void updateLoads(Network network, CgmesModel cgmes, Context context) {
+    /**
+     * Whether a scoped pass has nothing to visit and may therefore be skipped entirely.
+     *
+     * <p>Skipping matters because the first thing a pass does is ask the triple store for its property bags, and on
+     * the tiny synthetic store of a difference model update that SPARQL call is the dominant cost: preparing and
+     * evaluating a query that returns nothing is not free. A full update is never skipped, so that its report tree
+     * and its behaviour stay exactly as they were.</p>
+     */
+    private static boolean nothingToDo(UpdateScope scope, Iterable<?> selection) {
+        return !scope.isAll() && !selection.iterator().hasNext();
+    }
+
+    static void updateLoads(Network network, CgmesModel cgmes, Context context, UpdateScope scope) {
+        Iterable<Load> loads = scope.select(network.getLoads(), network::getLoad);
+        if (nothingToDo(scope, loads)) {
+            return;
+        }
         context.pushReportNode(CgmesReports.updatingElementTypeReport(context.getReportNode(), IdentifiableType.LOAD.name()));
 
         Map<String, PropertyBag> equipmentIdPropertyBag = new HashMap<>();
@@ -40,7 +56,7 @@ public final class Update {
         addPropertyBags(cgmes.energySources(), CgmesNames.ENERGY_SOURCE, equipmentIdPropertyBag);
         addPropertyBags(cgmes.asynchronousMachines(), CgmesNames.ASYNCHRONOUS_MACHINE, equipmentIdPropertyBag);
 
-        network.getLoads().forEach(load -> updateLoad(load, getPropertyBag(load.getId(), equipmentIdPropertyBag), context));
+        loads.forEach(load -> updateLoad(load, getPropertyBag(load.getId(), equipmentIdPropertyBag), context));
         context.popReportNode();
     }
 
@@ -58,7 +74,11 @@ public final class Update {
         }
     }
 
-    static void updateGenerators(Network network, CgmesModel cgmes, Context context) {
+    static void updateGenerators(Network network, CgmesModel cgmes, Context context, UpdateScope scope) {
+        Iterable<Generator> generators = scope.select(network.getGenerators(), network::getGenerator);
+        if (nothingToDo(scope, generators)) {
+            return;
+        }
         context.pushReportNode(CgmesReports.updatingElementTypeReport(context.getReportNode(), IdentifiableType.GENERATOR.name()));
 
         Map<String, PropertyBag> equipmentIdPropertyBag = new HashMap<>();
@@ -66,7 +86,7 @@ public final class Update {
         addPropertyBags(cgmes.equivalentInjections(), CgmesNames.EQUIVALENT_INJECTION, equipmentIdPropertyBag);
         addPropertyBags(cgmes.externalNetworkInjections(), CgmesNames.EXTERNAL_NETWORK_INJECTION, equipmentIdPropertyBag);
 
-        network.getGenerators().forEach(generator -> updateGenerator(generator, equipmentIdPropertyBag, context));
+        generators.forEach(generator -> updateGenerator(generator, equipmentIdPropertyBag, context));
         context.popReportNode();
     }
 
@@ -81,36 +101,45 @@ public final class Update {
         }
     }
 
-    static void updateTransformers(Network network, Context context) {
+    static void updateTransformers(Network network, Context context, UpdateScope scope) {
         context.pushReportNode(CgmesReports.updatingElementTypeReport(context.getReportNode(), IdentifiableType.TWO_WINDINGS_TRANSFORMER.name()));
-        network.getTwoWindingsTransformers().forEach(t2w -> TwoWindingsTransformerConversion.update(t2w, context));
+        scope.select(network.getTwoWindingsTransformers(), network::getTwoWindingsTransformer)
+            .forEach(t2w -> TwoWindingsTransformerConversion.update(t2w, context));
         context.popReportNode();
 
         context.pushReportNode(CgmesReports.updatingElementTypeReport(context.getReportNode(), IdentifiableType.THREE_WINDINGS_TRANSFORMER.name()));
-        network.getThreeWindingsTransformers().forEach(t3w -> ThreeWindingsTransformerConversion.update(t3w, context));
+        scope.select(network.getThreeWindingsTransformers(), network::getThreeWindingsTransformer)
+            .forEach(t3w -> ThreeWindingsTransformerConversion.update(t3w, context));
         context.popReportNode();
     }
 
-    static void updateStaticVarCompensators(Network network, CgmesModel cgmes, Context context) {
+    static void updateStaticVarCompensators(Network network, CgmesModel cgmes, Context context, UpdateScope scope) {
+        Iterable<StaticVarCompensator> svcs =
+                scope.select(network.getStaticVarCompensators(), network::getStaticVarCompensator);
+        if (nothingToDo(scope, svcs)) {
+            return;
+        }
         context.pushReportNode(CgmesReports.updatingElementTypeReport(context.getReportNode(), IdentifiableType.STATIC_VAR_COMPENSATOR.name()));
 
         Map<String, PropertyBag> equipmentIdPropertyBag = new HashMap<>();
         addPropertyBags(cgmes.staticVarCompensators(), CgmesNames.STATIC_VAR_COMPENSATOR, equipmentIdPropertyBag);
 
-        network.getStaticVarCompensators()
-            .forEach(staticVarCompensator -> StaticVarCompensatorConversion.update(staticVarCompensator, getPropertyBag(staticVarCompensator.getId(), equipmentIdPropertyBag), context));
+        svcs.forEach(staticVarCompensator -> StaticVarCompensatorConversion.update(staticVarCompensator, getPropertyBag(staticVarCompensator.getId(), equipmentIdPropertyBag), context));
         context.popReportNode();
     }
 
-    static void updateShuntCompensators(Network network, CgmesModel cgmes, Context context) {
+    static void updateShuntCompensators(Network network, CgmesModel cgmes, Context context, UpdateScope scope) {
+        Iterable<ShuntCompensator> shunts = scope.select(network.getShuntCompensators(), network::getShuntCompensator);
+        if (nothingToDo(scope, shunts)) {
+            return;
+        }
         context.pushReportNode(CgmesReports.updatingElementTypeReport(context.getReportNode(), IdentifiableType.SHUNT_COMPENSATOR.name()));
 
         Map<String, PropertyBag> equipmentIdPropertyBag = new HashMap<>();
         addPropertyBags(cgmes.shuntCompensators(), CgmesNames.SHUNT_COMPENSATOR, equipmentIdPropertyBag);
         addPropertyBags(cgmes.equivalentShunts(), CgmesNames.EQUIVALENT_SHUNT, equipmentIdPropertyBag);
 
-        network.getShuntCompensators()
-            .forEach(shuntCompensator -> updateShuntCompensator(shuntCompensator, getPropertyBag(shuntCompensator.getId(), equipmentIdPropertyBag), context));
+        shunts.forEach(shuntCompensator -> updateShuntCompensator(shuntCompensator, getPropertyBag(shuntCompensator.getId(), equipmentIdPropertyBag), context));
         context.popReportNode();
     }
 
@@ -123,13 +152,16 @@ public final class Update {
         }
     }
 
-    static void updateHvdcLines(Network network, CgmesModel cgmes, Context context) {
+    static void updateHvdcLines(Network network, CgmesModel cgmes, Context context, UpdateScope scope) {
+        Iterable<HvdcLine> hvdcLines = scope.select(network.getHvdcLines(), network::getHvdcLine);
+        if (nothingToDo(scope, hvdcLines)) {
+            return;
+        }
         context.pushReportNode(CgmesReports.updatingElementTypeReport(context.getReportNode(), IdentifiableType.HVDC_LINE.name()));
 
         Map<String, PropertyBag> equipmentIdPropertyBag = new HashMap<>();
         addPropertyBags(cgmes.acDcConverters(), CgmesNames.ACDC_CONVERTER, equipmentIdPropertyBag);
-        network.getHvdcLines()
-            .forEach(hvdcLine -> HvdcLineConversion.update(hvdcLine,
+        hvdcLines.forEach(hvdcLine -> HvdcLineConversion.update(hvdcLine,
                 getPropertyBag(hvdcLine.getConverterStation1().getId(), equipmentIdPropertyBag),
                 getPropertyBag(hvdcLine.getConverterStation2().getId(), equipmentIdPropertyBag),
                 context));
@@ -137,9 +169,10 @@ public final class Update {
         context.popReportNode();
     }
 
-    static void updateBoundaryLines(Network network, Context context) {
+    static void updateBoundaryLines(Network network, Context context, UpdateScope scope) {
         context.pushReportNode(CgmesReports.updatingElementTypeReport(context.getReportNode(), IdentifiableType.BOUNDARY_LINE.name()));
-        network.getBoundaryLines().forEach(boundaryLine -> updateBoundaryLine(boundaryLine, context));
+        scope.select(network.getBoundaryLines(), network::getBoundaryLine)
+            .forEach(boundaryLine -> updateBoundaryLine(boundaryLine, context));
         context.popReportNode();
     }
 
@@ -154,9 +187,9 @@ public final class Update {
         }
     }
 
-    static void updateLines(Network network, Context context) {
+    static void updateLines(Network network, Context context, UpdateScope scope) {
         context.pushReportNode(CgmesReports.updatingElementTypeReport(context.getReportNode(), IdentifiableType.LINE.name()));
-        network.getLines().forEach(line -> updateLine(line, context));
+        scope.select(network.getLines(), network::getLine).forEach(line -> updateLine(line, context));
         context.popReportNode();
     }
 
@@ -170,9 +203,9 @@ public final class Update {
         }
     }
 
-    static void updateSwitches(Network network, Context context) {
+    static void updateSwitches(Network network, Context context, UpdateScope scope) {
         context.pushReportNode(CgmesReports.updatingElementTypeReport(context.getReportNode(), IdentifiableType.SWITCH.name()));
-        network.getSwitches().forEach(sw -> updateSwitch(sw, context));
+        scope.select(network.getSwitches(), network::getSwitch).forEach(sw -> updateSwitch(sw, context));
         context.popReportNode();
     }
 
@@ -217,15 +250,16 @@ public final class Update {
         context.popReportNode();
     }
 
-    static void updateVoltageLevels(Network network, Context context) {
+    static void updateVoltageLevels(Network network, Context context, UpdateScope scope) {
         context.pushReportNode(CgmesReports.updatingElementTypeReport(context.getReportNode(), IdentifiableType.VOLTAGE_LEVEL.name()));
-        network.getVoltageLevels().forEach(voltageLevel -> VoltageLevelConversion.update(voltageLevel, context));
+        scope.select(network.getVoltageLevels(), network::getVoltageLevel)
+            .forEach(voltageLevel -> VoltageLevelConversion.update(voltageLevel, context));
         context.popReportNode();
     }
 
-    static void updateGrounds(Network network, Context context) {
+    static void updateGrounds(Network network, Context context, UpdateScope scope) {
         context.pushReportNode(CgmesReports.updatingElementTypeReport(context.getReportNode(), IdentifiableType.GROUND.name()));
-        network.getGrounds().forEach(ground -> GroundConversion.update(ground, context));
+        scope.select(network.getGrounds(), network::getGround).forEach(ground -> GroundConversion.update(ground, context));
         context.popReportNode();
     }
 
@@ -237,42 +271,56 @@ public final class Update {
         }
     }
 
-    static void updateAreas(Network network, CgmesModel cgmes, Context context) {
+    static void updateAreas(Network network, CgmesModel cgmes, Context context, UpdateScope scope) {
+        Iterable<Area> areas = scope.select(network.getAreas(), network::getArea);
+        if (nothingToDo(scope, areas)) {
+            return;
+        }
         context.pushReportNode(CgmesReports.updatingElementTypeReport(context.getReportNode(), IdentifiableType.AREA.name()));
         Map<String, PropertyBag> equipmentIdPropertyBag = new HashMap<>();
         addPropertyBags(cgmes.controlAreas(), CgmesNames.CONTROL_AREA, equipmentIdPropertyBag);
-        network.getAreas().forEach(area -> ControlAreaConversion.update(area, getPropertyBag(area.getId(), equipmentIdPropertyBag), context));
+        areas.forEach(area -> ControlAreaConversion.update(area, getPropertyBag(area.getId(), equipmentIdPropertyBag), context));
         context.popReportNode();
     }
 
-    static void updateDcSwitches(Network network, Context context) {
+    static void updateDcSwitches(Network network, Context context, UpdateScope scope) {
         context.pushReportNode(CgmesReports.updatingElementTypeReport(context.getReportNode(), IdentifiableType.DC_SWITCH.name()));
-        network.getDcSwitches().forEach(dcSwitch -> DCSwitchConversion.update(dcSwitch, context));
+        scope.select(network.getDcSwitches(), network::getDcSwitch)
+            .forEach(dcSwitch -> DCSwitchConversion.update(dcSwitch, context));
         context.popReportNode();
     }
 
-    static void updateDcGrounds(Network network, Context context) {
+    static void updateDcGrounds(Network network, Context context, UpdateScope scope) {
         context.pushReportNode(CgmesReports.updatingElementTypeReport(context.getReportNode(), IdentifiableType.DC_GROUND.name()));
-        network.getDcGrounds().forEach(dcGround -> DCGroundConversion.update(dcGround, context));
+        scope.select(network.getDcGrounds(), network::getDcGround)
+            .forEach(dcGround -> DCGroundConversion.update(dcGround, context));
         context.popReportNode();
     }
 
-    static void updateDcLines(Network network, Context context) {
+    static void updateDcLines(Network network, Context context, UpdateScope scope) {
         context.pushReportNode(CgmesReports.updatingElementTypeReport(context.getReportNode(), IdentifiableType.DC_LINE.name()));
-        network.getDcLines().forEach(dcLine -> DCLineSegmentConversion.update(dcLine, context));
+        scope.select(network.getDcLines(), network::getDcLine)
+            .forEach(dcLine -> DCLineSegmentConversion.update(dcLine, context));
         context.popReportNode();
     }
 
-    static void updateAcDcConverters(Network network, CgmesModel cgmes, Context context) {
+    static void updateAcDcConverters(Network network, CgmesModel cgmes, Context context, UpdateScope scope) {
+        Iterable<LineCommutatedConverter> lccs =
+                scope.select(network.getLineCommutatedConverters(), network::getLineCommutatedConverter);
+        Iterable<VoltageSourceConverter> vscs =
+                scope.select(network.getVoltageSourceConverters(), network::getVoltageSourceConverter);
+        if (nothingToDo(scope, lccs) && nothingToDo(scope, vscs)) {
+            return;
+        }
         Map<String, PropertyBag> equipmentIdPropertyBag = new HashMap<>();
         addPropertyBags(cgmes.acDcConverters(), CgmesNames.ACDC_CONVERTER, equipmentIdPropertyBag);
 
         context.pushReportNode(CgmesReports.updatingElementTypeReport(context.getReportNode(), IdentifiableType.LINE_COMMUTATED_CONVERTER.name()));
-        network.getLineCommutatedConverters().forEach(lcc -> AcDcConverterConversion.update(lcc, getPropertyBag(lcc.getId(), equipmentIdPropertyBag), context));
+        lccs.forEach(lcc -> AcDcConverterConversion.update(lcc, getPropertyBag(lcc.getId(), equipmentIdPropertyBag), context));
         context.popReportNode();
 
         context.pushReportNode(CgmesReports.updatingElementTypeReport(context.getReportNode(), IdentifiableType.VOLTAGE_SOURCE_CONVERTER.name()));
-        network.getVoltageSourceConverters().forEach(vsc -> AcDcConverterConversion.update(vsc, getPropertyBag(vsc.getId(), equipmentIdPropertyBag), context));
+        vscs.forEach(vsc -> AcDcConverterConversion.update(vsc, getPropertyBag(vsc.getId(), equipmentIdPropertyBag), context));
         context.popReportNode();
     }
 

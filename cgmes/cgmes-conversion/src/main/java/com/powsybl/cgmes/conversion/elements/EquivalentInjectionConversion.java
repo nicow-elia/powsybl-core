@@ -120,7 +120,7 @@ public class EquivalentInjectionConversion extends AbstractReactiveLimitsOwnerCo
     public static void update(Generator generator, PropertyBag cgmesData, Context context) {
         updateTerminals(generator, context, generator.getTerminal());
 
-        boolean regulationCapability = Boolean.parseBoolean(generator.getProperty(PROPERTY_CGMES_ORIGINAL_CLASS + CgmesNames.REGULATION_CAPABILITY));
+        boolean regulationCapability = Boolean.parseBoolean(generator.getProperty(PROPERTY_REGULATION_CAPABILITY));
 
         PowerFlow updatedPowerFlow = updatedPowerFlow(cgmesData);
 

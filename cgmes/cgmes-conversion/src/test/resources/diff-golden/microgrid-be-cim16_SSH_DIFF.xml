@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:entsoe="http://entsoe.eu/CIM/SchemaExtension/3/1#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:cim="http://iec.ch/TC57/2013/CIM-schema-cim16#" xmlns:md="http://iec.ch/TC57/61970-552/ModelDescription/1#" xmlns:dm="http://iec.ch/TC57/61970-552/DifferenceModel/1#">
+    <dm:DifferenceModel rdf:about="urn:uuid:00000000-0000-0000-0000-000000000001">
+        <md:Model.scenarioTime>2024-02-21T11:00:00Z</md:Model.scenarioTime>
+        <md:Model.created>2026-09-17T08:00:00Z</md:Model.created>
+        <md:Model.description>CGMES Conformity Assessment: 'MicroGridTestConfiguration....BC (MAS BE) Test Configuration. The model is owned by ENTSO-E and is provided by ENTSO-E “as it is”. To the fullest extent permitted by law, ENTSO-E shall not be liable for any damages of any kind arising out of the use of the model (including any of its subsequent modifications). ENTSO-E neither warrants, nor represents that the use of the model will not infringe the rights of third parties. Any use of the model shall  include a reference to ENTSO-E. ENTSO-E web site is the only official source of information related to the model.</md:Model.description>
+        <md:Model.version>3</md:Model.version>
+        <md:Model.DependentOn rdf:resource="urn:uuid:d400c631-75a0-4c30-8aed-832b0d282e73"/>
+        <md:Model.Supersedes rdf:resource="urn:uuid:52b712d1-f3b0-4a59-9191-79f2fb1e4c4e"/>
+        <md:Model.profile>http://entsoe.eu/CIM/SteadyStateHypothesis/1/1</md:Model.profile>
+        <md:Model.modelingAuthoritySet>http://elia.be/CGMES/2.4.15</md:Model.modelingAuthoritySet>
+        <dm:reverseDifferences rdf:parseType="Statements">
+            <rdf:Description rdf:about="#_cb459405-cc14-4215-a45c-416789205904">
+                <cim:EnergyConsumer.p>200</cim:EnergyConsumer.p>
+                <cim:EnergyConsumer.q>90</cim:EnergyConsumer.q>
+            </rdf:Description>
+            <rdf:Description rdf:about="#_3a3b27be-b18b-4385-b557-6735d733baf0">
+                <cim:RegulatingCondEq.controlEnabled>true</cim:RegulatingCondEq.controlEnabled>
+                <cim:RotatingMachine.p>-90</cim:RotatingMachine.p>
+                <cim:RotatingMachine.q>-100.256</cim:RotatingMachine.q>
+                <cim:SynchronousMachine.referencePriority>0</cim:SynchronousMachine.referencePriority>
+                <cim:SynchronousMachine.operatingMode rdf:resource="http://iec.ch/TC57/2013/CIM-schema-cim16#SynchronousMachineOperatingMode.generator"/>
+            </rdf:Description>
+            <rdf:Description rdf:about="#_6ba406ce-78cf-4485-9b01-a34e584f1a8d">
+                <cim:RegulatingControl.discrete>false</cim:RegulatingControl.discrete>
+                <cim:RegulatingControl.enabled>true</cim:RegulatingControl.enabled>
+                <cim:RegulatingControl.targetDeadband>0</cim:RegulatingControl.targetDeadband>
+                <cim:RegulatingControl.targetValue>115.5</cim:RegulatingControl.targetValue>
+                <cim:RegulatingControl.targetValueUnitMultiplier rdf:resource="http://iec.ch/TC57/2013/CIM-schema-cim16#UnitMultiplier.k"/>
+            </rdf:Description>
+            <rdf:Description rdf:about="#_d771118f-36e9-4115-a128-cc3d9ce3e3da">
+                <cim:ShuntCompensator.sections>1</cim:ShuntCompensator.sections>
+                <cim:RegulatingCondEq.controlEnabled>false</cim:RegulatingCondEq.controlEnabled>
+            </rdf:Description>
+            <rdf:Description rdf:about="#_955d9cd0-4a10-4031-b008-60c0dc340a07">
+                <cim:TapChanger.controlEnabled>false</cim:TapChanger.controlEnabled>
+                <cim:TapChanger.step>10</cim:TapChanger.step>
+            </rdf:Description>
+        </dm:reverseDifferences>
+        <dm:forwardDifferences rdf:parseType="Statements">
+            <rdf:Description rdf:about="#_cb459405-cc14-4215-a45c-416789205904">
+                <cim:EnergyConsumer.p>202.5</cim:EnergyConsumer.p>
+                <cim:EnergyConsumer.q>90</cim:EnergyConsumer.q>
+            </rdf:Description>
+            <rdf:Description rdf:about="#_3a3b27be-b18b-4385-b557-6735d733baf0">
+                <cim:RegulatingCondEq.controlEnabled>true</cim:RegulatingCondEq.controlEnabled>
+                <cim:RotatingMachine.p>-95</cim:RotatingMachine.p>
+                <cim:RotatingMachine.q>-100.256</cim:RotatingMachine.q>
+                <cim:SynchronousMachine.referencePriority>0</cim:SynchronousMachine.referencePriority>
+                <cim:SynchronousMachine.operatingMode rdf:resource="http://iec.ch/TC57/2013/CIM-schema-cim16#SynchronousMachineOperatingMode.generator"/>
+            </rdf:Description>
+            <rdf:Description rdf:about="#_6ba406ce-78cf-4485-9b01-a34e584f1a8d">
+                <cim:RegulatingControl.discrete>false</cim:RegulatingControl.discrete>
+                <cim:RegulatingControl.enabled>true</cim:RegulatingControl.enabled>
+                <cim:RegulatingControl.targetDeadband>0</cim:RegulatingControl.targetDeadband>
+                <cim:RegulatingControl.targetValue>116.5</cim:RegulatingControl.targetValue>
+                <cim:RegulatingControl.targetValueUnitMultiplier rdf:resource="http://iec.ch/TC57/2013/CIM-schema-cim16#UnitMultiplier.k"/>
+            </rdf:Description>
+            <rdf:Description rdf:about="#_d771118f-36e9-4115-a128-cc3d9ce3e3da">
+                <cim:ShuntCompensator.sections>0</cim:ShuntCompensator.sections>
+                <cim:RegulatingCondEq.controlEnabled>false</cim:RegulatingCondEq.controlEnabled>
+            </rdf:Description>
+            <rdf:Description rdf:about="#_955d9cd0-4a10-4031-b008-60c0dc340a07">
+                <cim:TapChanger.controlEnabled>false</cim:TapChanger.controlEnabled>
+                <cim:TapChanger.step>11</cim:TapChanger.step>
+            </rdf:Description>
+        </dm:forwardDifferences>
+    </dm:DifferenceModel>
+</rdf:RDF>

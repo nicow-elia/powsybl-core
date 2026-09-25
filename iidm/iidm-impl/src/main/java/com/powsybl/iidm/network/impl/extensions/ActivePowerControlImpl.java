@@ -153,7 +153,14 @@ public class ActivePowerControlImpl<T extends Injection<T>> extends AbstractMult
     }
 
     public void setParticipationFactor(double participationFactor) {
-        this.participationFactor.set(getVariantIndex(), participationFactor);
+        int variantIndex = getVariantIndex();
+        double oldParticipationFactor = this.participationFactor.get(variantIndex);
+        if (oldParticipationFactor != participationFactor) {
+            this.participationFactor.set(variantIndex, participationFactor);
+            NetworkImpl network = (NetworkImpl) getExtendable().getNetwork();
+            String variantId = getVariantManagerHolder().getVariantManager().getWorkingVariantId();
+            network.getListeners().notifyExtensionUpdate(this, "participationFactor", variantId, oldParticipationFactor, participationFactor);
+        }
     }
 
     @Override

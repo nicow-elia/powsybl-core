@@ -15,6 +15,7 @@ import com.powsybl.math.graph.TraverseResult;
 
 import java.util.*;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -316,11 +317,20 @@ public final class RegulatingTerminalMapper {
         private static Optional<Terminal> best(List<Terminal> terminals) {
             // Prefer first terminals corresponding to busbar sections,
             // then terminals of equipment capable of voltage control,
-            // then any terminal available
-            return terminals.stream()
-                    .filter(RegulatingTerminalMapper::isBusbarSection).findFirst()
-                    .or(() -> terminals.stream().filter(RegulatingTerminalMapper::isEquipmentCapableOfVoltageControl).findFirst())
-                    .or(() -> terminals.stream().findFirst());
+            // then any terminal available.
+            // Inside each of those groups the choice must not depend on the order the equipment happens to have
+            // been created in, which follows the order the SPARQL queries returned it in and is not a property of
+            // the data: a connected terminal first - a regulation whose terminal is disconnected has no bus at
+            // all - and among equals the lowest identifier.
+            return bestOf(terminals, RegulatingTerminalMapper::isBusbarSection)
+                    .or(() -> bestOf(terminals, RegulatingTerminalMapper::isEquipmentCapableOfVoltageControl))
+                    .or(() -> bestOf(terminals, t -> true));
+        }
+
+        private static Optional<Terminal> bestOf(List<Terminal> terminals, Predicate<Terminal> group) {
+            return terminals.stream().filter(group).min(
+                    Comparator.comparing((Terminal t) -> !t.isConnected())
+                            .thenComparing(t -> t.getConnectable().getId()));
         }
 
         @Override

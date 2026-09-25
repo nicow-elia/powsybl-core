@@ -9,6 +9,7 @@ package com.powsybl.iidm.network.tck;
 
 import com.powsybl.commons.PowsyblException;
 import com.powsybl.iidm.network.*;
+import com.powsybl.iidm.network.events.UpdateNetworkEvent;
 import com.powsybl.iidm.network.test.SvcTestCaseFactory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -164,6 +165,28 @@ public abstract class AbstractStaticVarCompensatorTest {
         variantManager.setWorkingVariant("s4");
         variantManager.removeVariant("s4");
         assertThrows(PowsyblException.class, svc::getReactivePowerSetpoint);
+    }
+
+    /**
+     * Switching the regulation of a compensator on or off is a steady state change that an exchange format such as
+     * CGMES carries, so it has to be observable from a network listener like any other setpoint change.
+     */
+    @Test
+    public void regulatingNotificationTest() {
+        StaticVarCompensator svc = network.getStaticVarCompensator("SVC2");
+        assertTrue(svc.isRegulating());
+
+        NetworkEventRecorder eventRecorder = new NetworkEventRecorder();
+        network.addListener(eventRecorder);
+        svc.setRegulating(false);
+        assertEquals(List.of(new UpdateNetworkEvent("SVC2", "regulating",
+                        VariantManagerConstants.INITIAL_VARIANT_ID, true, false)),
+                eventRecorder.getEvents());
+
+        // Setting the same value again is not a change and must not be reported
+        eventRecorder.reset();
+        svc.setRegulating(false);
+        assertEquals(List.of(), eventRecorder.getEvents());
     }
 
     private StaticVarCompensator createSvc(String id, Terminal regulatingTerminal, StaticVarCompensator.RegulationMode regulationMode) {

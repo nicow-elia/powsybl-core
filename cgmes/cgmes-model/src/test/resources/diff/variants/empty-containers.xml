@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:cim="http://iec.ch/TC57/2013/CIM-schema-cim16#" xmlns:dm="http://iec.ch/TC57/61970-552/DifferenceModel/1#" xmlns:md="http://iec.ch/TC57/61970-552/ModelDescription/1#">
+    <dm:DifferenceModel rdf:about="urn:uuid:empty-containers">
+        <md:Model.profile>http://entsoe.eu/CIM/SteadyStateHypothesis/1/1</md:Model.profile>
+        <dm:reverseDifferences rdf:parseType="Statements"/>
+        <dm:forwardDifferences rdf:parseType="Statements">
+            <rdf:Description rdf:about="#_L1">
+                <cim:EnergyConsumer.p>12.5</cim:EnergyConsumer.p>
+            </rdf:Description>
+        </dm:forwardDifferences>
+        <dm:forwardDifferences rdf:parseType="Statements">
+            <rdf:Description rdf:about="#_L2">
+                <cim:EnergyConsumer.p>1</cim:EnergyConsumer.p>
+            </rdf:Description>
+        </dm:forwardDifferences>
+    </dm:DifferenceModel>
+</rdf:RDF>

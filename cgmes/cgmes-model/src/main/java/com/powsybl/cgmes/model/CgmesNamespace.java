@@ -38,6 +38,8 @@ public final class CgmesNamespace {
     public static final String ENTSOE_NAMESPACE = "http://entsoe.eu/CIM/SchemaExtension/3/1#";
     public static final String EU_NAMESPACE = "http://iec.ch/TC57/CIM100-European#";
     public static final String MD_NAMESPACE = "http://iec.ch/TC57/61970-552/ModelDescription/1#";
+    /** The namespace of the IEC 61970-552 difference model, which carries forward and reverse statements. */
+    public static final String DM_NAMESPACE = "http://iec.ch/TC57/61970-552/DifferenceModel/1#";
 
     public static final String CIM_16_EQ_PROFILE = "http://entsoe.eu/CIM/EquipmentCore/3/1";
     public static final String CIM_16_EQ_OPERATION_PROFILE = "http://entsoe.eu/CIM/EquipmentOperation/3/1";

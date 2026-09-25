@@ -530,7 +530,11 @@ public abstract class AbstractConductingEquipmentConversion extends AbstractIden
 
     private static void updateTerminal(PropertyBag cgmesTerminal, Terminal terminal, Context context) {
         if (updateConnect(terminal, context)) {
-            boolean connectedInUpdate = cgmesTerminal.asBoolean(CgmesNames.CONNECTED, true);
+            // An update that says nothing about a terminal leaves it where it is when previous values are in use.
+            // Without that flag the historical default is "connected", which is what a full instance file means
+            // when it omits cim:ACDCTerminal.connected.
+            boolean connectedInUpdate = cgmesTerminal.asBoolean(CgmesNames.CONNECTED)
+                    .orElseGet(() -> context.config().usePreviousValuesDuringUpdate() ? terminal.isConnected() : true);
             if (!terminal.isConnected() && connectedInUpdate) {
                 terminal.connect();
             } else if (terminal.isConnected() && !connectedInUpdate) {

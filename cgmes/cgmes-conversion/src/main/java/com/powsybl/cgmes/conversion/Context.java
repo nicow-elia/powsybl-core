@@ -24,8 +24,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.Supplier;
 
 /**
@@ -203,17 +205,26 @@ public class Context {
         return cachedGroupedReactiveCapabilityCurveData.getOrDefault(curveId, new PropertyBags());
     }
 
+    /**
+     * Make the caches of the update workflow available.
+     *
+     * <p>Each of the ten caches is filled on its first use rather than here, because filling one means running a
+     * SPARQL query. A full file update reads all of them anyway, so nothing changes for it; an update that only
+     * touches a few kinds of equipment &mdash; a difference model update &mdash; never pays for the queries whose
+     * answers it would not look at. The values are the same either way: a cache is built once, from the same query,
+     * before the first lookup that could see it.</p>
+     */
     public void buildUpdateCache() {
-        buildUpdateCache(cgmesTerminals, cgmes.terminals(), CgmesNames.TERMINAL);
-        buildUpdateCache(cgmesDcTerminals, cgmes.dcTerminals(), CgmesNames.DC_TERMINAL);
-        buildUpdateCache(ratioTapChangers, cgmes.ratioTapChangers(), CgmesNames.RATIO_TAP_CHANGER);
-        buildUpdateCache(phaseTapChangers, cgmes.phaseTapChangers(), CgmesNames.PHASE_TAP_CHANGER);
-        buildUpdateCache(regulatingControls, cgmes.regulatingControls(), CgmesNames.REGULATING_CONTROL);
-        buildUpdateCache(operationalLimits, cgmes.operationalLimits(), CgmesNames.OPERATIONAL_LIMIT);
-        buildUpdateCache(generatingUnits, cgmes.generatingUnits(), CgmesNames.GENERATING_UNIT);
-        buildUpdateCache(equivalentInjections, cgmes.equivalentInjections(), CgmesNames.EQUIVALENT_INJECTION);
-        buildUpdateCache(svVoltages, cgmes.svVoltages(), CgmesNames.TOPOLOGICAL_NODE);
-        buildUpdateCache(switches, cgmes.switches(), CgmesNames.SWITCH);
+        updateCachesRequested = true;
+    }
+
+    /** The named cache, built from its query on first use. */
+    private Map<String, PropertyBag> updateCache(String name, Map<String, PropertyBag> cache,
+                                                 Supplier<PropertyBags> query, String tagId) {
+        if (updateCachesRequested && builtUpdateCaches.add(name)) {
+            buildUpdateCache(cache, query.get(), tagId);
+        }
+        return cache;
     }
 
     private static void buildUpdateCache(Map<String, PropertyBag> cache, PropertyBags cgmesPropertyBags, String tagId) {
@@ -224,43 +235,43 @@ public class Context {
     }
 
     public PropertyBag cgmesTerminal(String id) {
-        return cgmesTerminals.get(id);
+        return updateCache("terminals", cgmesTerminals, cgmes::terminals, CgmesNames.TERMINAL).get(id);
     }
 
     public PropertyBag cgmesDcTerminal(String id) {
-        return cgmesDcTerminals.get(id);
+        return updateCache("dcTerminals", cgmesDcTerminals, cgmes::dcTerminals, CgmesNames.DC_TERMINAL).get(id);
     }
 
     public PropertyBag ratioTapChanger(String id) {
-        return ratioTapChangers.get(id);
+        return updateCache("ratioTapChangers", ratioTapChangers, cgmes::ratioTapChangers, CgmesNames.RATIO_TAP_CHANGER).get(id);
     }
 
     public PropertyBag phaseTapChanger(String id) {
-        return phaseTapChangers.get(id);
+        return updateCache("phaseTapChangers", phaseTapChangers, cgmes::phaseTapChangers, CgmesNames.PHASE_TAP_CHANGER).get(id);
     }
 
     public PropertyBag regulatingControl(String id) {
-        return regulatingControls.get(id);
+        return updateCache("regulatingControls", regulatingControls, cgmes::regulatingControls, CgmesNames.REGULATING_CONTROL).get(id);
     }
 
     public PropertyBag operationalLimit(String id) {
-        return operationalLimits.get(id);
+        return updateCache("operationalLimits", operationalLimits, cgmes::operationalLimits, CgmesNames.OPERATIONAL_LIMIT).get(id);
     }
 
     public PropertyBag generatingUnit(String id) {
-        return generatingUnits.get(id);
+        return updateCache("generatingUnits", generatingUnits, cgmes::generatingUnits, CgmesNames.GENERATING_UNIT).get(id);
     }
 
     public PropertyBag equivalentInjection(String id) {
-        return equivalentInjections.get(id);
+        return updateCache("equivalentInjections", equivalentInjections, cgmes::equivalentInjections, CgmesNames.EQUIVALENT_INJECTION).get(id);
     }
 
     public PropertyBag svVoltage(String id) {
-        return svVoltages.get(id);
+        return updateCache("svVoltages", svVoltages, cgmes::svVoltages, CgmesNames.TOPOLOGICAL_NODE).get(id);
     }
 
     public PropertyBag cgmesSwitch(String id) {
-        return switches.get(id);
+        return updateCache("switches", switches, cgmes::switches, CgmesNames.SWITCH).get(id);
     }
 
     // Handling issues found during conversion
@@ -383,6 +394,10 @@ public class Context {
     private final Map<String, PropertyBags> cachedGroupedPhaseTapChangerTablePoints;
     private final Map<String, PropertyBags> cachedGroupedShuntCompensatorPoints;
     private final Map<String, PropertyBags> cachedGroupedReactiveCapabilityCurveData;
+
+    /** Whether the update workflow asked for its caches; they are then built one by one, on first use. */
+    private boolean updateCachesRequested = false;
+    private final Set<String> builtUpdateCaches = new HashSet<>();
 
     private final Map<String, PropertyBag> cgmesTerminals;
     private final Map<String, PropertyBag> cgmesDcTerminals;

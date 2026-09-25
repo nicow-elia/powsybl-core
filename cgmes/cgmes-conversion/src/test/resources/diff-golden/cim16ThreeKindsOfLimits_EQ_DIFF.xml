@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:entsoe="http://entsoe.eu/CIM/SchemaExtension/3/1#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:cim="http://iec.ch/TC57/2013/CIM-schema-cim16#" xmlns:md="http://iec.ch/TC57/61970-552/ModelDescription/1#" xmlns:dm="http://iec.ch/TC57/61970-552/DifferenceModel/1#">
+    <dm:DifferenceModel rdf:about="urn:uuid:00000000-0000-0000-0000-0000000000eq">
+        <md:Model.scenarioTime>2024-02-21T11:00:00Z</md:Model.scenarioTime>
+        <md:Model.created>2026-09-17T08:00:00Z</md:Model.created>
+        <md:Model.description>EQ Model</md:Model.description>
+        <md:Model.version>1</md:Model.version>
+        <md:Model.profile>http://entsoe.eu/CIM/EquipmentCore/3/1</md:Model.profile>
+        <md:Model.modelingAuthoritySet>powsybl.org</md:Model.modelingAuthoritySet>
+        <dm:reverseDifferences rdf:parseType="Statements">
+            <rdf:Description rdf:about="#_I_PATL_1">
+                <cim:CurrentLimit.value>100</cim:CurrentLimit.value>
+            </rdf:Description>
+            <rdf:Description rdf:about="#_P_PATL_1">
+                <cim:ActivePowerLimit.value>101</cim:ActivePowerLimit.value>
+            </rdf:Description>
+            <rdf:Description rdf:about="#_S_PATL_1">
+                <cim:ApparentPowerLimit.value>102</cim:ApparentPowerLimit.value>
+            </rdf:Description>
+        </dm:reverseDifferences>
+        <dm:forwardDifferences rdf:parseType="Statements">
+            <rdf:Description rdf:about="#_I_PATL_1">
+                <cim:CurrentLimit.value>110</cim:CurrentLimit.value>
+            </rdf:Description>
+            <rdf:Description rdf:about="#_P_PATL_1">
+                <cim:ActivePowerLimit.value>111</cim:ActivePowerLimit.value>
+            </rdf:Description>
+            <rdf:Description rdf:about="#_S_PATL_1">
+                <cim:ApparentPowerLimit.value>112</cim:ApparentPowerLimit.value>
+            </rdf:Description>
+        </dm:forwardDifferences>
+    </dm:DifferenceModel>
+</rdf:RDF>

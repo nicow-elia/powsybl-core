@@ -14,6 +14,7 @@ import com.powsybl.iidm.network.extensions.ReferencePriorities;
 import com.powsybl.iidm.network.extensions.ReferencePriority;
 import com.powsybl.iidm.network.extensions.ReferencePriorityAdder;
 import com.powsybl.iidm.network.impl.AbstractMultiVariantIdentifiableExtension;
+import com.powsybl.iidm.network.impl.NetworkImpl;
 
 import java.util.*;
 
@@ -35,7 +36,9 @@ class ReferencePrioritiesImpl<C extends Connectable<C>> extends AbstractMultiVar
             throw new PowsyblException(String.format("The provided terminal does not belong to the connectable %s",
                 getExtendable().getId()));
         }
-        referencePrioritiesPerVariant.get(getVariantIndex()).put(referencePriority.getTerminal(), referencePriority);
+        ReferencePriority oldPriority = referencePrioritiesPerVariant.get(getVariantIndex())
+                .put(referencePriority.getTerminal(), referencePriority);
+        notifyUpdate(oldPriority == null ? null : oldPriority.getPriority(), referencePriority.getPriority());
         return this;
     }
 
@@ -51,7 +54,26 @@ class ReferencePrioritiesImpl<C extends Connectable<C>> extends AbstractMultiVar
 
     @Override
     public void deleteReferencePriorities() {
-        referencePrioritiesPerVariant.get(getVariantIndex()).clear();
+        Map<Terminal, ReferencePriority> priorities = referencePrioritiesPerVariant.get(getVariantIndex());
+        List<ReferencePriority> removed = List.copyOf(priorities.values());
+        priorities.clear();
+        removed.forEach(referencePriority -> notifyUpdate(referencePriority.getPriority(), null));
+    }
+
+    /**
+     * Report a changed reference priority, so that a listener can follow the angle reference of the network.
+     *
+     * <p>The extension holds one priority per terminal, but they describe a single decision of the same object, so
+     * they all report under the attribute name {@code referencePriority}. A listener that needs to know which
+     * terminal changed reads the priorities of the extension it is handed.</p>
+     *
+     * @param oldPriority the priority that terminal had, or {@code null} if it had none
+     * @param newPriority the priority it has now, or {@code null} if it was withdrawn
+     */
+    private void notifyUpdate(Integer oldPriority, Integer newPriority) {
+        NetworkImpl network = (NetworkImpl) getExtendable().getNetwork();
+        String variantId = getVariantManagerHolder().getVariantManager().getWorkingVariantId();
+        network.getListeners().notifyExtensionUpdate(this, "referencePriority", variantId, oldPriority, newPriority);
     }
 
     @Override

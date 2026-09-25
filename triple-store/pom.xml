@@ -26,6 +26,7 @@
     <modules>
         <module>triple-store-api</module>
         <module>triple-store-impl-rdf4j</module>
+        <module>triple-store-impl-rdf4j-sparql</module>
         <module>triple-store-test</module>
     </modules>
 

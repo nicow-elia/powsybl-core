@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:cim="http://iec.ch/TC57/2013/CIM-schema-cim16#" xmlns:dm="http://iec.ch/TC57/61970-552/DifferenceModel/1#" xmlns:md="http://iec.ch/TC57/61970-552/ModelDescription/1#" xmlns:entsoe="http://entsoe.eu/CIM/SchemaExtension/3/1#" xmlns:slashns="http://example.org/ext/">
+    <dm:DifferenceModel rdf:about="urn:uuid:values">
+        <md:Model.profile>http://entsoe.eu/CIM/SteadyStateHypothesis/1/1</md:Model.profile>
+        <dm:forwardDifferences rdf:parseType="Statements">
+            <rdf:Description rdf:about="#_RC1">
+                <cim:RegulatingControl.targetValueUnitMultiplier rdf:resource="http://iec.ch/TC57/2013/CIM-schema-cim16#UnitMultiplier.k"/>
+                <cim:RegulatingControl.Terminal rdf:resource="#_T1"/>
+                <cim:RegulatingControl.RegulatingCondEq rdf:resource="urn:uuid:G1"/>
+                <cim:RegulatingControl.Foreign rdf:resource="http://other#_X1"/>
+                <entsoe:EnergyConsumer.hint>kept</entsoe:EnergyConsumer.hint>
+                <slashns:EnergyConsumer.note>slash namespace</slashns:EnergyConsumer.note>
+            </rdf:Description>
+        </dm:forwardDifferences>
+    </dm:DifferenceModel>
+</rdf:RDF>

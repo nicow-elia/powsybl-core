@@ -17,3 +17,14 @@ Loading from RDF/XML files to the Triplestore is highly optimized by these engin
 that leverage the power of Linked Data and Semantic Web.
 
 Its in-memory implementation is the default triplestore engine used by PowSyBl for CIM-CGMES import.
+
+## rdf4j-sparql: a remote SPARQL database
+
+Next to the in-memory RDF4J store, PowSyBl has a triple store implementation that keeps its statements in a remote
+SPARQL 1.1 graph database (Apache Jena Fuseki, RDF4J server, GraphDB): `rdf4j-sparql`, in the module
+`powsybl-triple-store-impl-rdf4j-sparql`. Queries become SPARQL requests over HTTP, and a whole named graph is
+written or read in one Graph Store Protocol request.
+
+Storing CGMES data in a database rather than in the process that reads it is what makes a CGMES import splittable
+into *files &rarr; database* and *database &rarr; IIDM*, which is a step of its own; see
+[RDF database](rdf_database.md).

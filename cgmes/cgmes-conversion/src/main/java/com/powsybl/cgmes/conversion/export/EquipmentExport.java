@@ -1337,12 +1337,7 @@ public final class EquipmentExport {
         }
 
         // Write the OperationalLimitSet
-        String operationalLimitSetId;
-        if (limitsGroup.hasProperty(PROPERTY_OPERATIONAL_LIMIT_SET_RDFID)) {
-            operationalLimitSetId = limitsGroup.getProperty(PROPERTY_OPERATIONAL_LIMIT_SET_RDFID);
-        } else {
-            operationalLimitSetId = context.getNamingStrategy().getCgmesId(ref(terminalId), ref(limitsGroup.getId()), OPERATIONAL_LIMIT_SET);
-        }
+        String operationalLimitSetId = operationalLimitSetId(limitsGroup, terminalId, context);
         String operationalLimitSetName;
         if (limitsGroup.hasProperty(PROPERTY_OPERATIONAL_LIMIT_SET_NAME)) {
             operationalLimitSetName = limitsGroup.getProperty(PROPERTY_OPERATIONAL_LIMIT_SET_NAME);
@@ -1366,6 +1361,41 @@ public final class EquipmentExport {
         }
     }
 
+    /**
+     * The identifier of the CGMES OperationalLimitSet a full equipment export writes for one operational limits
+     * group: the identifier the import stored, or a deterministic one derived from the terminal and the group.
+     *
+     * <p>Package private because the difference model export needs the very same identifier for a network that was
+     * not imported from CGMES and therefore carries no stored one, see {@code CgmesLimitIndex}.</p>
+     *
+     * @param terminalId the CGMES identifier of the terminal the set is attached to
+     */
+    static String operationalLimitSetId(OperationalLimitsGroup limitsGroup, String terminalId, CgmesExportContext context) {
+        if (limitsGroup.hasProperty(PROPERTY_OPERATIONAL_LIMIT_SET_RDFID)) {
+            return limitsGroup.getProperty(PROPERTY_OPERATIONAL_LIMIT_SET_RDFID);
+        }
+        return context.getNamingStrategy().getCgmesId(ref(terminalId), ref(limitsGroup.getId()), OPERATIONAL_LIMIT_SET);
+    }
+
+    /**
+     * The identifier of the CGMES OperationalLimit a full equipment export writes for one loading limit.
+     *
+     * <p>A full export always recomputes it from the set, whatever identifier the import stored, which is why a
+     * receiver that read a powsybl written equipment model holds exactly these identifiers.</p>
+     *
+     * @param className          {@code CurrentLimit}, {@code ActivePowerLimit} or {@code ApparentPowerLimit}
+     * @param acceptableDuration the duration of the temporary limit, or a negative value for the permanent one
+     */
+    static String operationalLimitId(String operationalLimitSetId, String className, int acceptableDuration,
+                                     CgmesExportContext context) {
+        if (acceptableDuration < 0) {
+            return context.getNamingStrategy().getCgmesId(ref(operationalLimitSetId), ref(className), PATL,
+                    OPERATIONAL_LIMIT_VALUE);
+        }
+        return context.getNamingStrategy().getCgmesId(ref(operationalLimitSetId), ref(className), TATL,
+                ref(acceptableDuration), OPERATIONAL_LIMIT_VALUE);
+    }
+
     private static void writeLoadingLimits(LoadingLimits limits, String cimNamespace, String euNamespace, String operationalLimitSetId,
                                            Set<String> exportedLimitTypes, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
         if (!(limits instanceof CurrentLimits) && context.isCim16BusBranchExport()) {
@@ -1382,7 +1412,7 @@ public final class EquipmentExport {
 
         // Write the permanent limit
         String className = loadingLimitClassName(limits);
-        String operationalLimitId = context.getNamingStrategy().getCgmesId(ref(operationalLimitSetId), ref(className), PATL, OPERATIONAL_LIMIT_VALUE);
+        String operationalLimitId = operationalLimitId(operationalLimitSetId, className, -1, context);
         LoadingLimitEq.write(operationalLimitId, className, "PATL", limits.getPermanentLimit(), operationalLimitTypeId,
             operationalLimitSetId, cimNamespace, writer, context);
 
@@ -1398,7 +1428,7 @@ public final class EquipmentExport {
                 }
 
                 // Write the temporary limit
-                operationalLimitId = context.getNamingStrategy().getCgmesId(ref(operationalLimitSetId), ref(className), TATL, ref(acceptableDuration), OPERATIONAL_LIMIT_VALUE);
+                operationalLimitId = operationalLimitId(operationalLimitSetId, className, acceptableDuration, context);
                 String temporaryLimitName = temporaryLimit.getName().isEmpty() ?
                     "TATL " + temporaryLimit.getAcceptableDuration() : // If the temporary limit name is empty, write TATL and the acceptable duration
                     temporaryLimit.getName();

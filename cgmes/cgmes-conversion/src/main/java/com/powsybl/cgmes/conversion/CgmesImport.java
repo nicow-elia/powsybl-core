@@ -10,9 +10,11 @@ package com.powsybl.cgmes.conversion;
 
 import com.google.auto.service.AutoService;
 import com.google.common.io.ByteStreams;
+import com.powsybl.cgmes.conversion.diff.CgmesDiffImport;
 import com.powsybl.cgmes.conversion.export.CgmesExportContext;
 import com.powsybl.cgmes.conversion.naming.NamingStrategyFactory;
 import com.powsybl.cgmes.model.CgmesModel;
+import com.powsybl.cgmes.model.CgmesModelException;
 import com.powsybl.cgmes.model.CgmesModelFactory;
 import com.powsybl.cgmes.model.CgmesNames;
 import com.powsybl.cgmes.model.CgmesOnDataSource;
@@ -35,6 +37,7 @@ import com.powsybl.commons.util.ServiceLoaderCache;
 import com.powsybl.iidm.network.Importer;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.NetworkFactory;
+import com.powsybl.triplestore.api.TripleStore;
 import com.powsybl.triplestore.api.TripleStoreFactory;
 import com.powsybl.triplestore.api.TripleStoreOptions;
 import org.slf4j.Logger;
@@ -189,12 +192,71 @@ public class CgmesImport implements Importer {
 
     private Network importData1(ReadOnlyDataSource ds, NetworkFactory networkFactory, Properties p, ReportNode reportNode) {
         CgmesModel cgmes = readCgmes(ds, p, reportNode);
-        ReportNode conversionReportNode = CgmesReports.importingCgmesFileReport(reportNode, ds.getBaseName());
+        return convert(cgmes, ds.getBaseName(), networkFactory, p, reportNode);
+    }
+
+    /**
+     * Convert an already loaded CGMES model to a network, exactly as a file import would.
+     *
+     * <p>This is the second half of an import, with the reading of the data taken out of it. It is what makes a
+     * CGMES model that was <em>not</em> read from files &mdash; one whose statements came out of an RDF database
+     * &mdash; end up as the very same network: the configuration, the pre- and post-processors and the closing of
+     * the model are the importer's, not a second interpretation of the same parameters.</p>
+     *
+     * @param cgmes          the model to convert. It is closed by the conversion unless the parameters ask for it
+     *                       to be kept as a network extension
+     * @param baseName       the name the conversion is reported under, usually the data source base name
+     * @param networkFactory the factory the network is created with
+     * @param p              the import parameters
+     * @param reportNode     where the conversion reports
+     * @return the network
+     */
+    public Network convert(CgmesModel cgmes, String baseName, NetworkFactory networkFactory, Properties p, ReportNode reportNode) {
+        Objects.requireNonNull(cgmes);
+        Objects.requireNonNull(networkFactory);
+        Objects.requireNonNull(reportNode);
+        ReportNode conversionReportNode = CgmesReports.importingCgmesFileReport(reportNode, baseName);
         return new Conversion(cgmes, config(p), activatedPreProcessors(p), activatedPostProcessors(p), networkFactory).convert(conversionReportNode);
+    }
+
+    /**
+     * Apply an already loaded CGMES model as an update of an existing network.
+     *
+     * <p>The counterpart of {@link #convert(CgmesModel, String, NetworkFactory, Properties, ReportNode)} for the
+     * update flow: the model holds the instance files of the profiles that changed (typically SSH and SV) and must
+     * have been built with the {@code -update} query catalog. Unlike the data-source overload this method does
+     * <em>not</em> close the model, because the caller &mdash; a database connection that keeps its store around
+     * &mdash; owns it.</p>
+     *
+     * @param network    the network to update in place
+     * @param cgmes      the model holding the update data, built with the {@code -update} query catalog
+     * @param p          the import parameters
+     * @param reportNode where the update reports
+     */
+    public void update(Network network, CgmesModel cgmes, Properties p, ReportNode reportNode) {
+        Objects.requireNonNull(network);
+        Objects.requireNonNull(cgmes);
+        Objects.requireNonNull(reportNode);
+        new Conversion(cgmes, config(p)).update(network, reportNode);
     }
 
     @Override
     public void update(Network network, ReadOnlyDataSource ds, Properties p, ReportNode reportNode) {
+        CgmesOnDataSource cgmesOnDataSource = new CgmesOnDataSource(ds);
+        Set<String> differenceModelNames = cgmesOnDataSource.differenceModelNames();
+        if (!differenceModelNames.isEmpty()) {
+            // A difference model states what changed; a full or partial file states a whole profile. Reading both
+            // in one update would apply them in an order nothing defines.
+            Set<String> allNames = cgmesOnDataSource.names();
+            if (differenceModelNames.size() != allNames.size()) {
+                throw new CgmesModelException("The data source mixes difference models " + differenceModelNames
+                        + " with full or partial models; update with one kind at a time");
+            }
+            CgmesDiffImport.apply(network, CgmesDiffImport.read(ds), config(p), diffOptions(p), reportNode);
+            return;
+        }
+        // Deliberately the plain defaults, not tripleStoreOptions(p): this is what the update flow has always
+        // used, and changing the identifier normalisation of an update would change existing networks.
         TripleStoreOptions tripleStoreOptions = new TripleStoreOptions();
         tripleStoreOptions.setQueryCatalog(Conversion.QUERY_CATALOG_NAME_UPDATE);
         ReadOnlyDataSource alternativeDataSourceForBoundary = null;
@@ -204,9 +266,22 @@ public class CgmesImport implements Importer {
                 TripleStoreFactory.DEFAULT_IMPLEMENTATION,
                 reportNode,
                 tripleStoreOptions);
-        Conversion conversion = new Conversion(cgmes, config(p));
-        conversion.update(network, reportNode);
+        update(network, cgmes, p, reportNode);
         cgmes.close();
+    }
+
+    /**
+     * The difference model options of the given parameters, honouring the defaults of the platform configuration.
+     *
+     * <p>{@code CgmesDiffImport.Options.from(Properties)} is the plain fallback of the static API; going through the
+     * parameter machinery here is what makes a platform configuration default reach a {@code network.update(ds)}.</p>
+     */
+    private CgmesDiffImport.Options diffOptions(Properties p) {
+        return new CgmesDiffImport.Options()
+                .setReverseCheck(CgmesDiffImport.Options.reverseCheckOf(
+                        Parameter.readString(getFormat(), p, DIFF_CHECK_REVERSE_PARAMETER, defaultValueConfig)))
+                .setCheckSupersedes(
+                        Parameter.readBoolean(getFormat(), p, DIFF_CHECK_SUPERSEDES_PARAMETER, defaultValueConfig));
     }
 
     static class FilteredReadOnlyDataSource implements ReadOnlyDataSource {
@@ -446,6 +521,46 @@ public class CgmesImport implements Importer {
     }
 
     public CgmesModel readCgmes(ReadOnlyDataSource ds, Properties p, ReportNode reportNode) {
+        ReportNode tripleStoreReportNode = CgmesReports.readingCgmesTriplestoreReport(reportNode);
+        return CgmesModelFactory.create(ds, boundary(p), tripleStore(p), tripleStoreReportNode, tripleStoreOptions(p));
+    }
+
+    /**
+     * Read a CGMES data source into a triple store the caller supplies, and describe the result as a CGMES model.
+     *
+     * <p>The overload without a {@code target} lets the {@code powsybl-triplestore} parameter pick a fresh store.
+     * This one writes into a store that already exists, which is how CGMES files reach an RDF database: the target
+     * is a remote store, the statements leave the process, and no network is built. The boundary location comes
+     * from the same parameter as always.</p>
+     *
+     * <p>The store must have been created with {@link #tripleStoreOptions(Properties)} of the same parameters,
+     * otherwise identifiers would be normalised differently here and in a later conversion.</p>
+     *
+     * @param ds         the data source holding the instance files
+     * @param target     the triple store the statements are written to
+     * @param p          the import parameters
+     * @param reportNode where the reader reports the files it read
+     * @return a CGMES model on the target store, sharing it with whoever else uses it
+     */
+    public CgmesModel readCgmes(ReadOnlyDataSource ds, TripleStore target, Properties p, ReportNode reportNode) {
+        Objects.requireNonNull(ds);
+        Objects.requireNonNull(target);
+        Objects.requireNonNull(reportNode);
+        ReportNode tripleStoreReportNode = CgmesReports.readingCgmesTriplestoreReport(reportNode);
+        return CgmesModelFactory.create(ds, boundary(p), target, tripleStoreReportNode);
+    }
+
+    /**
+     * The triple store options described by the given import parameters.
+     *
+     * <p>Public so that a caller that creates the triple store itself &mdash; a database layer loading CGMES files
+     * into a remote store, or converting a store it already holds &mdash; configures it exactly as a file import
+     * would. Reading the same data with different options yields different IIDM identifiers.</p>
+     *
+     * @param p the import parameters
+     * @return the options, with the query catalog left at its default (the import catalog)
+     */
+    public TripleStoreOptions tripleStoreOptions(Properties p) {
         TripleStoreOptions options = new TripleStoreOptions();
         String sourceForIidmIds = Parameter.readString(getFormat(), p, SOURCE_FOR_IIDM_ID_PARAMETER, defaultValueConfig);
         if (sourceForIidmIds.equalsIgnoreCase(SOURCE_FOR_IIDM_ID_MRID)) {
@@ -454,8 +569,7 @@ public class CgmesImport implements Importer {
             options.setRemoveInitialUnderscoreForIdentifiers(false);
         }
         options.decodeEscapedIdentifiers(Parameter.readBoolean(getFormat(), p, DECODE_ESCAPED_IDENTIFIERS_PARAMETER, defaultValueConfig));
-        ReportNode tripleStoreReportNode = CgmesReports.readingCgmesTriplestoreReport(reportNode);
-        return CgmesModelFactory.create(ds, boundary(p), tripleStore(p), tripleStoreReportNode, options);
+        return options;
     }
 
     @Override
@@ -524,7 +638,14 @@ public class CgmesImport implements Importer {
                 defaultValueConfig);
     }
 
-    private Conversion.Config config(Properties p) {
+    /**
+     * The conversion configuration described by the given parameters.
+     *
+     * <p>Public so that a caller holding only plain properties &mdash; the difference model importer, a database
+     * layer &mdash; can build the very configuration a file import would use, instead of a second interpretation of
+     * the same parameter names.</p>
+     */
+    public Conversion.Config config(Properties p) {
         Conversion.Config config = new Conversion.Config()
                 .setConvertBoundary(
                         Parameter.readBoolean(
@@ -706,6 +827,8 @@ public class CgmesImport implements Importer {
     public static final String REMOVE_PROPERTIES_AND_ALIASES_AFTER_IMPORT = "iidm.import.cgmes.remove-properties-and-aliases-after-import";
     public static final String USE_DETAILED_DC_MODEL = "iidm.import.cgmes.use-detailed-dc-model";
     public static final String SILENCE_FREQUENT_ISSUES_WARNINGS = "iidm.import.cgmes.silence-frequent-issues-warnings";
+    public static final String DIFF_CHECK_REVERSE = "iidm.import.cgmes.diff.check-reverse";
+    public static final String DIFF_CHECK_SUPERSEDES = "iidm.import.cgmes.diff.check-supersedes";
 
     public static final String SOURCE_FOR_IIDM_ID_MRID = "mRID";
     public static final String SOURCE_FOR_IIDM_ID_RDFID = "rdfID";
@@ -843,6 +966,19 @@ public class CgmesImport implements Importer {
             "Do not issue warning logs for frequent issues",
             Boolean.FALSE);
 
+    private static final Parameter DIFF_CHECK_REVERSE_PARAMETER = new Parameter(
+            DIFF_CHECK_REVERSE,
+            ParameterType.STRING,
+            "Check the reverse differences and the preconditions of a difference model against the network before applying it",
+            "off",
+            List.of("off", "warn", "fail"));
+
+    private static final Parameter DIFF_CHECK_SUPERSEDES_PARAMETER = new Parameter(
+            DIFF_CHECK_SUPERSEDES,
+            ParameterType.BOOLEAN,
+            "Check that a difference model supersedes the model the network currently holds for its profile",
+            Boolean.TRUE);
+
     private static final List<Parameter> STATIC_PARAMETERS = List.of(
             CONVERT_BOUNDARY_PARAMETER,
             CONVERT_SV_INJECTIONS_PARAMETER,
@@ -866,7 +1002,9 @@ public class CgmesImport implements Importer {
             USE_PREVIOUS_VALUES_DURING_UPDATE_PARAMETER,
             REMOVE_PROPERTIES_AND_ALIASES_AFTER_IMPORT_PARAMETER,
             USE_DETAILED_DC_MODEL_PARAMETER,
-            SILENCE_FREQUENT_ISSUES_WARNINGS_PARAMETER);
+            SILENCE_FREQUENT_ISSUES_WARNINGS_PARAMETER,
+            DIFF_CHECK_REVERSE_PARAMETER,
+            DIFF_CHECK_SUPERSEDES_PARAMETER);
 
     private final Parameter boundaryLocationParameter;
     private final Parameter preProcessorsParameter;

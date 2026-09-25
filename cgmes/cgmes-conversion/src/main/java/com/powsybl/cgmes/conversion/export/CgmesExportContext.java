@@ -44,6 +44,7 @@ public class CgmesExportContext {
     private CgmesNamespace.Cim cim = CgmesNamespace.CIM_16;
     private CgmesTopologyKind topologyKind = CgmesTopologyKind.NODE_BREAKER;
     private ZonedDateTime scenarioTime = ZonedDateTime.now();
+    private ZonedDateTime modelCreated;
     private ReportNode reportNode = ReportNode.NO_OP;
     private String businessProcess = DEFAULT_BUSINESS_PROCESS;
     private NamingStrategy namingStrategy = new IdentityNamingStrategy();
@@ -379,6 +380,26 @@ public class CgmesExportContext {
 
     public CgmesExportContext setScenarioTime(ZonedDateTime scenarioTime) {
         this.scenarioTime = Objects.requireNonNull(scenarioTime);
+        return this;
+    }
+
+    /**
+     * The creation time to stamp the exported model with, or {@code null} to stamp it with the time of the export.
+     *
+     * <p>Setting it makes an export reproducible, which is what a test comparing two exported files needs, and lets
+     * a caller that generates a file on behalf of an earlier event date it with that event rather than with now.</p>
+     */
+    public ZonedDateTime getModelCreated() {
+        return modelCreated;
+    }
+
+    /**
+     * Stamp the exported model with the given creation time instead of the time of the export.
+     *
+     * @param modelCreated the creation time to write, or {@code null} to fall back to the time of the export
+     */
+    public CgmesExportContext setModelCreated(ZonedDateTime modelCreated) {
+        this.modelCreated = modelCreated;
         return this;
     }
 

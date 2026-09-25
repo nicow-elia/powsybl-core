@@ -80,6 +80,30 @@ public final class CgmesExportUtil {
         return DOUBLE_FORMAT.format(fixValue(value, defaultValue));
     }
 
+    /**
+     * Format a value so that reading it back yields exactly the same double.
+     *
+     * <p>{@link #format(double)} keeps fourteen decimals, which is lossless for the quantities a full CGMES export
+     * writes with it &mdash; amperes, megawatts, kilovolts &mdash; but not for a susceptance or a conductance, whose
+     * magnitude is routinely between 1e-6 and 1e-9 S. A difference model has to be exact in both directions: a
+     * reverse statement that does not restore the value the network held would leave the receiver somewhere else
+     * than the sender. This formatter therefore writes what the full export writes wherever that is lossless, and
+     * the shortest decimal representation that parses back to the same double otherwise.</p>
+     *
+     * <p>The fallback is {@link Double#toString(double)}, which may use scientific notation such as
+     * {@code 1.0E-9}. That is a valid lexical form of {@code xsd:float} and {@code xsd:double}, the CGMES full
+     * export itself emits scientific notation for extreme values, and {@code PropertyBag.asDouble} reads it back
+     * with {@link Double#parseDouble(String)}.</p>
+     */
+    public static String formatExact(double value) {
+        String formatted = format(value);
+        try {
+            return Double.parseDouble(formatted) == value ? formatted : Double.toString(value);
+        } catch (NumberFormatException e) {
+            return Double.toString(value);
+        }
+    }
+
     public static String scientificFormat(double value) {
         return scientificFormat(value, 0.0); // disconnected equipment in general, a bit dangerous.
     }
@@ -134,6 +158,25 @@ public final class CgmesExportUtil {
         model.setId(modelId);
     }
 
+    /**
+     * Give a difference model a deterministic identifier of its own.
+     *
+     * <p>It is derived from the same references as {@link #initializeModelId}, plus one saying that this is a
+     * difference model, so that a partial SSH file and a difference model of the same base version, scenario time and
+     * business process never end up sharing an identifier while both stay reproducible.</p>
+     */
+    public static void initializeDifferenceModelId(Network network, CgmesMetadataModel model, CgmesExportContext context) {
+        CgmesObjectReference[] modelRef = {
+            refTyped(network),
+            ref(model.getSubset()),
+            ref(DATE_TIME_FORMATTER.format(context.getScenarioTime())),
+            ref(String.valueOf(model.getVersion())),
+            ref(context.getBusinessProcess()),
+            ref("DifferenceModel"),
+            Part.FULL_MODEL};
+        model.setId("urn:uuid:" + context.getNamingStrategy().getCgmesId(modelRef));
+    }
+
     public static void writeModelDescription(Network network, CgmesSubset subset, XMLStreamWriter writer, CgmesMetadataModel modelDescription, CgmesExportContext context) throws XMLStreamException {
         if (modelDescription.getId() == null || modelDescription.getId().isEmpty()) {
             initializeModelId(network, modelDescription, context);
@@ -151,7 +194,8 @@ public final class CgmesExportUtil {
         writer.writeCharacters(DATE_TIME_FORMATTER.format(context.getScenarioTime()));
         writer.writeEndElement();
         writer.writeStartElement(MD_NAMESPACE, CgmesNames.CREATED);
-        writer.writeCharacters(DATE_TIME_FORMATTER.format(ZonedDateTime.now()));
+        writer.writeCharacters(DATE_TIME_FORMATTER.format(
+                Optional.ofNullable(context.getModelCreated()).orElseGet(ZonedDateTime::now)));
         writer.writeEndElement();
         if (modelDescription.getDescription() != null) {
             writer.writeStartElement(MD_NAMESPACE, CgmesNames.DESCRIPTION);
@@ -316,10 +360,18 @@ public final class CgmesExportUtil {
     }
 
     public static boolean isConverterStationRectifier(HvdcConverterStation<?> converterStation) {
-        if (converterStation.getHvdcLine().getConvertersMode().equals(HvdcLine.ConvertersMode.SIDE_1_RECTIFIER_SIDE_2_INVERTER)) {
-            return converterStation.getHvdcLine().getConverterStation1().equals(converterStation);
+        return isConverterStationRectifier(converterStation, IidmStateView.LIVE);
+    }
+
+    /** As {@link #isConverterStationRectifier(HvdcConverterStation)}, read from the given state of the network. */
+    static boolean isConverterStationRectifier(HvdcConverterStation<?> converterStation, IidmStateView state) {
+        HvdcLine hvdcLine = converterStation.getHvdcLine();
+        HvdcLine.ConvertersMode convertersMode = state.getEnum(hvdcLine, CgmesChangeTranslator.CONVERTERS_MODE,
+                HvdcLine.ConvertersMode.class, hvdcLine::getConvertersMode);
+        if (convertersMode.equals(HvdcLine.ConvertersMode.SIDE_1_RECTIFIER_SIDE_2_INVERTER)) {
+            return hvdcLine.getConverterStation1().equals(converterStation);
         } else {
-            return converterStation.getHvdcLine().getConverterStation2().equals(converterStation);
+            return hvdcLine.getConverterStation2().equals(converterStation);
         }
     }
 
@@ -331,6 +383,15 @@ public final class CgmesExportUtil {
         } else {
             throw new PowsyblException("Invalid converter type");
         }
+    }
+
+    /**
+     * The alias a two windings transformer stores a tap changer under, whichever of its two ends the tap changer
+     * was modelled on: end one unless only the end two alias is present.
+     */
+    public static String tapChangerAliasType(TwoWindingsTransformer transformer, String end1AliasType, String end2AliasType) {
+        return transformer.getAliasFromType(end2AliasType).isPresent() && transformer.getAliasFromType(end1AliasType).isEmpty()
+                ? end2AliasType : end1AliasType;
     }
 
     public static <C extends Connectable<C>> String getPhaseTapChangerType(C transformer, String cgmesTapChangerId) {
@@ -345,6 +406,19 @@ public final class CgmesExportUtil {
     static boolean tapChangerControlIsDefined(PhaseTapChanger ptc) {
         return !Double.isNaN(ptc.getRegulationValue())
                 && !Double.isNaN(ptc.getTargetDeadband())
+                && ptc.getRegulationTerminal() != null;
+    }
+
+    /** As {@link #tapChangerControlIsDefined(RatioTapChanger)}, read from the given state of the network. */
+    static boolean tapChangerControlIsDefined(RatioTapChanger rtc, TapChangerRef ref, IidmStateView state) {
+        return !Double.isNaN(ref.getDouble(state, CgmesChangeTranslator.REGULATION_VALUE_SUFFIX, rtc::getRegulationValue))
+                && rtc.getRegulationTerminal() != null;
+    }
+
+    /** As {@link #tapChangerControlIsDefined(PhaseTapChanger)}, read from the given state of the network. */
+    static boolean tapChangerControlIsDefined(PhaseTapChanger ptc, TapChangerRef ref, IidmStateView state) {
+        return !Double.isNaN(ref.getDouble(state, CgmesChangeTranslator.REGULATION_VALUE_SUFFIX, ptc::getRegulationValue))
+                && !Double.isNaN(ref.getDouble(state, CgmesChangeTranslator.TARGET_DEADBAND_SUFFIX, ptc::getTargetDeadband))
                 && ptc.getRegulationTerminal() != null;
     }
 
@@ -433,6 +507,22 @@ public final class CgmesExportUtil {
             case "3" -> PROPERTY_TERMINAL_SIGN3;
             default -> throw new IllegalStateException("Unexpected end number: " + endNumber);
         };
+    }
+
+    /**
+     * The sign the CGMES import applied to the flow of the regulating terminal of the given equipment, or 1 when the
+     * equipment was not imported from CGMES or its regulating terminal was oriented like the IIDM one.
+     *
+     * <p>The import negates a flow target whose CGMES regulating terminal points the other way (see
+     * {@code AbstractConductingEquipmentConversion#findTerminalSign}), so an export that does not apply the same sign
+     * writes a target the import reads back negated.</p>
+     *
+     * @param identifiable the equipment carrying the regulation
+     * @param endNumber    the end the regulating terminal belongs to, {@code ""} for equipment with a single end
+     */
+    public static int terminalSign(Identifiable<?> identifiable, String endNumber) {
+        String terminalSign = identifiable.getProperty(getTerminalSignPropertyName(endNumber));
+        return terminalSign != null ? Integer.parseInt(terminalSign) : 1;
     }
 
     public static String getDcTerminalId(DcTerminal dcTerminal, CgmesExportContext context) {
@@ -556,13 +646,22 @@ public final class CgmesExportUtil {
     }
 
     public static String getSvcMode(StaticVarCompensator svc) {
-        if (svc.getRegulationMode().equals(StaticVarCompensator.RegulationMode.VOLTAGE)) {
+        return getSvcMode(svc, IidmStateView.LIVE);
+    }
+
+    /** As {@link #getSvcMode(StaticVarCompensator)}, read from the given state of the network. */
+    static String getSvcMode(StaticVarCompensator svc, IidmStateView state) {
+        StaticVarCompensator.RegulationMode regulationMode = state.getEnum(svc,
+                CgmesChangeTranslator.REGULATION_MODE, StaticVarCompensator.RegulationMode.class, svc::getRegulationMode);
+        if (regulationMode.equals(StaticVarCompensator.RegulationMode.VOLTAGE)) {
             return RegulatingControlEq.REGULATING_CONTROL_VOLTAGE;
-        } else if (svc.getRegulationMode().equals(StaticVarCompensator.RegulationMode.REACTIVE_POWER)) {
+        } else if (regulationMode.equals(StaticVarCompensator.RegulationMode.REACTIVE_POWER)) {
             return RegulatingControlEq.REGULATING_CONTROL_REACTIVE_POWER;
         } else {
-            boolean validVoltageSetpoint = isValidVoltageSetpoint(svc.getVoltageSetpoint());
-            boolean validReactiveSetpoint = isValidReactivePowerSetpoint(svc.getReactivePowerSetpoint());
+            boolean validVoltageSetpoint = isValidVoltageSetpoint(
+                    state.getDouble(svc, CgmesChangeTranslator.VOLTAGE_SETPOINT, svc::getVoltageSetpoint));
+            boolean validReactiveSetpoint = isValidReactivePowerSetpoint(
+                    state.getDouble(svc, CgmesChangeTranslator.REACTIVE_POWER_SETPOINT, svc::getReactivePowerSetpoint));
             if (validReactiveSetpoint && !validVoltageSetpoint) {
                 return RegulatingControlEq.REGULATING_CONTROL_REACTIVE_POWER;
             }
@@ -571,10 +670,23 @@ public final class CgmesExportUtil {
     }
 
     public static String getTcMode(RatioTapChanger rtc) {
-        if (rtc.getRegulationMode() == null) {
+        return getTcMode(rtc, null, IidmStateView.LIVE);
+    }
+
+    /**
+     * As {@link #getTcMode(RatioTapChanger)}, read from the given state of the network.
+     *
+     * @param ref the change log name of the tap changer, or {@code null} when the state is
+     *            {@link IidmStateView#LIVE} and no name is needed
+     */
+    static String getTcMode(RatioTapChanger rtc, TapChangerRef ref, IidmStateView state) {
+        RatioTapChanger.RegulationMode regulationMode = ref == null ? rtc.getRegulationMode()
+                : ref.getEnum(state, CgmesChangeTranslator.REGULATION_MODE_SUFFIX,
+                        RatioTapChanger.RegulationMode.class, rtc::getRegulationMode);
+        if (regulationMode == null) {
             throw new PowsyblException("Regulation mode not defined for RTC.");
         }
-        return switch (rtc.getRegulationMode()) {
+        return switch (regulationMode) {
             case VOLTAGE -> RegulatingControlEq.REGULATING_CONTROL_VOLTAGE;
             case REACTIVE_POWER -> RegulatingControlEq.REGULATING_CONTROL_REACTIVE_POWER;
         };

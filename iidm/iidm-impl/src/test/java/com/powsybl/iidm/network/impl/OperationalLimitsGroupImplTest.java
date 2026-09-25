@@ -8,6 +8,7 @@
 package com.powsybl.iidm.network.impl;
 
 import com.powsybl.iidm.network.*;
+import com.powsybl.iidm.network.events.OperationalLimitsInfo;
 import com.powsybl.iidm.network.test.EurostagTutorialExample1Factory;
 import org.junit.jupiter.api.Test;
 
@@ -31,12 +32,12 @@ class OperationalLimitsGroupImplTest {
             public void onUpdate(Identifiable<?> identifiable, String attribute, String variantId, Object oldValue, Object newValue) {
                 assertEquals("NHV1", identifiable.getId());
                 assertEquals("limits_CURRENT", attribute);
-                assertNull(((OperationalLimitsGroupImpl.OperationalLimitsInfo) oldValue).value());
-                assertEquals(1000., getPermanentLimit((OperationalLimitsGroupImpl.OperationalLimitsInfo) newValue));
+                assertNull(((OperationalLimitsInfo) oldValue).value());
+                assertEquals(1000., getPermanentLimit((OperationalLimitsInfo) newValue));
                 updated[0] = true;
             }
 
-            private double getPermanentLimit(OperationalLimitsGroupImpl.OperationalLimitsInfo info) {
+            private double getPermanentLimit(OperationalLimitsInfo info) {
                 return ((AbstractLoadingLimits<?>) info.value()).getPermanentLimit();
             }
         });

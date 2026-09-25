@@ -187,7 +187,7 @@ SELECT *
         WHERE {
             {
                 ?PhaseTapChanger a ?phaseTapChangerType ;
-                VALUES ?phaseTapChangerType { cim:PhaseTapChangerLinear cim:PhaseTapChangerAsymmetrical cim:PhaseTapChangerNonLinear cim:PhaseTapChangerTabular } .
+                VALUES ?phaseTapChangerType { cim:PhaseTapChangerLinear cim:PhaseTapChangerAsymmetrical cim:PhaseTapChangerSymmetrical cim:PhaseTapChangerNonLinear cim:PhaseTapChangerTabular } .
             }
             UNION
             {
@@ -296,10 +296,10 @@ SELECT *
 SELECT *
 {
     ?AsynchronousMachine a cim:AsynchronousMachine ;
-        cim:AsynchronousMachine.asynchronousMachineType ?type ;
         cim:RotatingMachine.p ?p ;
-        cim:RotatingMachine.q ?q ;
-        cim:RegulatingCondEq.controlEnabled ?controlEnabled
+        cim:RotatingMachine.q ?q .
+    OPTIONAL { ?AsynchronousMachine cim:AsynchronousMachine.asynchronousMachineType ?type }
+    OPTIONAL { ?AsynchronousMachine cim:RegulatingCondEq.controlEnabled ?controlEnabled }
 }
 
 # query: staticVarCompensators

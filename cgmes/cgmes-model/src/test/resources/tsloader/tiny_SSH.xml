@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:cim="http://iec.ch/TC57/2013/CIM-schema-cim16#"
+         xmlns:md="http://iec.ch/TC57/61970-552/ModelDescription/1#"
+         xml:base="http://tsloader">
+    <md:FullModel rdf:about="urn:uuid:22222222-2222-2222-2222-222222222222">
+        <md:Model.scenarioTime>2026-01-01T00:30:00Z</md:Model.scenarioTime>
+        <md:Model.created>2026-01-01T00:00:00Z</md:Model.created>
+        <md:Model.version>001</md:Model.version>
+        <md:Model.profile>http://entsoe.eu/CIM/SteadyStateHypothesis/1/1</md:Model.profile>
+        <md:Model.modelingAuthoritySet>http://elia.be/loader-test</md:Model.modelingAuthoritySet>
+    </md:FullModel>
+</rdf:RDF>

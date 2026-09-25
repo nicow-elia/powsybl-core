@@ -127,7 +127,9 @@ public class SynchronousMachineConversion extends AbstractReactiveLimitsOwnerCon
         updateTerminals(generator, context, generator.getTerminal());
 
         int referencePriority = cgmesData.asInt("referencePriority", 0);
-        if (referencePriority > 0) {
+        // A priority of zero is only meaningful when the file really carries one: it then withdraws a priority the
+        // generator had, while an absent property or an initial zero must not create an extension
+        if (referencePriority > 0 || cgmesData.containsKey("referencePriority") && ReferencePriority.get(generator) > 0) {
             ReferencePriority.set(generator, referencePriority);
         }
 

@@ -51,6 +51,21 @@ public class TripleStoreRDF4J extends AbstractPowsyblTripleStore {
     }
 
     public TripleStoreRDF4J(TripleStoreOptions options) {
+        this(new SailRepository(new MemoryStore()), options);
+    }
+
+    /**
+     * Create a triple store on top of the given RDF4J repository.
+     *
+     * <p>This is the seam that lets a triple store live somewhere else than in the in-memory sail this class
+     * defaults to: a {@code SPARQLRepository} pointing at a remote endpoint, a native store on disk, or a
+     * repository that several triple stores share. The store <em>owns</em> the repository it is given:
+     * {@link #close()} shuts it down.</p>
+     *
+     * @param repository the repository to read from and write to. It is initialised if it is not initialised yet
+     * @param options    the triple store configuration options
+     */
+    public TripleStoreRDF4J(Repository repository, TripleStoreOptions options) {
         super(options);
 
         // This boolean is used to deactivate the ParentReferenceChecker optimizers added in testing environment.
@@ -58,8 +73,10 @@ public class TripleStoreRDF4J extends AbstractPowsyblTripleStore {
         // computation performances IN TEST ENVIRONMENT ONLY, it does not affect production environment
         ParentReferenceChecker.skip = true;
 
-        repo = new SailRepository(new MemoryStore());
-        repo.init();
+        repo = Objects.requireNonNull(repository);
+        if (!repo.isInitialized()) {
+            repo.init();
+        }
     }
 
     @Override
@@ -182,7 +199,7 @@ public class TripleStoreRDF4J extends AbstractPowsyblTripleStore {
         try (RepositoryConnection conn = repo.getConnection()) {
             // Default language is SPARQL
             try {
-                TupleQuery q = conn.prepareTupleQuery(query1);
+                TupleQuery q = prepareTupleQuery(conn, query1);
 
                 // Print the optimization plan for the query
                 // Explaining queries take some time, so we change the execution timeout
@@ -205,7 +222,7 @@ public class TripleStoreRDF4J extends AbstractPowsyblTripleStore {
 
                         names.forEach(name -> {
                             if (s.hasBinding(name)) {
-                                String value = s.getBinding(name).getValue().stringValue();
+                                String value = bindingValue(s.getBinding(name).getValue());
                                 result.put(name, value);
                             }
                         });
@@ -275,7 +292,7 @@ public class TripleStoreRDF4J extends AbstractPowsyblTripleStore {
     public void add(String contextName, String objNs, String objType, PropertyBags objects) {
         try (RepositoryConnection conn = repo.getConnection()) {
             conn.setIsolationLevel(IsolationLevels.NONE);
-            objects.forEach(object -> createStatements(conn, objNs, objType, object, context(conn, contextName)));
+            addObjects(conn, contextName, objNs, objType, objects);
         }
     }
 
@@ -283,11 +300,43 @@ public class TripleStoreRDF4J extends AbstractPowsyblTripleStore {
     public String add(String contextName, String objNs, String objType, PropertyBag object) {
         try (RepositoryConnection conn = repo.getConnection()) {
             conn.setIsolationLevel(IsolationLevels.NONE);
-            return createStatements(conn, objNs, objType, object, context(conn, contextName));
+            return addObject(conn, contextName, objNs, objType, object);
         }
     }
 
-    private static String createStatements(RepositoryConnection cnx, String objNs, String objType,
+    /**
+     * Create the statements of several new resources on an open connection.
+     *
+     * <p>Separated from {@link #add(String, String, String, PropertyBags)} so that a subclass whose backend
+     * charges per request &mdash; a remote store, where autocommit means one {@code INSERT DATA} per statement
+     * &mdash; can wrap the whole lot in one transaction.</p>
+     *
+     * @param conn        an open connection
+     * @param contextName the context the statements are added to
+     * @param objNs       the namespace of the class of the new resources
+     * @param objType     the class of the new resources
+     * @param objects     the properties of the resources
+     */
+    protected void addObjects(RepositoryConnection conn, String contextName, String objNs, String objType, PropertyBags objects) {
+        Resource ctx = context(conn, contextName);
+        objects.forEach(object -> createStatements(conn, objNs, objType, object, ctx));
+    }
+
+    /**
+     * Create the statements of one new resource on an open connection.
+     *
+     * @param conn        an open connection
+     * @param contextName the context the statements are added to
+     * @param objNs       the namespace of the class of the new resource
+     * @param objType     the class of the new resource
+     * @param object      the properties of the resource
+     * @return the identifier of the new resource
+     */
+    protected String addObject(RepositoryConnection conn, String contextName, String objNs, String objType, PropertyBag object) {
+        return createStatements(conn, objNs, objType, object, context(conn, contextName));
+    }
+
+    private String createStatements(RepositoryConnection cnx, String objNs, String objType,
         PropertyBag statement,
         Resource context) {
         IRI resource;
@@ -295,7 +344,7 @@ public class TripleStoreRDF4J extends AbstractPowsyblTripleStore {
             resource = cnx.getValueFactory().createIRI("urn:uuid:" + UUID.randomUUID().toString());
         } else {
             // Identifiers stored in the triplestore are RDF:ids
-            resource = cnx.getValueFactory().createIRI(cnx.getNamespace("data"),
+            resource = cnx.getValueFactory().createIRI(namespace(cnx, "data"),
                 AbstractPowsyblTripleStore.createRdfId());
         }
         IRI parentPredicate = RDF.TYPE;
@@ -307,13 +356,13 @@ public class TripleStoreRDF4J extends AbstractPowsyblTripleStore {
         return resource.getLocalName();
     }
 
-    private static void createStatements(RepositoryConnection cnx, String objNs, String objType,
+    private void createStatements(RepositoryConnection cnx, String objNs, String objType,
         PropertyBag statement, Resource context, IRI resource) {
         List<String> names = statement.propertyNames();
         names.forEach(name -> createStatement(cnx, objNs, objType, statement, context, resource, name));
     }
 
-    private static void createStatement(RepositoryConnection cnx, String objNs, String objType,
+    private void createStatement(RepositoryConnection cnx, String objNs, String objType,
                                         PropertyBag statement, Resource context, IRI resource, String name) {
         String property = statement.isClassProperty(name) ? name : objType + "." + name;
         String value = statement.get(name);
@@ -326,7 +375,7 @@ public class TripleStoreRDF4J extends AbstractPowsyblTripleStore {
                 if (URIUtil.isValidURIReference(value)) { // the value already contains the namespace
                     object = cnx.getValueFactory().createIRI(value);
                 } else { // the value is an id, add the base namespace
-                    String namespace = cnx.getNamespace(statement.namespacePrefix(name));
+                    String namespace = namespace(cnx, statement.namespacePrefix(name));
                     object = cnx.getValueFactory().createIRI(namespace, value);
                 }
                 Statement st = cnx.getValueFactory().createStatement(resource, predicate, object);
@@ -339,11 +388,11 @@ public class TripleStoreRDF4J extends AbstractPowsyblTripleStore {
         }
     }
 
-    private static void addMultivaluedProperty(RepositoryConnection cnx, String value, IRI resource, IRI predicate, Resource context) {
+    private void addMultivaluedProperty(RepositoryConnection cnx, String value, IRI resource, IRI predicate, Resource context) {
         String[] objs = value.split(",");
         for (String o : objs) {
             if (!o.startsWith("urn:uuid:")) {
-                o = cnx.getNamespace("data") + o;
+                o = namespace(cnx, "data") + o;
             }
             IRI object = cnx.getValueFactory().createIRI(o);
             Statement st = cnx.getValueFactory().createStatement(resource, predicate, object);
@@ -351,7 +400,13 @@ public class TripleStoreRDF4J extends AbstractPowsyblTripleStore {
         }
     }
 
-    private void write(Model model, OutputStream out) {
+    /**
+     * Write a materialised model to an output stream with the powsybl RDF/XML writer.
+     *
+     * @param model the statements to write, namespaces included
+     * @param out   the stream to write to. It is closed afterwards
+     */
+    protected void write(Model model, OutputStream out) {
         try (PrintStream pout = new PrintStream(out)) {
             RDFWriter writer = new PowsyblWriter(pout);
             writer.getWriterConfig().set(BasicWriterSettings.PRETTY_PRINT, true);
@@ -418,14 +473,75 @@ public class TripleStoreRDF4J extends AbstractPowsyblTripleStore {
         }
     }
 
-    private static void addNamespaceForBase(RepositoryConnection cnx, String base) {
+    /**
+     * Bind the {@code data} prefix to the base of the file that is being read.
+     *
+     * <p>Kept as a separate method so that a subclass whose namespaces do not live in the repository (a SPARQL
+     * endpoint has no namespace store) can redirect it, see {@link #namespace(RepositoryConnection, String)}.</p>
+     *
+     * @param cnx  the connection the file is read through
+     * @param base the base URI the parser resolves relative identifiers against
+     */
+    protected void addNamespaceForBase(RepositoryConnection cnx, String base) {
         cnx.setNamespace("data", base + "/#");
     }
 
-    private static Resource context(RepositoryConnection conn, String contextName) {
+    /**
+     * The RDF4J resource that stands for a powsybl context name (a named graph).
+     *
+     * <p>The default maps {@code X_EQ.xml} and {@code contexts:X_EQ.xml} alike to {@code <contexts:X_EQ.xml>}.
+     * A subclass that stores graphs under a different naming scheme &mdash; a model set prefix, percent-encoded
+     * names &mdash; overrides this method and keeps the powsybl-side name unchanged for everybody above it.</p>
+     *
+     * @param conn        an open connection, used for its value factory
+     * @param contextName the powsybl context name, with or without the {@code contexts:} prefix
+     * @return the resource identifying the named graph
+     */
+    protected Resource context(RepositoryConnection conn, String contextName) {
         // Remove the namespaceForContexts from contextName if it already starts with it
         String name1 = contextName.replace(namespaceForContexts(), "");
         return conn.getValueFactory().createIRI(namespaceForContexts(), name1);
+    }
+
+    /**
+     * The namespace bound to a prefix in this store.
+     *
+     * <p>The default asks the repository. A subclass whose backend does not keep namespaces &mdash; a SPARQL
+     * endpoint &mdash; answers from its own map instead.</p>
+     *
+     * @param conn   an open connection
+     * @param prefix the prefix to resolve, for instance {@code data}
+     * @return the namespace bound to the prefix, or {@code null} when nothing is bound
+     */
+    protected String namespace(RepositoryConnection conn, String prefix) {
+        return conn.getNamespace(prefix);
+    }
+
+    /**
+     * Prepare a tuple query for evaluation.
+     *
+     * <p>The default just asks the connection. A subclass that has to restrict the dataset a query sees &mdash;
+     * a remote store holding several model sets in one repository &mdash; sets that up here.</p>
+     *
+     * @param conn          an open connection
+     * @param adjustedQuery the query text, prefixes already prepended by {@link #adjustedQuery(String)}
+     * @return the prepared query
+     */
+    protected TupleQuery prepareTupleQuery(RepositoryConnection conn, String adjustedQuery) {
+        return conn.prepareTupleQuery(adjustedQuery);
+    }
+
+    /**
+     * The string a query result value is reported as in a {@link PropertyBag}.
+     *
+     * <p>The default is the plain lexical value. A subclass that renamed graphs on the way into the backend
+     * translates them back here, so that graph bindings look to the conversion exactly as they do locally.</p>
+     *
+     * @param value the value RDF4J bound
+     * @return the string to put in the property bag
+     */
+    protected String bindingValue(Value value) {
+        return value.stringValue();
     }
 
     @Override
