@@ -406,19 +406,6 @@ public final class CgmesExportUtil {
                 && ptc.getRegulationMode() != null;
     }
 
-    /** As {@link #tapChangerControlIsDefined(RatioTapChanger)}, read from the given state of the network. */
-    static boolean tapChangerControlIsDefined(RatioTapChanger rtc, TapChangerRef ref, IidmStateView state) {
-        return !Double.isNaN(ref.getDouble(state, CgmesChangeTranslator.REGULATION_VALUE_SUFFIX, rtc::getRegulationValue))
-                && rtc.getRegulationTerminal() != null;
-    }
-
-    /** As {@link #tapChangerControlIsDefined(PhaseTapChanger)}, read from the given state of the network. */
-    static boolean tapChangerControlIsDefined(PhaseTapChanger ptc, TapChangerRef ref, IidmStateView state) {
-        return !Double.isNaN(ref.getDouble(state, CgmesChangeTranslator.REGULATION_VALUE_SUFFIX, ptc::getRegulationValue))
-                && !Double.isNaN(ref.getDouble(state, CgmesChangeTranslator.TARGET_DEADBAND_SUFFIX, ptc::getTargetDeadband))
-                && ptc.getRegulationTerminal() != null;
-    }
-
     static <C extends Connectable<C>> String getTapChangerControlId(C transformer, Part part, int endNumber, String cgmesTapChangerId, CgmesExportContext context) {
         String cgmesTapChangerControlId = getCgmesTapChanger(transformer, cgmesTapChangerId).map(CgmesTapChanger::getControlId).orElse(null);
         if (cgmesTapChangerControlId != null) {
@@ -614,7 +601,11 @@ public final class CgmesExportUtil {
     }
 
     public static String getRegulatingControlMode(VoltageRegulation voltageRegulation) {
-        RegulationMode regulationMode = voltageRegulation.getMode();
+        return getRegulatingControlMode(voltageRegulation.getMode());
+    }
+
+    /** The CGMES RegulatingControl mode of the given IIDM regulation mode, which the change export reads per variant. */
+    static String getRegulatingControlMode(RegulationMode regulationMode) {
         return switch (regulationMode) {
             case VOLTAGE, VOLTAGE_PER_REACTIVE_POWER -> RegulatingControlEq.REGULATING_CONTROL_VOLTAGE;
             case REACTIVE_POWER -> RegulatingControlEq.REGULATING_CONTROL_REACTIVE_POWER;

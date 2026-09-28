@@ -19,7 +19,6 @@ import com.powsybl.iidm.network.Identifiable;
 import com.powsybl.iidm.network.extensions.ActivePowerControl;
 import com.powsybl.iidm.network.extensions.ReferencePriority;
 import com.powsybl.iidm.network.regulation.RegulationMode;
-import com.powsybl.iidm.network.regulation.VoltageRegulation;
 import com.powsybl.iidm.network.regulation.VoltageRegulationHolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -248,11 +247,13 @@ public final class SteadyStateHypothesisExport {
                                          XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
         for (TwoWindingsTransformer twt : network.getTwoWindingsTransformers()) {
             if (twt.hasPhaseTapChanger()) {
-                String aliasType = tapChangerAliasType(twt, ALIAS_PHASE_TAP_CHANGER1, ALIAS_PHASE_TAP_CHANGER2);
+                String aliasType = twt.getAliasFromType(ALIAS_PHASE_TAP_CHANGER2).isPresent() && twt.getAliasFromType(ALIAS_PHASE_TAP_CHANGER1).isEmpty() ?
+                    ALIAS_PHASE_TAP_CHANGER2 : ALIAS_PHASE_TAP_CHANGER1;
                 writeTapChanger(twt, aliasType, PHASE_TAP_CHANGER, 1, CgmesNames.PHASE_TAP_CHANGER_TABULAR, twt.getPhaseTapChanger(), regulatingControlViews, cimNamespace, writer, context);
             }
             if (twt.hasRatioTapChanger()) {
-                String aliasType = tapChangerAliasType(twt, ALIAS_RATIO_TAP_CHANGER1, ALIAS_RATIO_TAP_CHANGER2);
+                String aliasType = twt.getAliasFromType(ALIAS_RATIO_TAP_CHANGER2).isPresent() && twt.getAliasFromType(ALIAS_RATIO_TAP_CHANGER1).isEmpty() ?
+                    ALIAS_RATIO_TAP_CHANGER2 : ALIAS_RATIO_TAP_CHANGER1;
                 writeTapChanger(twt, aliasType, RATIO_TAP_CHANGER, 1, CgmesNames.RATIO_TAP_CHANGER, twt.getRatioTapChanger(), regulatingControlViews, cimNamespace, writer, context);
             }
         }
@@ -288,9 +289,11 @@ public final class SteadyStateHypothesisExport {
 
         writeTapChanger(type, tapChangerId, tc, cimNamespace, writer, context);
         if (tc instanceof RatioTapChanger rtc) {
-            addRegulatingControlView(rtc, tapChangerControlId, regulatingControlViews, context);
+            addRegulatingControlView(regulatingControlView(new RegulationRef(twt, "", rtc), tapChangerControlId, context,
+                    IidmStateView.LIVE), regulatingControlViews);
         } else if (tc instanceof PhaseTapChanger ptc) {
-            addRegulatingControlView(ptc, tapChangerControlId, regulatingControlViews);
+            addRegulatingControlView(regulatingControlView(ptc, tapChangerControlId, new TapChangerRef(twt, "", ptc),
+                    IidmStateView.LIVE), regulatingControlViews);
         }
 
         // If we are exporting equipment definitions the hidden tap changer will not be exported
@@ -326,32 +329,8 @@ public final class SteadyStateHypothesisExport {
             writer.writeEndElement();
             writer.writeEndElement();
 
-            addRegulatingControlView(s, getRegulatingControlId(s, context), regulatingControlViews, context);
+            addRegulatingControlView(RegulationRef.of(s), getRegulatingControlId(s, context), regulatingControlViews, context);
         }
-    }
-
-    /**
-     * The RegulatingControl description of the given shunt compensator, or {@code null} when it carries no regulation.
-     *
-     * <p>Package private so that the partial SSH export describes a RegulatingControl exactly as the full export
-     * would, which is what the receiving side of a partial file expects to read.</p>
-     */
-    static RegulatingControlView regulatingControlView(ShuntCompensator s, CgmesExportContext context) {
-        return regulatingControlView(s, context, IidmStateView.LIVE);
-    }
-
-    /** As {@link #regulatingControlView(ShuntCompensator, CgmesExportContext)}, read from the given state. */
-    static RegulatingControlView regulatingControlView(ShuntCompensator s, CgmesExportContext context, IidmStateView state) {
-        if (!hasRegulatingControlCapability(s)) {
-            return null;
-        }
-        // PowSyBl has considered the control as discrete, with a certain targetDeadband
-        // The target value is stored in kV by PowSyBl, so unit multiplier is "k"
-        String rcid = context.getNamingStrategy().getCgmesIdFromProperty(s, PROPERTY_REGULATING_CONTROL);
-        return new RegulatingControlView(rcid, RegulatingControlType.REGULATING_CONTROL, true,
-                state.getBoolean(s, CgmesChangeTranslator.VOLTAGE_REGULATOR_ON, s::isVoltageRegulatorOn),
-                state.getDouble(s, CgmesChangeTranslator.TARGET_DEADBAND, s::getTargetDeadband),
-                state.getDouble(s, CgmesChangeTranslator.TARGET_V, s::getTargetV), "k");
     }
 
     private static void writeGenerators(Network network, String cimNamespace, Map<String, List<RegulatingControlView>> regulatingControlViews,
@@ -369,13 +348,13 @@ public final class SteadyStateHypothesisExport {
                     writeExternalNetworkInjection(context.getNamingStrategy().getCgmesId(g), controlEnabled,
                             -g.getTargetP(), -g.getLocalTargetQ(), ReferencePriority.get(g),
                             cimNamespace, writer, context);
-                    addRegulatingControlView(g, getRegulatingControlId(g, context), regulatingControlViews, context);
+                    addRegulatingControlView(RegulationRef.of(g), getRegulatingControlId(g, context), regulatingControlViews, context);
                     break;
                 case CgmesNames.SYNCHRONOUS_MACHINE:
                     writeSynchronousMachine(context.getNamingStrategy().getCgmesId(g), controlEnabled,
                             -g.getTargetP(), -g.getLocalTargetQ(), ReferencePriority.get(g), obtainOperatingMode(g, g.getMinP(), g.getMaxP(), g.getTargetP()),
                             cimNamespace, writer, context);
-                    addRegulatingControlView(g, getRegulatingControlId(g, context), regulatingControlViews, context);
+                    addRegulatingControlView(RegulationRef.of(g), getRegulatingControlId(g, context), regulatingControlViews, context);
                     break;
                 default:
                     throw new PowsyblException("Unexpected cgmes equipment " + cgmesOriginalClass);
@@ -431,12 +410,15 @@ public final class SteadyStateHypothesisExport {
         }
     }
 
-    // Package private so that the partial SSH export writes the same operating mode as the full export
-    static <I extends ReactiveLimitsHolder & Injection<I>> String obtainOperatingMode(I i, double minP, double maxP, double targetP) {
+    private static <I extends ReactiveLimitsHolder & Injection<I>> String obtainOperatingMode(I i, double minP, double maxP, double targetP) {
         return obtainOperatingMode(i, minP, maxP, targetP, IidmStateView.LIVE);
     }
 
-    /** As {@link #obtainOperatingMode(ReactiveLimitsHolder, double, double, double)}, read from the given state. */
+    /**
+     * The operating mode of a machine, with the regulation read from the given state of the network.
+     *
+     * <p>Package private so that the change export writes the same operating mode as the full export.</p>
+     */
     static <I extends ReactiveLimitsHolder & Injection<I>> String obtainOperatingMode(I i, double minP, double maxP,
                                                                                       double targetP, IidmStateView state) {
         String calculatedKind = obtainCalculatedSynchronousMachineKind(minP, maxP, obtainCurve(i), i instanceof Battery || i instanceof Generator gen && gen.isCondenser());
@@ -466,8 +448,10 @@ public final class SteadyStateHypothesisExport {
     private static boolean isOperatingAsACondenser(Injection<?> injection, IidmStateView state) {
         switch (injection) {
             case Generator generator -> {
-                return generator.isRegulatingWithMode(RegulationMode.VOLTAGE) && !Double.isNaN(generator.getLocalTargetV())
-                    || !Double.isNaN(generator.getRegulatingTargetQ()) && generator.getRegulatingTargetQ() != 0;
+                RegulationRef regulation = RegulationRef.of(generator);
+                double regulatingTargetQ = regulation.regulatingTargetQ(state);
+                return regulation.isRegulatingWithMode(RegulationMode.VOLTAGE, state) && !Double.isNaN(regulation.localTargetV(state))
+                    || !Double.isNaN(regulatingTargetQ) && regulatingTargetQ != 0;
             }
             case Battery battery -> {
                 return battery.isRegulatingWithMode(RegulationMode.VOLTAGE) && !Double.isNaN(battery.getLocalTargetV())
@@ -491,30 +475,8 @@ public final class SteadyStateHypothesisExport {
             writer.writeEndElement();
             writer.writeEndElement();
 
-            addRegulatingControlView(svc, getRegulatingControlId(svc, context), regulatingControlViews, context);
+            addRegulatingControlView(RegulationRef.of(svc), getRegulatingControlId(svc, context), regulatingControlViews, context);
         }
-        String rcid = context.getNamingStrategy().getCgmesIdFromProperty(svc, PROPERTY_REGULATING_CONTROL);
-        double targetDeadband = 0;
-        // Regulating control could be reactive power or voltage
-        double targetValue;
-        String multiplier;
-        String svcMode = CgmesExportUtil.getSvcMode(svc, state);
-        if (svcMode.equals(RegulatingControlEq.REGULATING_CONTROL_VOLTAGE)) {
-            targetValue = state.getDouble(svc, CgmesChangeTranslator.VOLTAGE_SETPOINT, svc::getVoltageSetpoint);
-            multiplier = "k";
-        } else if (svcMode.equals(RegulatingControlEq.REGULATING_CONTROL_REACTIVE_POWER)) {
-            // The import negates the target of a regulating terminal oriented the other way, so the export
-            // has to apply the same sign for the value to survive a round trip
-            targetValue = CgmesExportUtil.terminalSign(svc, "")
-                    * state.getDouble(svc, CgmesChangeTranslator.REACTIVE_POWER_SETPOINT, svc::getReactivePowerSetpoint);
-            multiplier = "M";
-        } else {
-            targetValue = 0;
-            multiplier = "k";
-        }
-        return new RegulatingControlView(rcid, RegulatingControlType.REGULATING_CONTROL, false,
-                state.getBoolean(svc, CgmesChangeTranslator.REGULATING, svc::isRegulating),
-                targetDeadband, targetValue, multiplier);
     }
 
     private static void writeTapChanger(String type, String id, TapChanger<?, ?, ?, ?> tc, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
@@ -533,24 +495,38 @@ public final class SteadyStateHypothesisExport {
         writer.writeEndElement();
     }
 
-    private static void addRegulatingControlView(PhaseTapChanger ptc, String controlId, Map<String, List<RegulatingControlView>> regulatingControlViews) {
+    private static void addRegulatingControlView(RegulatingControlView rcv, Map<String, List<RegulatingControlView>> regulatingControlViews) {
         // Multiple tap changers can be stored at the same equipment
         // We use the tap changer id as part of the key for storing the tap changer control id
-        if (hasTapChangerControlCapability(ptc)) {
-            RegulatingControlView rcv;
-            PhaseTapChanger.RegulationMode mode = ptc.getRegulationMode();
-            rcv = switch (mode) {
-                case PhaseTapChanger.RegulationMode.ACTIVE_POWER_CONTROL ->
-                    new RegulatingControlView(controlId, RegulatingControlType.TAP_CHANGER_CONTROL,
-                        true, ptc.isRegulating(), ptc.getTargetDeadband(), ptc.getRegulationValue(), "M");
-                case PhaseTapChanger.RegulationMode.CURRENT_LIMITER ->
-                    new RegulatingControlView(controlId, RegulatingControlType.TAP_CHANGER_CONTROL,
-                        true, false, 0.0, 0.0, "M");
-            };
-
-            regulatingControlViews.computeIfAbsent(controlId, k -> new ArrayList<>()).add(rcv);
+        if (rcv != null) {
+            regulatingControlViews.computeIfAbsent(rcv.id, k -> new ArrayList<>()).add(rcv);
         }
-        return null;
+    }
+
+    /**
+     * The TapChangerControl description of a phase tap changer, read from the given state of the network, or
+     * {@code null} when it has no control.
+     *
+     * <p>Package private so that the change export describes a TapChangerControl exactly as the full export does.</p>
+     *
+     * @param ref the tap changer and the name a recorded change of it carries
+     */
+    static RegulatingControlView regulatingControlView(PhaseTapChanger ptc, String controlId, TapChangerRef ref, IidmStateView state) {
+        PhaseTapChanger.RegulationMode mode = ref.getEnum(state, CgmesChangeTranslator.REGULATION_MODE_SUFFIX,
+                PhaseTapChanger.RegulationMode.class, ptc::getRegulationMode);
+        if (!ptc.hasLoadTapChangingCapabilities() || mode == null) {
+            return null;
+        }
+        return switch (mode) {
+            case PhaseTapChanger.RegulationMode.ACTIVE_POWER_CONTROL ->
+                new RegulatingControlView(controlId, RegulatingControlType.TAP_CHANGER_CONTROL, true,
+                    ref.getBoolean(state, CgmesChangeTranslator.REGULATING_SUFFIX, ptc::isRegulating),
+                    ref.getDouble(state, CgmesChangeTranslator.TARGET_DEADBAND_SUFFIX, ptc::getTargetDeadband),
+                    ref.getDouble(state, CgmesChangeTranslator.REGULATION_VALUE_SUFFIX, ptc::getRegulationValue), "M");
+            case PhaseTapChanger.RegulationMode.CURRENT_LIMITER ->
+                new RegulatingControlView(controlId, RegulatingControlType.TAP_CHANGER_CONTROL,
+                    true, false, 0.0, 0.0, "M");
+        };
     }
 
     private static void writeHiddenTapChanger(CgmesTapChanger cgmesTc, String defaultType, String cimNamespace,
@@ -564,36 +540,51 @@ public final class SteadyStateHypothesisExport {
         return context.getNamingStrategy().getCgmesIdFromProperty(identifiable, PROPERTY_REGULATING_CONTROL);
     }
 
-    private static void addRegulatingControlView(VoltageRegulationHolder<?> regulationHolder, String regulatingControlId,
+    private static void addRegulatingControlView(RegulationRef regulation, String regulatingControlId,
                                                  Map<String, List<RegulatingControlView>> regulatingControlViews, CgmesExportContext context) {
-        VoltageRegulation voltageRegulation = regulationHolder.getVoltageRegulation();
-        if (voltageRegulation != null) {
-            boolean enabled = voltageRegulation.isRegulating();
+        addRegulatingControlView(regulatingControlView(regulation, regulatingControlId, context, IidmStateView.LIVE),
+                regulatingControlViews);
+    }
+
+    /**
+     * The RegulatingControl description of a voltage regulation holder, read from the given state of the network, or
+     * {@code null} when the holder has no voltage regulation.
+     *
+     * <p>Package private so that the change export describes a RegulatingControl exactly as the full export does,
+     * which is what the receiving side of a partial or difference file expects to read.</p>
+     *
+     * @param regulation the holder and the name a recorded change of its regulation carries
+     */
+    static RegulatingControlView regulatingControlView(RegulationRef regulation, String regulatingControlId,
+                                                       CgmesExportContext context, IidmStateView state) {
+        VoltageRegulationHolder<?> regulationHolder = regulation.holder();
+        if (regulation.regulation() != null) {
+            boolean enabled = regulation.isRegulating(state);
 
             // Only discrete regulation holders can have a non-zero deadband
             boolean discrete = false;
             double targetDeadband = 0.0;
             if (regulationHolder instanceof ShuntCompensator || regulationHolder instanceof RatioTapChanger) {
                 discrete = true;
-                targetDeadband = voltageRegulation.getTargetDeadband();
+                targetDeadband = regulation.targetDeadband(state);
             }
 
             // VoltageRegulation Terminal can be left null to force the use of local target instead of the remote one,
             // thus targets should be determined with VoltageRegulationHolder.getRegulatingTargetQ/V
             double targetValue;
             String targetValueUnitMultiplier;
-            String mode = getRegulatingControlMode(voltageRegulation);
+            String mode = getRegulatingControlMode(regulation.mode(state));
             if (REGULATING_CONTROL_REACTIVE_POWER.equals(mode)) {
                 // Generator are in generator sign convention in IIDM and load sign convention in CGMES
-                targetValue = regulationHolder.getRegulatingTargetQ();
+                targetValue = regulation.regulatingTargetQ(state);
                 if (regulationHolder instanceof Generator) {
                     targetValue = -targetValue;
                 }
                 targetValueUnitMultiplier = "M";
             } else if (REGULATING_CONTROL_VOLTAGE.equals(mode)) {
-                targetValue = regulationHolder.getRegulatingTargetV();
+                targetValue = regulation.regulatingTargetV(state);
                 if (regulationHolder instanceof Generator && context.isExportGeneratorsInLocalRegulationMode()) {
-                    targetValue = regulationHolder.getLocalTargetV();
+                    targetValue = regulation.localTargetV(state);
                 }
                 targetValueUnitMultiplier = "k";
             } else {
@@ -606,10 +597,10 @@ public final class SteadyStateHypothesisExport {
                 regulatingControlType = RegulatingControlType.TAP_CHANGER_CONTROL;
             }
 
-            RegulatingControlView rcv = new RegulatingControlView(regulatingControlId, regulatingControlType,
+            return new RegulatingControlView(regulatingControlId, regulatingControlType,
                 discrete, enabled, targetDeadband, targetValue, targetValueUnitMultiplier);
-            regulatingControlViews.computeIfAbsent(regulatingControlId, k -> new ArrayList<>()).add(rcv);
         }
+        return null;
     }
 
     private static void writeRegulatingControls(Map<String, List<RegulatingControlView>> regulatingControlViews, String cimNamespace,
@@ -621,10 +612,9 @@ public final class SteadyStateHypothesisExport {
 
     /**
      * Combine the descriptions that every user of the same RegulatingControl produces into the single description
-     * the object gets: the control is enabled as soon as one of its users regulates, discrete as soon as one of
-     * them is discrete, and carries the tightest deadband any of them asks for.
+     * the object gets.
      *
-     * <p>Package private so that the partial SSH export combines shared controls exactly as the full export does.</p>
+     * <p>Package private so that the change export combines shared controls exactly as the full export does.</p>
      */
     static RegulatingControlView combineRegulatingControlViews(List<RegulatingControlView> rcs) {
         RegulatingControlView combined = rcs.get(0);
@@ -672,7 +662,7 @@ public final class SteadyStateHypothesisExport {
         writer.writeEndElement();
     }
 
-    /** Package private so that the partial SSH export names a RegulatingControl as the full export does. */
+    /** Package private so that the change export names a RegulatingControl as the full export does. */
     static String regulatingControlClassname(RegulatingControlType type) {
         if (type == RegulatingControlType.TAP_CHANGER_CONTROL) {
             return "TapChangerControl";
@@ -768,7 +758,12 @@ public final class SteadyStateHypothesisExport {
         writer.writeEndElement();
     }
 
-    private static String obtainAsynchronousMachineKind(double p) {
+    /**
+     * The AsynchronousMachineKind of an IIDM load with the given active power (load sign convention).
+     *
+     * <p>Package private so that the change export writes the same kind as the full export.</p>
+     */
+    static String obtainAsynchronousMachineKind(double p) {
         if (p < 0) {
             return OPERATING_MODE_GENERATOR;
         } else {
@@ -814,41 +809,40 @@ public final class SteadyStateHypothesisExport {
     private static void writeConverterStation(HvdcConverterStation<?> converterStation, String cimNamespace,
                                               XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
         String converterId = context.getNamingStrategy().getCgmesId(converterStation);
-        ConverterState state = computeConverterState(converterStation);
-
+        ConverterState state = computeConverterState(converterStation, IidmStateView.LIVE);
         if (converterStation instanceof LccConverterStation) {
             String operatingMode = CgmesExportUtil.isConverterStationRectifier(converterStation) ? "rectifier" : "inverter";
             String pPccControl = CgmesExportUtil.isConverterStationRectifier(converterStation) ? "activePower" : "dcVoltage";
             writeCsConverter(converterId, state.targetPpcc(), state.targetUdc(), state.p(), state.q(), operatingMode, pPccControl, cimNamespace, writer, context);
         } else if (converterStation instanceof VscConverterStation vscConverterStation) {
-            double targetQpcc = vscTargetQpcc(vscConverterStation);
-            double targetUpcc = vscConverterStation.getVoltageSetpoint();
+            RegulationRef regulation = RegulationRef.of(vscConverterStation);
+            double targetQpcc = vscTargetQpcc(regulation, IidmStateView.LIVE);
+            double targetUpcc = vscTargetUpcc(regulation, IidmStateView.LIVE);
             String pPccControl = CgmesExportUtil.isConverterStationRectifier(converterStation) ? "pPcc" : "udc";
-            String qPccControl = vscConverterStation.isVoltageRegulatorOn() ? "voltagePcc" : "reactivePcc";
+            String qPccControl = vscQpccControl(regulation, IidmStateView.LIVE);
             writeVsConverter(converterId, state.targetPpcc(), state.targetUdc(), targetQpcc, targetUpcc, state.p(), state.q(), pPccControl, qPccControl, cimNamespace, writer, context);
         }
     }
 
     /**
-     * The VsConverter.targetQpcc describing the reactive power setpoint of the given converter station.
+     * The VsConverter.targetQpcc of a converter station of the simplified DC model: the reactive power target when
+     * the station regulates reactive power, zero otherwise.
      *
-     * <p>The CGMES import reads the setpoint back as {@code -terminalSign * targetQpcc}
-     * ({@code HvdcConverterConversion#getValidTargetQ}), so the export has to apply the same sign for the value to
-     * survive a round trip. (https://github.com/powsybl/powsybl-core/issues/4027)</p>
-     *
-     * <p>Package private so that the partial SSH export writes the same value as the full export.</p>
+     * <p>Package private so that the change export writes the same value as the full export.</p>
      */
-    static double vscTargetQpcc(VscConverterStation vsc) {
-        return vscTargetQpcc(vsc, IidmStateView.LIVE);
+    static double vscTargetQpcc(RegulationRef regulation, IidmStateView state) {
+        // To be consistent with the import
+        return regulation.isWithMode(RegulationMode.REACTIVE_POWER, state) ? -regulation.regulatingTargetQ(state) : 0;
     }
 
-    /** As {@link #vscTargetQpcc(VscConverterStation)}, read from the given state of the network. */
-    static double vscTargetQpcc(VscConverterStation vsc, IidmStateView state) {
-        return -CgmesExportUtil.terminalSign(vsc, "")
-                * state.getDouble(vsc, CgmesChangeTranslator.REACTIVE_POWER_SETPOINT, vsc::getReactivePowerSetpoint);
+    /** The VsConverter.targetUpcc of a converter station: the voltage target when the station regulates voltage, zero otherwise. */
+    static double vscTargetUpcc(RegulationRef regulation, IidmStateView state) {
+        return regulation.isWithMode(RegulationMode.VOLTAGE, state) ? regulation.regulatingTargetV(state) : 0;
     }
 
-    record ConverterState(double targetPpcc, double targetUdc, double p, double q) implements ConverterSetpoints {
+    /** The VsConverter.qPccControl of a converter station of the simplified DC model. */
+    static String vscQpccControl(RegulationRef regulation, IidmStateView state) {
+        return regulation.isRegulatingWithMode(RegulationMode.VOLTAGE, state) ? "voltagePcc" : "reactivePcc";
     }
 
     /** The four quantities the CGMES import reads as a single block for any converter. */
@@ -862,18 +856,19 @@ public final class SteadyStateHypothesisExport {
         double q();
     }
 
-    /**
-     * Compute the AC/DC converter quantities, reused in the partial .SSH export
-     * */
-    static ConverterState computeConverterState(HvdcConverterStation<?> converterStation) {
-        return computeConverterState(converterStation, IidmStateView.LIVE);
+    record ConverterState(double targetPpcc, double targetUdc, double p, double q) implements ConverterSetpoints {
     }
 
-    /** As {@link #computeConverterState(HvdcConverterStation)}, read from the given state of the network. */
+    /**
+     * The quantities describing a converter station of the simplified DC model, read from the given state of the
+     * network.
+     *
+     * <p>Package private so that the change export writes the same values as the full export.</p>
+     */
     static ConverterState computeConverterState(HvdcConverterStation<?> converterStation, IidmStateView state) {
-        HvdcLine line = converterStation.getHvdcLine();
-        double activePowerSetpoint = state.getDouble(line, CgmesChangeTranslator.ACTIVE_POWER_SETPOINT,
-                line::getActivePowerSetpoint);
+        HvdcLine hvdcLine = converterStation.getHvdcLine();
+        double activePowerSetpoint = state.getDouble(hvdcLine, CgmesChangeTranslator.ACTIVE_POWER_SETPOINT,
+                hvdcLine::getActivePowerSetpoint);
         double targetPpcc;
         double targetUdc;
         double p;
@@ -882,7 +877,6 @@ public final class SteadyStateHypothesisExport {
             targetUdc = 0.0;
             p = targetPpcc;
         } else {
-            HvdcLine hvdcLine = converterStation.getHvdcLine();
             double otherConverterStationLossFactor = converterStation.getOtherConverterStation().map(HvdcConverterStation::getLossFactor).orElse(0.0f);
             double pDCRectifier = activePowerSetpoint * (1 - otherConverterStationLossFactor / 100);
             double idc = pDCRectifier / hvdcLine.getNominalV();
@@ -898,13 +892,8 @@ public final class SteadyStateHypothesisExport {
                     lccConverterStation::getPowerFactor);
             return new ConverterState(targetPpcc, targetUdc, p, Math.abs(getQfromPowerFactor(p, powerFactor)));
         } else if (converterStation instanceof VscConverterStation vscConverterStation) {
-            p = vscConverterStation.getRegulatingTerminal().getP();
-            q = -vscConverterStation.getLocalTargetQ();
-            double targetQpcc = vscConverterStation.isWithMode(RegulationMode.REACTIVE_POWER) ? -vscConverterStation.getRegulatingTargetQ() : 0; // To be consistent with the import
-            double targetUpcc = vscConverterStation.isWithMode(RegulationMode.VOLTAGE) ? vscConverterStation.getRegulatingTargetV() : 0;
-            String pPccControl = CgmesExportUtil.isConverterStationRectifier(converterStation) ? "pPcc" : "udc";
-            String qPccControl = vscConverterStation.isRegulatingWithMode(RegulationMode.VOLTAGE) ? "voltagePcc" : "reactivePcc";
-            writeVsConverter(converterId, targetPpcc, targetUdc, targetQpcc, targetUpcc, p, q, pPccControl, qPccControl, cimNamespace, writer, context);
+            return new ConverterState(targetPpcc, targetUdc, vscConverterStation.getRegulatingTerminal().getP(),
+                    -RegulationRef.of(vscConverterStation).localTargetQ(state));
         }
         return new ConverterState(targetPpcc, targetUdc, p, Double.NaN);
     }
@@ -990,18 +979,15 @@ public final class SteadyStateHypothesisExport {
         }
     }
 
-    /**
-     * The GeneratingUnit whose participation factor describes the given injection, or {@code null} when it has none.
-     *
-     * <p>Package private so that the partial SSH export writes the same participation factor as the full export.</p>
-     */
-    static <I extends ReactiveLimitsHolder & Injection<I>> GeneratingUnit generatingUnitForGeneratorAndBatteries(I i, CgmesExportContext context) {
+    private static <I extends ReactiveLimitsHolder & Injection<I>> GeneratingUnit generatingUnitForGeneratorAndBatteries(I i, CgmesExportContext context) {
         return generatingUnitForGeneratorAndBatteries(i, context, IidmStateView.LIVE);
     }
 
     /**
-     * As {@link #generatingUnitForGeneratorAndBatteries(ReactiveLimitsHolder, CgmesExportContext)}, with the
-     * participation factor read from the given state of the network.
+     * The GeneratingUnit whose participation factor describes the given injection, with the participation factor
+     * read from the given state of the network, or {@code null} when it has none.
+     *
+     * <p>Package private so that the change export writes the same participation factor as the full export.</p>
      */
     static <I extends ReactiveLimitsHolder & Injection<I>> GeneratingUnit generatingUnitForGeneratorAndBatteries(
             I i, CgmesExportContext context, IidmStateView state) {
@@ -1079,14 +1065,13 @@ public final class SteadyStateHypothesisExport {
 
     private static void writeAcDcConverter(AcDcConverter<?> converter, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
         String converterId = context.getNamingStrategy().getCgmesId(converter);
-        AcDcConverterState state = computeAcDcConverterState(converter);
+        AcDcConverterState state = computeAcDcConverterState(converter, IidmStateView.LIVE);
         if (converter instanceof LineCommutatedConverter) {
             writeCsConverter(converterId, state.targetPpcc(), state.targetUdc(), state.p(), state.q(),
                     state.operatingModeOrQpccControl(), state.pPccControl(), cimNamespace, writer, context);
-        } else if (converter instanceof VoltageSourceConverter vsc) {
-            writeVsConverter(converterId, state.targetPpcc(), state.targetUdc(), vsc.getReactivePowerSetpoint(),
-                    vsc.getVoltageSetpoint(), state.p(), state.q(), state.pPccControl(),
-                    state.operatingModeOrQpccControl(), cimNamespace, writer, context);
+        } else if (converter instanceof VoltageSourceConverter) {
+            writeVsConverter(converterId, state.targetPpcc(), state.targetUdc(), state.targetQpcc(), state.targetUpcc(),
+                    state.p(), state.q(), state.pPccControl(), state.operatingModeOrQpccControl(), cimNamespace, writer, context);
         }
     }
 
@@ -1097,43 +1082,42 @@ public final class SteadyStateHypothesisExport {
      *                                   commutated converter and a VsPpccControlKind for a voltage source one
      * @param operatingModeOrQpccControl the CsOperatingModeKind of a line commutated converter, the VsQpccControlKind
      *                                   of a voltage source one: the second enumeration each class carries
+     * @param targetQpcc                 the reactive power target of a voltage source converter, NaN for a line
+     *                                   commutated one
+     * @param targetUpcc                 the voltage target of a voltage source converter, NaN for a line commutated one
      */
     record AcDcConverterState(double targetPpcc, double targetUdc, double p, double q,
-                              String pPccControl, String operatingModeOrQpccControl) implements ConverterSetpoints {
+                              String pPccControl, String operatingModeOrQpccControl,
+                              double targetQpcc, double targetUpcc) implements ConverterSetpoints {
     }
 
     /**
-     * Compute the quantities describing a converter of the detailed DC model.
+     * Compute the quantities describing a converter of the detailed DC model, read from the given state of the
+     * network.
      *
-     * <p>Package private so that the partial SSH export writes the same values as the full export.</p>
+     * <p>Package private so that the change export writes the same values as the full export.</p>
      */
-    static AcDcConverterState computeAcDcConverterState(AcDcConverter<?> converter) {
-        return computeAcDcConverterState(converter, IidmStateView.LIVE);
-    }
-
-    /** As {@link #computeAcDcConverterState(AcDcConverter)}, read from the given state of the network. */
     static AcDcConverterState computeAcDcConverterState(AcDcConverter<?> converter, IidmStateView state) {
-        boolean activePowerControl = state.getEnum(converter, CgmesChangeTranslator.CONTROL_MODE,
-                AcDcConverter.ControlMode.class, converter::getControlMode) == AcDcConverter.ControlMode.P_PCC;
+        AcDcConverter.ControlMode controlMode = state.getEnum(converter, CgmesChangeTranslator.CONTROL_MODE,
+                AcDcConverter.ControlMode.class, converter::getControlMode);
+        boolean activePowerControl = controlMode == AcDcConverter.ControlMode.P_PCC;
+        boolean dcVoltageControl = controlMode == AcDcConverter.ControlMode.V_DC;
         double targetPpcc = activePowerControl
                 ? state.getDouble(converter, CgmesChangeTranslator.TARGET_P, converter::getTargetP) : 0.0;
-        double targetUdc = activePowerControl ? 0.0
-                : state.getDouble(converter, CgmesChangeTranslator.TARGET_VDC, converter::getTargetVdc);
+        double targetUdc = dcVoltageControl
+                ? state.getDouble(converter, CgmesChangeTranslator.TARGET_VDC, converter::getTargetVdc) : 0.0;
         double p = converter.getPccTerminal().getP();
-        double q = converter.getPccTerminal().getQ();
-        if (converter instanceof LineCommutatedConverter) {
-            String operatingMode = targetPpcc > 0.0 ? "rectifier" : "inverter";
-            String pPccControl = converter.getControlMode() == AcDcConverter.ControlMode.P_PCC ? "activePower" : "dcVoltage";
-            writeCsConverter(converterId, targetPpcc, targetUdc, p, q, operatingMode, pPccControl, cimNamespace, writer, context);
-        } else if (converter instanceof VoltageSourceConverter vsc) {
-            double targetQpcc = vsc.isWithMode(RegulationMode.REACTIVE_POWER) ? vsc.getRegulatingTargetQ() : 0;
-            double targetUpcc = vsc.isWithMode(RegulationMode.VOLTAGE) ? vsc.getRegulatingTargetV() : 0;
-            String pPccControl = vsc.getControlMode() == AcDcConverter.ControlMode.P_PCC ? "pPcc" : "udc";
-            String qPccControl = vsc.isWithMode(RegulationMode.VOLTAGE) ? "voltagePcc" : "reactivePcc";
-            writeVsConverter(converterId, targetPpcc, targetUdc, targetQpcc, targetUpcc, p, vsc.getLocalTargetQ(), pPccControl, qPccControl, cimNamespace, writer, context);
+        if (converter instanceof VoltageSourceConverter vsc) {
+            RegulationRef regulation = RegulationRef.of(vsc);
+            double targetQpcc = regulation.isWithMode(RegulationMode.REACTIVE_POWER, state) ? regulation.regulatingTargetQ(state) : 0;
+            double targetUpcc = regulation.isWithMode(RegulationMode.VOLTAGE, state) ? regulation.regulatingTargetV(state) : 0;
+            String qPccControl = regulation.isWithMode(RegulationMode.VOLTAGE, state) ? "voltagePcc" : "reactivePcc";
+            return new AcDcConverterState(targetPpcc, targetUdc, p, regulation.localTargetQ(state),
+                    activePowerControl ? "pPcc" : "udc", qPccControl, targetQpcc, targetUpcc);
         }
+        double q = converter.getPccTerminal().getQ();
         return new AcDcConverterState(targetPpcc, targetUdc, p, q, activePowerControl ? "activePower" : "dcVoltage",
-                targetPpcc > 0.0 ? "rectifier" : "inverter");
+                targetPpcc > 0.0 ? "rectifier" : "inverter", Double.NaN, Double.NaN);
     }
 
     private static void writeCsConverter(String converterId, double targetPpcc, double targetUdc,

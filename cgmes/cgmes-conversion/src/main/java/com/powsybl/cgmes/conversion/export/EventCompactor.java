@@ -8,6 +8,7 @@
 package com.powsybl.cgmes.conversion.export;
 
 import com.powsybl.commons.PowsyblException;
+import com.powsybl.iidm.network.Identifiable;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.events.ExtensionCreationNetworkEvent;
 import com.powsybl.iidm.network.events.ExtensionUpdateNetworkEvent;
@@ -49,37 +50,46 @@ final class EventCompactor {
      * @param workingVariantId the variant the export reads its values from, or {@code null} when the caller only
      *                         needs the compacted list. Changes recorded on another variant never feed the previous
      *                         values, because the state they describe is not the state of this variant
+     * @param network          the network the changes were recorded on, which tells what kind of equipment a change
+     *                         belongs to: the echo of a deprecated voltage regulation setter is recognised by it,
+     *                         see {@link LegacyRegulationKeys}. {@code null} keeps the echoes of targets
      */
-    static CompactedChanges compact(Collection<NetworkEvent> events, String workingVariantId) {
+    static CompactedChanges compact(Collection<NetworkEvent> events, String workingVariantId, Network network) {
         Objects.requireNonNull(events);
+
+        // One key per event, computed once: an echo of a voltage regulation target is marked DROPPED and is neither
+        // exported nor remembered, because the regulation reported the same change under its own name first
+        List<NetworkEvent> eventList = new ArrayList<>(events);
+        UpdateKey[] keys = new UpdateKey[eventList.size()];
+        boolean[] dropped = new boolean[eventList.size()];
+        for (int i = 0; i < keys.length; i++) {
+            NetworkEvent event = Objects.requireNonNull(eventList.get(i));
+            keys[i] = updateKey(event, network);
+            dropped[i] = keys[i] != null && keys[i].attributeKey() == null;
+        }
 
         Map<UpdateKey, FirstChange> firstChanges = new HashMap<>();
         Set<String> createdExtensions = new HashSet<>();
-        int index = 0;
-        for (NetworkEvent event : events) {
-            Objects.requireNonNull(event);
+        for (int index = 0; index < keys.length; index++) {
+            NetworkEvent event = eventList.get(index);
             if (event instanceof ExtensionCreationNetworkEvent creation) {
                 createdExtensions.add(extensionKey(creation.id(), creation.extensionName()));
             }
-            UpdateKey key = updateKey(event);
             // Every recorded change of this variant feeds the previous values, including the ones a mapping later
             // rejects: whether a change can be exported is decided after the previous state is known. The position
             // is kept with the previous value, so that a caller comparing two positions can always read the
             // previous value of the earlier one.
-            if (key != null && appliesTo(event, workingVariantId)) {
-                firstChanges.putIfAbsent(key, new FirstChange(oldValue(event), index));
+            if (keys[index] != null && !dropped[index] && appliesTo(event, workingVariantId)) {
+                firstChanges.putIfAbsent(keys[index], new FirstChange(oldValue(event), index));
             }
-            index++;
         }
 
-        List<NetworkEvent> reversedEvents = new ArrayList<>(events);
-        Collections.reverse(reversedEvents);
-        List<NetworkEvent> compactedEvents = new ArrayList<>(reversedEvents.size());
+        // The last change of every key, in the order of those last changes
+        List<NetworkEvent> compactedEvents = new ArrayList<>(eventList.size());
         Set<UpdateKey> retainedUpdates = new HashSet<>();
-        for (NetworkEvent event : reversedEvents) {
-            UpdateKey key = updateKey(event);
-            if (key == null || retainedUpdates.add(key)) {
-                compactedEvents.add(event);
+        for (int index = keys.length - 1; index >= 0; index--) {
+            if (!dropped[index] && (keys[index] == null || retainedUpdates.add(keys[index]))) {
+                compactedEvents.add(eventList.get(index));
             }
         }
         Collections.reverse(compactedEvents);
@@ -136,9 +146,9 @@ final class EventCompactor {
     }
 
     /** The attribute a change describes, or {@code null} for a change that no attribute identifies. */
-    static UpdateKey updateKey(NetworkEvent event) {
+    static UpdateKey updateKey(NetworkEvent event, Network network) {
         return switch (event) {
-            case UpdateNetworkEvent update -> new UpdateKey(update.id(), attributeKey(update));
+            case UpdateNetworkEvent update -> new UpdateKey(update.id(), attributeKey(update, network));
             // An extension attribute is namespaced by its extension: two extensions of the same object may well
             // both call an attribute "enabled" without describing the same value.
             case ExtensionUpdateNetworkEvent update ->
@@ -163,10 +173,18 @@ final class EventCompactor {
      * name as a whole replacement but carries the raw limits object as payload; it keeps the plain attribute name,
      * which is also what makes the mapping able to tell the two apart and refuse the selection change.</p>
      *
-     * @param event a change of an attribute, that is an {@link UpdateNetworkEvent}
+     * <p>The name a deprecated voltage regulation setter reports a change under is replaced by the name of the value
+     * it repeats, and a repeated target yields {@code null}: see {@link LegacyRegulationKeys}.</p>
+     *
+     * @param event        a change of an attribute, that is an {@link UpdateNetworkEvent}
+     * @param identifiable the identifiable the change was reported on, {@code null} when it no longer exists
+     * @return the key, or {@code null} for the echo of a voltage regulation target, which has no value of its own
      */
-    static String attributeKey(UpdateNetworkEvent event) {
-        String attribute = event.attribute();
+    static String attributeKey(UpdateNetworkEvent event, Identifiable<?> identifiable) {
+        String attribute = LegacyRegulationKeys.canonical(identifiable, event.attribute());
+        if (attribute == null) {
+            return null;
+        }
         if (attribute.indexOf(KEY_SEPARATOR.charAt(0)) >= 0) {
             // Already a refined key: a synthetic probe event built by the difference model importer
             return attribute;
@@ -181,10 +199,15 @@ final class EventCompactor {
         };
     }
 
+    /** As {@link #attributeKey(UpdateNetworkEvent, Identifiable)}, looking the identifiable up in the network. */
+    static String attributeKey(UpdateNetworkEvent event, Network network) {
+        return attributeKey(event, network != null ? network.getIdentifiable(event.id()) : null);
+    }
+
     /** The key identifying the value a change describes, for any kind of event. */
-    static String attributeKey(NetworkEvent event) {
+    static String attributeKey(NetworkEvent event, Network network) {
         return switch (event) {
-            case UpdateNetworkEvent update -> attributeKey(update);
+            case UpdateNetworkEvent update -> attributeKey(update, network);
             case ExtensionUpdateNetworkEvent update ->
                 extensionAttributeKey(update.extensionName(), update.attribute());
             default -> null;

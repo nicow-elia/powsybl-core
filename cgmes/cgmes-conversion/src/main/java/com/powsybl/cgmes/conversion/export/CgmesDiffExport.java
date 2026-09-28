@@ -473,7 +473,7 @@ public final class CgmesDiffExport {
         context.setModelCreated(exportOptions.created);
         return new DifferenceModelBuilder(network, context,
                 EventCompactor.compact(EventCompactor.ofVariant(events, exportOptions.getVariant()),
-                        network.getVariantManager().getWorkingVariantId()), exportOptions);
+                        network.getVariantManager().getWorkingVariantId(), network), exportOptions);
     }
 
     /**

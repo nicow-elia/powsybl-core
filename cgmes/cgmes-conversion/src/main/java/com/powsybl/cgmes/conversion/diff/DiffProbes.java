@@ -45,28 +45,39 @@ import java.util.List;
 final class DiffProbes {
 
     private static final List<String> LOAD = List.of("p0", "q0");
-    private static final List<String> GENERATOR = List.of("targetP", "targetQ", "targetV", "voltageRegulatorOn",
-            "activePowerControl#participationFactor", "referencePriority#referencePriority",
-            "remoteReactivePowerControl#targetQ", "remoteReactivePowerControl#enabled");
+    // The voltage regulation of IIDM (powsybl-core #3699): local targets on the holder, the rest on its VoltageRegulation
+    private static final String LOCAL_TARGET_Q = "localTargetQ";
+    private static final String LOCAL_TARGET_V = "localTargetV";
+    private static final String VR_TARGET_VALUE = "VoltageRegulation.TargetValue";
+    private static final String VR_REGULATING = "VoltageRegulation.isRegulating";
+    private static final String VR_TARGET_DEADBAND = "VoltageRegulation.TargetDeadband";
+    private static final String VR_MODE = "VoltageRegulation.RegulationMode";
+
+    private static final List<String> GENERATOR = List.of("targetP", LOCAL_TARGET_Q, LOCAL_TARGET_V, VR_TARGET_VALUE,
+            VR_REGULATING, "activePowerControl#participationFactor", "referencePriority#referencePriority");
     private static final List<String> BOUNDARY_LINE = List.of("p0", "q0", "targetP", "targetQ", "targetV",
             "voltageRegulationOn");
-    private static final List<String> SHUNT = List.of("sectionCount", "voltageRegulatorOn", "targetV",
-            "targetDeadband");
-    private static final List<String> SVC = List.of("regulating", "regulationMode", "reactivePowerSetpoint",
-            "voltageSetpoint");
+    private static final List<String> SHUNT = List.of("sectionCount", LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING,
+            VR_TARGET_DEADBAND);
+    private static final List<String> SVC = List.of(LOCAL_TARGET_Q, LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING);
     private static final List<String> HVDC_LINE = List.of("activePowerSetpoint", "convertersMode");
-    private static final List<String> VSC = List.of("voltageRegulatorOn", "voltageSetpoint", "reactivePowerSetpoint");
+    private static final List<String> VSC = List.of(LOCAL_TARGET_Q, LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING, VR_MODE);
     private static final List<String> LCC = List.of("powerFactor");
     private static final List<String> DETAILED_CONVERTER = List.of("targetP", "targetVdc", "controlMode",
-            "voltageRegulatorOn", "voltageSetpoint", "reactivePowerSetpoint", "powerFactor");
+            LOCAL_TARGET_Q, LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING, VR_MODE, "powerFactor");
     private static final List<String> SWITCH = List.of("open");
     private static final List<String> LINE = List.of("r", "x", "g1", "b1");
     private static final List<String> VOLTAGE_LEVEL = List.of("highVoltageLimit", "lowVoltageLimit");
     private static final List<String> BOUNDARY_LINE_IMPEDANCE = List.of("r", "x", "g", "b");
 
-    /** The suffixes of a tap changer, which are prefixed by the name a recorded change gives it. */
-    private static final List<String> TAP_CHANGER_SUFFIXES = List.of(".tapPosition", ".regulating",
+    /** The suffixes of a phase tap changer, which are prefixed by the name a recorded change gives it. */
+    private static final List<String> PHASE_TAP_CHANGER_SUFFIXES = List.of(".tapPosition", ".regulating",
             ".regulationValue", ".targetDeadband");
+    /** The suffixes of a ratio tap changer, which regulates through its VoltageRegulation. */
+    private static final List<String> RATIO_TAP_CHANGER_SUFFIXES = List.of(".tapPosition", "." + VR_REGULATING,
+            "." + VR_TARGET_VALUE, "." + VR_TARGET_DEADBAND);
+    private static final String RATIO_TAP_CHANGER = "ratioTapChanger";
+    private static final String PHASE_TAP_CHANGER = "phaseTapChanger";
 
     private DiffProbes() {
     }
@@ -88,7 +99,7 @@ final class DiffProbes {
         String prefix = subject.ownerAttributePrefix();
         if (!prefix.isEmpty() && object.equals(subject.owner())) {
             switch (subject.probeKind()) {
-                case TAP_CHANGER_PREFIX -> TAP_CHANGER_SUFFIXES.forEach(suffix -> probes.add(prefix + suffix));
+                case TAP_CHANGER_PREFIX -> tapChangerSuffixes(prefix).forEach(suffix -> probes.add(prefix + suffix));
                 case ATTRIBUTE_KEY -> probes.add(prefix);
                 case NONE -> { /* nothing beyond the probes of the owner */ }
             }
@@ -124,13 +135,16 @@ final class DiffProbes {
         return all;
     }
 
+    private static List<String> tapChangerSuffixes(String prefix) {
+        return prefix.startsWith(RATIO_TAP_CHANGER) ? RATIO_TAP_CHANGER_SUFFIXES : PHASE_TAP_CHANGER_SUFFIXES;
+    }
+
     /** Every tap changer attribute of a transformer, for the case where the subject is the transformer itself. */
     private static List<String> allTapChangerProbes(String... ends) {
         List<String> probes = new ArrayList<>();
         for (String end : ends) {
-            for (String kind : List.of("ratioTapChanger", "phaseTapChanger")) {
-                TAP_CHANGER_SUFFIXES.forEach(suffix -> probes.add(kind + end + suffix));
-            }
+            RATIO_TAP_CHANGER_SUFFIXES.forEach(suffix -> probes.add(RATIO_TAP_CHANGER + end + suffix));
+            PHASE_TAP_CHANGER_SUFFIXES.forEach(suffix -> probes.add(PHASE_TAP_CHANGER + end + suffix));
         }
         return probes;
     }

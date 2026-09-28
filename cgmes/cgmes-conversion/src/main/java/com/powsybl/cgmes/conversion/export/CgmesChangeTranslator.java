@@ -8,7 +8,6 @@
 package com.powsybl.cgmes.conversion.export;
 
 import com.powsybl.cgmes.conversion.Conversion;
-import com.powsybl.cgmes.conversion.RegulatingControlMapping;
 import com.powsybl.cgmes.conversion.elements.OperationalLimitConversion;
 import com.powsybl.cgmes.conversion.export.PartialSshExport.UnsupportedChangeBehavior;
 import com.powsybl.cgmes.extensions.CimCharacteristics;
@@ -53,7 +52,7 @@ import com.powsybl.iidm.network.events.UpdateNetworkEvent;
 import com.powsybl.iidm.network.extensions.ActivePowerControl;
 import com.powsybl.iidm.network.extensions.ReferencePriorities;
 import com.powsybl.iidm.network.extensions.ReferencePriority;
-import com.powsybl.iidm.network.extensions.RemoteReactivePowerControl;
+import com.powsybl.iidm.network.regulation.RegulationMode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -81,7 +80,6 @@ import static com.powsybl.cgmes.conversion.Conversion.PROPERTY_CGMES_ORIGINAL_CL
 import static com.powsybl.cgmes.conversion.Conversion.PROPERTY_EQUIVALENT_INJECTION;
 import static com.powsybl.cgmes.conversion.Conversion.PROPERTY_GENERATING_UNIT;
 import static com.powsybl.cgmes.conversion.Conversion.PROPERTY_IS_EQUIVALENT_SHUNT;
-import static com.powsybl.cgmes.conversion.Conversion.PROPERTY_MODE;
 import static com.powsybl.cgmes.conversion.Conversion.PROPERTY_REGULATING_CONTROL;
 import static com.powsybl.cgmes.conversion.Conversion.PROPERTY_REGULATION_CAPABILITY;
 import static com.powsybl.cgmes.conversion.export.CgmesPropertyBuffer.merge;
@@ -133,20 +131,29 @@ class CgmesChangeTranslator {
     static final String P0 = "p0";
     static final String Q0 = "q0";
     static final String TARGET_P = "targetP";
+    /** Boundary line generation only: every voltage regulation holder reports {@link #LOCAL_TARGET_Q} instead. */
     static final String TARGET_Q = "targetQ";
+    /** Boundary line generation only: every voltage regulation holder reports {@link #LOCAL_TARGET_V} instead. */
     static final String TARGET_V = "targetV";
-    static final String VOLTAGE_REGULATOR_ON = "voltageRegulatorOn";
     /** Boundary line generation spells the same idea differently from every other regulating equipment. */
     static final String VOLTAGE_REGULATION_ON = "voltageRegulationOn";
     static final String SECTION_COUNT = "sectionCount";
-    static final String VOLTAGE_SETPOINT = "voltageSetpoint";
-    static final String REACTIVE_POWER_SETPOINT = "reactivePowerSetpoint";
     static final String ACTIVE_POWER_SETPOINT = "activePowerSetpoint";
     static final String CONVERTERS_MODE = "convertersMode";
     static final String POWER_FACTOR = "powerFactor";
-    static final String REGULATING = "regulating";
-    static final String TARGET_DEADBAND = "targetDeadband";
-    static final String REGULATION_MODE = "regulationMode";
+    // The voltage regulation of IIDM (powsybl-core #3699): the local targets live on the holder, everything else on
+    // its VoltageRegulation, whose changes are reported with the prefix "VoltageRegulation."
+    static final String LOCAL_TARGET_Q = "localTargetQ";
+    static final String LOCAL_TARGET_V = "localTargetV";
+    static final String VR_PREFIX = "VoltageRegulation.";
+    static final String VR_TARGET_VALUE = VR_PREFIX + "TargetValue";
+    static final String VR_TARGET_DEADBAND = VR_PREFIX + "TargetDeadband";
+    static final String VR_REGULATING = VR_PREFIX + "isRegulating";
+    static final String VR_MODE = VR_PREFIX + "RegulationMode";
+    static final String VR_SLOPE = VR_PREFIX + "Slope";
+    static final String VR_TERMINAL = VR_PREFIX + "Terminal";
+    // Tap changers: a change is reported on the transformer, as prefix + end + suffix. A ratio tap changer regulates
+    // through its VoltageRegulation, whose suffixes are the VR_ names above: "ratioTapChanger2.VoltageRegulation.TargetValue"
     static final String TAP_POSITION_SUFFIX = ".tapPosition";
     private static final String TAP_POSITION = "tapPosition";
     static final String REGULATING_SUFFIX = ".regulating";
@@ -161,8 +168,6 @@ class CgmesChangeTranslator {
     // Extension attributes
     static final String PARTICIPATION_FACTOR = "participationFactor";
     static final String REFERENCE_PRIORITY = "referencePriority";
-    static final String RRPC_TARGET_Q = "targetQ";
-    static final String RRPC_ENABLED = "enabled";
     // Operational limits, voltage limits and branch impedances (equipment profile)
     static final String LIMITS_PREFIX = CgmesLimitIndex.LIMITS_PREFIX;
     static final String HIGH_VOLTAGE_LIMIT = "highVoltageLimit";
@@ -193,15 +198,22 @@ class CgmesChangeTranslator {
     private static final String MEGA = "M";
 
     private static final Set<String> LOAD_ATTRIBUTES = Set.of(P0, Q0);
-    private static final Set<String> GENERATOR_ATTRIBUTES = Set.of(TARGET_P, TARGET_Q, TARGET_V, VOLTAGE_REGULATOR_ON);
-    private static final Set<String> SHUNT_ATTRIBUTES = Set.of(SECTION_COUNT, TARGET_V, VOLTAGE_REGULATOR_ON, TARGET_DEADBAND);
+    private static final Set<String> GENERATOR_ATTRIBUTES =
+            Set.of(TARGET_P, LOCAL_TARGET_Q, LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING);
+    private static final Set<String> SHUNT_ATTRIBUTES =
+            Set.of(SECTION_COUNT, LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING, VR_TARGET_DEADBAND);
     private static final Set<String> STATIC_VAR_COMPENSATOR_ATTRIBUTES =
-            Set.of(VOLTAGE_SETPOINT, REACTIVE_POWER_SETPOINT, REGULATING, REGULATION_MODE);
-    private static final Set<String> VSC_CONVERTER_ATTRIBUTES = Set.of(VOLTAGE_SETPOINT, REACTIVE_POWER_SETPOINT, VOLTAGE_REGULATOR_ON);
-    private static final Set<String> RRPC_ATTRIBUTES = Set.of(RRPC_TARGET_Q, RRPC_ENABLED);
+            Set.of(LOCAL_TARGET_Q, LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING);
+    private static final Set<String> VSC_CONVERTER_ATTRIBUTES =
+            Set.of(LOCAL_TARGET_Q, LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING, VR_MODE);
     private static final Set<String> HVDC_LINE_ATTRIBUTES = Set.of(ACTIVE_POWER_SETPOINT, CONVERTERS_MODE);
     private static final Set<String> AC_DC_CONVERTER_ATTRIBUTES = Set.of(TARGET_P, TARGET_VDC, CONTROL_MODE,
-            VOLTAGE_REGULATOR_ON, VOLTAGE_SETPOINT, REACTIVE_POWER_SETPOINT, POWER_FACTOR);
+            POWER_FACTOR, LOCAL_TARGET_Q, LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING, VR_MODE);
+    /**
+     * What of a voltage regulation no steady state hypothesis file can change: the mode and the regulating terminal
+     * of a RegulatingControl are equipment data, and CGMES has no slope on a RegulatingControl at all.
+     */
+    private static final Set<String> VOLTAGE_REGULATION_EQUIPMENT_ATTRIBUTES = Set.of(VR_MODE, VR_TERMINAL, VR_SLOPE);
     private static final Set<String> BOUNDARY_LINE_ATTRIBUTES =
             Set.of(P0, Q0, TARGET_P, TARGET_Q, TARGET_V, VOLTAGE_REGULATION_ON);
     private static final Set<String> VOLTAGE_LIMIT_ATTRIBUTES = Set.of(HIGH_VOLTAGE_LIMIT, LOW_VOLTAGE_LIMIT);
@@ -392,37 +404,10 @@ class CgmesChangeTranslator {
             return failure("the network has no identifiable with id " + id);
         }
         return switch (extensionName) {
-            case RemoteReactivePowerControl.NAME -> remoteReactivePowerControlUpdates(identifiable, attribute);
             case ReferencePriorities.NAME -> referencePriorityUpdates(identifiable);
             case ActivePowerControl.NAME -> participationFactorUpdates(identifiable, attribute);
             default -> failure("extension " + extensionName + " has no CGMES steady state property");
         };
-    }
-
-    /**
-     * A remote reactive power control describes the target of the RegulatingControl of its generator, whenever the
-     * CGMES regulating control of that generator regulates reactive power.
-     *
-     * <p>A RegulatingControl carries a single target, whose meaning is the CGMES mode, which belongs to the
-     * equipment model and cannot be changed from a steady state hypothesis file. A generator whose control
-     * regulates voltage therefore has nowhere to put a reactive power target: writing the block anyway would send
-     * the voltage target and silently lose the change.</p>
-     */
-    private Result<CgmesPropertyBuffer, String> remoteReactivePowerControlUpdates(Identifiable<?> identifiable, String attribute) {
-        if (attribute != null && !RRPC_ATTRIBUTES.contains(attribute)) {
-            return failure("no CGMES steady state property corresponds to the " + attribute
-                    + " of a remote reactive power control");
-        }
-        if (!(identifiable instanceof Generator generator)) {
-            return failure(identifiable.getType() + " " + identifiable.getId()
-                    + " carries a remote reactive power control the SSH profile cannot describe");
-        }
-        if (!RegulatingControlMapping.isControlModeReactivePower(generator.getProperty(PROPERTY_MODE))) {
-            return failure("generator " + generator.getId() + " does not regulate reactive power in CGMES,"
-                    + " its remote reactive power control has no steady state property");
-        }
-        state.requireExtensionNotCreated(generator, RemoteReactivePowerControl.NAME);
-        return machineAndControlUpdates(generator);
     }
 
     /** The machine block together with its regulating control, which a change of the regulation itself needs. */
@@ -439,7 +424,11 @@ class CgmesChangeTranslator {
         // The key rather than the plain attribute name, so that the operational limits group and the acceptable
         // duration a limit change carries in its payload select the right limit. For every other attribute the two
         // are the same string.
-        String attribute = EventCompactor.attributeKey(event);
+        String attribute = EventCompactor.attributeKey(event, identifiable);
+        if (attribute == null) {
+            // A legacy echo of a target the voltage regulation reported itself, which the compaction drops
+            return failure("the change repeats a voltage regulation target under its deprecated name");
+        }
         TapChangerAttribute tapChangerAttribute = tapChangerAttribute(attribute);
         return switch (identifiable) {
             case Switch sw when OPEN.equals(attribute) -> switchUpdates(sw);
@@ -450,11 +439,11 @@ class CgmesChangeTranslator {
             case TwoWindingsTransformer transformer when tapChangerAttribute != null -> twoWindingsTapChangerUpdates(transformer, tapChangerAttribute);
             case ThreeWindingsTransformer transformer when tapChangerAttribute != null -> threeWindingsTapChangerUpdates(transformer, tapChangerAttribute);
             case ShuntCompensator shunt when SHUNT_ATTRIBUTES.contains(attribute) -> shuntCompensatorUpdates(shunt, attribute);
-            case StaticVarCompensator svc when STATIC_VAR_COMPENSATOR_ATTRIBUTES.contains(attribute) -> staticVarCompensatorUpdates(svc, attribute);
+            case StaticVarCompensator svc when STATIC_VAR_COMPENSATOR_ATTRIBUTES.contains(attribute) -> staticVarCompensatorUpdates(svc);
             case HvdcLine hvdcLine when HVDC_LINE_ATTRIBUTES.contains(attribute) -> hvdcLineUpdates(hvdcLine, attribute);
             case LccConverterStation converter when POWER_FACTOR.equals(attribute) -> lccPowerFactorUpdates(converter);
             case AcDcConverter<?> converter when AC_DC_CONVERTER_ATTRIBUTES.contains(attribute) -> acDcConverterUpdates(converter, attribute);
-            case VscConverterStation converter when VSC_CONVERTER_ATTRIBUTES.contains(attribute) -> success(vscStationUpdates(converter));
+            case VscConverterStation converter when VSC_CONVERTER_ATTRIBUTES.contains(attribute) -> vscStationUpdates(converter, attribute);
             case VoltageLevel voltageLevel when VOLTAGE_LIMIT_ATTRIBUTES.contains(attribute) ->
                 voltageLimitUpdates(voltageLevel, attribute);
             case Line line when LINE_IMPEDANCE_ATTRIBUTES.contains(attribute) -> lineImpedanceUpdates(line, attribute);
@@ -463,7 +452,19 @@ class CgmesChangeTranslator {
             case Identifiable<?> owner when attribute.startsWith(LIMITS_PREFIX)
                     && CgmesLimitIndex.holdsLoadingLimits(owner) ->
                 loadingLimitsUpdates(owner, attribute, event.oldValue());
+            // The control mode of a converter is SSH data (qPccControl) and is handled above; for every other holder
+            // the mode and the regulating terminal are equipment data, and CGMES has no slope on a RegulatingControl
+            case Identifiable<?> holder when VOLTAGE_REGULATION_EQUIPMENT_ATTRIBUTES.contains(attribute) ->
+                failure(equipmentOnlyRegulation(attribute));
             default -> unmappedAttributeUpdates(identifiable, attribute);
+        };
+    }
+
+    private static String equipmentOnlyRegulation(String attribute) {
+        return switch (attribute.substring(attribute.lastIndexOf('.') + 1)) {
+            case "RegulationMode" -> "the regulation mode is RegulatingControl.mode, which belongs to the EQ profile";
+            case "Terminal" -> "the regulating terminal is RegulatingControl.Terminal, which belongs to the EQ profile";
+            default -> "a CGMES RegulatingControl has no slope, the " + attribute + " has no CGMES property";
         };
     }
 
@@ -569,7 +570,7 @@ class CgmesChangeTranslator {
                     .value(ROTATING_MACHINE_Q, q0)
                     .value(REGULATING_COND_EQ_CONTROL_ENABLED, false)
                     .enumValue("AsynchronousMachine.asynchronousMachineType", "AsynchronousMachineKind",
-                            SteadyStateHypothesisExport.asynchronousMachineKind(p0))
+                            SteadyStateHypothesisExport.obtainAsynchronousMachineKind(p0))
                     .updates());
             default -> failure("load " + load.getId() + " is exported as a " + className
                     + ", which has no steady state setpoints");
@@ -641,12 +642,12 @@ class CgmesChangeTranslator {
             return equivalentInjectionUpdates(generator);
         }
         return switch (attribute) {
-            case TARGET_P, TARGET_Q -> generatorMachineUpdates(generator);
-            // The voltage target lives entirely on the RegulatingControl, it must not restate the machine powers
-            case TARGET_V -> regulatingControlUpdates(generator);
+            case TARGET_P, LOCAL_TARGET_Q -> generatorMachineUpdates(generator);
+            // The regulation target lives entirely on the RegulatingControl, it must not restate the machine powers
+            case LOCAL_TARGET_V, VR_TARGET_VALUE -> regulatingControlUpdates(generator);
             // The CGMES update reads the control flag of a machine only together with its powers, its reference
             // priority and its operating mode, so switching the regulation writes the whole machine block
-            case VOLTAGE_REGULATOR_ON -> machineAndControlUpdates(generator);
+            case VR_REGULATING -> machineAndControlUpdates(generator);
             default -> throw new IllegalStateException("Unhandled generator attribute " + attribute);
         };
     }
@@ -678,7 +679,7 @@ class CgmesChangeTranslator {
         return newUpdates(CgmesNames.SYNCHRONOUS_MACHINE, cgmesId(generator))
                 .value(REGULATING_COND_EQ_CONTROL_ENABLED, generatorControlEnabled(generator))
                 .value(ROTATING_MACHINE_P, -targetP)
-                .value(ROTATING_MACHINE_Q, -state.getDouble(generator, TARGET_Q, generator::getTargetQ))
+                .value(ROTATING_MACHINE_Q, -RegulationRef.of(generator).localTargetQ(state))
                 .value("SynchronousMachine.referencePriority", referencePriority(generator))
                 .enumValue("SynchronousMachine.operatingMode", "SynchronousMachineOperatingMode",
                         SteadyStateHypothesisExport.obtainOperatingMode(generator, generator.getMinP(), generator.getMaxP(), targetP, state))
@@ -686,22 +687,12 @@ class CgmesChangeTranslator {
     }
 
     /**
-     * Whether the generator takes part in its CGMES regulating control.
-     *
-     * <p>Which IIDM flag says so depends on what that control regulates: the voltage regulation flag of the
-     * generator for a voltage control, the state of its remote reactive power control for a reactive power one. The
-     * receiving side combines this flag with {@code RegulatingControl.enabled}, so a control regulating reactive
-     * power that reported the voltage flag would never be switched on again.</p>
+     * Whether the generator takes part in its CGMES regulating control: the regulating flag of its voltage
+     * regulation, whatever the mode, as the full export writes it since powsybl-core #3699. The receiving side
+     * combines this flag with {@code RegulatingControl.enabled}.
      */
     private boolean generatorControlEnabled(Generator generator) {
-        RemoteReactivePowerControl reactivePowerControl = generator.getExtension(RemoteReactivePowerControl.class);
-        if (reactivePowerControl != null
-                && RegulatingControlMapping.isControlModeReactivePower(generator.getProperty(PROPERTY_MODE))) {
-            state.requireExtensionNotCreated(generator, RemoteReactivePowerControl.NAME);
-            return state.getExtensionBoolean(generator, RemoteReactivePowerControl.NAME, RRPC_ENABLED,
-                    reactivePowerControl::isEnabled);
-        }
-        return state.getBoolean(generator, VOLTAGE_REGULATOR_ON, generator::isVoltageRegulatorOn);
+        return RegulationRef.of(generator).isRegulating(state);
     }
 
     /**
@@ -718,7 +709,7 @@ class CgmesChangeTranslator {
         return newUpdates(CgmesNames.EXTERNAL_NETWORK_INJECTION, cgmesId(generator))
                 .value(REGULATING_COND_EQ_CONTROL_ENABLED, generatorControlEnabled(generator))
                 .value("ExternalNetworkInjection.p", -state.getDouble(generator, TARGET_P, generator::getTargetP))
-                .value("ExternalNetworkInjection.q", -state.getDouble(generator, TARGET_Q, generator::getTargetQ))
+                .value("ExternalNetworkInjection.q", -RegulationRef.of(generator).localTargetQ(state))
                 .value("ExternalNetworkInjection.referencePriority", referencePriority(generator))
                 .updates();
     }
@@ -732,15 +723,16 @@ class CgmesChangeTranslator {
      * capability can never regulate on the receiving side whatever the file says.</p>
      */
     private Result<CgmesPropertyBuffer, String> equivalentInjectionUpdates(Generator generator) {
-        boolean voltageRegulatorOn = state.getBoolean(generator, VOLTAGE_REGULATOR_ON, generator::isVoltageRegulatorOn);
-        if (voltageRegulatorOn && !hasRegulationCapability(generator)) {
+        RegulationRef regulation = RegulationRef.of(generator);
+        boolean regulating = regulation.isRegulating(state);
+        if (regulating && !hasRegulationCapability(generator)) {
             return failure("the EquivalentInjection has no regulation capability, the CGMES update keeps its"
                     + " regulation off");
         }
-        double targetV = state.getDouble(generator, TARGET_V, generator::getTargetV);
+        // The regulation target of an EquivalentInjection is the local voltage target, as the full export writes it
         return success(equivalentInjectionBlock(cgmesId(generator),
                 -state.getDouble(generator, TARGET_P, generator::getTargetP),
-                -state.getDouble(generator, TARGET_Q, generator::getTargetQ), voltageRegulatorOn, targetV));
+                -regulation.localTargetQ(state), regulating, regulation.localTargetV(state)));
     }
 
     private static boolean hasRegulationCapability(Identifiable<?> identifiable) {
@@ -804,16 +796,22 @@ class CgmesChangeTranslator {
 
     /**
      * The attributes of a tap changer this exporter maps. Everything else it may report, such as a solved position
-     * or a regulation terminal, has no counterpart in the steady state hypothesis profile.
+     * or the regulation terminal of a phase tap changer, has no counterpart in the steady state hypothesis profile.
+     * A ratio tap changer regulates through its VoltageRegulation, whose attributes carry a dotted suffix of their
+     * own; the mode, the terminal and the slope are matched so that they can be refused with a reason.
      */
     private static final Pattern TAP_CHANGER_ATTRIBUTE = Pattern.compile(
-            "^(ratio|phase)TapChanger([123]?)\\.(tapPosition|regulating|regulationValue|targetDeadband|regulationMode)$");
+            "^(?:(ratio)TapChanger([123]?)\\.(tapPosition|VoltageRegulation\\.(?:TargetValue|TargetDeadband|isRegulating|RegulationMode|Terminal|Slope))"
+                    + "|(phase)TapChanger([123]?)\\.(tapPosition|regulating|regulationValue|targetDeadband|regulationMode))$");
 
     private static TapChangerAttribute tapChangerAttribute(String attribute) {
         Matcher matcher = TAP_CHANGER_ATTRIBUTE.matcher(attribute);
-        return matcher.matches()
-                ? new TapChangerAttribute("phase".equals(matcher.group(1)), matcher.group(2), matcher.group(3))
-                : null;
+        if (!matcher.matches()) {
+            return null;
+        }
+        return matcher.group(1) != null
+                ? new TapChangerAttribute(false, matcher.group(2), matcher.group(3))
+                : new TapChangerAttribute(true, matcher.group(5), matcher.group(6));
     }
 
     private Result<CgmesPropertyBuffer, String> twoWindingsTapChangerUpdates(TwoWindingsTransformer transformer,
@@ -878,15 +876,20 @@ class CgmesChangeTranslator {
         if (TAP_POSITION.equals(attribute.suffix())) {
             return success(tapChangerBlock);
         }
-        if (REGULATION_MODE.equals(attribute.suffix())) {
-            return failure("the regulation mode is RegulatingControl.mode, which belongs to the EQ profile");
+        if ("regulationMode".equals(attribute.suffix())
+                || VOLTAGE_REGULATION_EQUIPMENT_ATTRIBUTES.contains(attribute.suffix())) {
+            return failure(equipmentOnlyRegulation(attribute.suffix()));
         }
-        if (tapChanger instanceof RatioTapChanger ratioTapChanger
-                && ref.getEnum(state, REGULATION_MODE_SUFFIX, RatioTapChanger.RegulationMode.class,
-                        ratioTapChanger::getRegulationMode) != RatioTapChanger.RegulationMode.VOLTAGE) {
-            return failure("the CGMES update only reads voltage regulation of ratio tap changers");
-        }
-        if (tapChanger.getRegulationTerminal() == null) {
+        if (tapChanger instanceof RatioTapChanger) {
+            RegulationRef regulation = ref.regulation();
+            if (regulation.regulation() == null) {
+                return failure("tap changer " + aliasType + " of " + transformer.getId()
+                        + " has no voltage regulation the receiving side could read");
+            }
+            if (regulation.mode(state) != RegulationMode.VOLTAGE) {
+                return failure("the change export only writes the voltage regulation of ratio tap changers");
+            }
+        } else if (tapChanger instanceof PhaseTapChanger phaseTapChanger && phaseTapChanger.getRegulationTerminal() == null) {
             return failure("tap changer " + aliasType + " of " + transformer.getId()
                     + " regulates no terminal, so its regulation has no target the receiving side could read");
         }
@@ -904,8 +907,11 @@ class CgmesChangeTranslator {
         if (tapChanger instanceof PhaseTapChanger && !context.isExportEquipment()) {
             className = CgmesExportUtil.getPhaseTapChangerType(transformer, transformer.getAliasFromType(aliasType).orElse(null));
         }
+        boolean controlEnabled = tapChanger instanceof RatioTapChanger
+                ? ref.regulation().isRegulating(state)
+                : ref.getBoolean(state, REGULATING_SUFFIX, tapChanger::isRegulating);
         return newUpdates(className, cgmesIdFromAlias(transformer, aliasType))
-                .value("TapChanger.controlEnabled", ref.getBoolean(state, REGULATING_SUFFIX, tapChanger::isRegulating))
+                .value("TapChanger.controlEnabled", controlEnabled)
                 .value("TapChanger.step", ref.getInt(state, TAP_POSITION_SUFFIX, tapChanger::getTapPosition))
                 .updates();
     }
@@ -921,12 +927,11 @@ class CgmesChangeTranslator {
         // of either writes both. Only a change of the regulation itself also describes the RegulatingControl.
         CgmesPropertyBuffer shuntBlock = newUpdates(shuntClassName(shunt), cgmesId(shunt))
                 .value("ShuntCompensator.sections", state.getInt(shunt, SECTION_COUNT, shunt::getSectionCount))
-                .value(REGULATING_COND_EQ_CONTROL_ENABLED,
-                        state.getBoolean(shunt, VOLTAGE_REGULATOR_ON, shunt::isVoltageRegulatorOn))
+                .value(REGULATING_COND_EQ_CONTROL_ENABLED, RegulationRef.of(shunt).isRegulating(state))
                 .updates();
         return switch (attribute) {
             case SECTION_COUNT -> success(shuntBlock);
-            case TARGET_V, VOLTAGE_REGULATOR_ON, TARGET_DEADBAND -> regulatingControlUpdates(shunt)
+            case LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING, VR_TARGET_DEADBAND -> regulatingControlUpdates(shunt)
                     .map(regulatingControl -> merge(shuntBlock, regulatingControl));
             default -> throw new IllegalStateException("Unhandled shunt compensator attribute " + attribute);
         };
@@ -941,17 +946,15 @@ class CgmesChangeTranslator {
 
     // Static var compensators
 
-    private Result<CgmesPropertyBuffer, String> staticVarCompensatorUpdates(StaticVarCompensator svc, String attribute) {
-        if (REGULATION_MODE.equals(attribute)) {
-            return failure("the regulation mode is RegulatingControl.mode, which belongs to the EQ profile");
-        }
+    private Result<CgmesPropertyBuffer, String> staticVarCompensatorUpdates(StaticVarCompensator svc) {
         // The CGMES update reads the reactive power and the control flag of a compensator as one block, and the
-        // single target of its RegulatingControl is the one matching the current mode, so a change of the setpoint
-        // of the other mode is not observable in the SSH profile.
+        // single target of its RegulatingControl is the one matching the current mode, so a change of the target
+        // of the other mode is not observable in the SSH profile. StaticVarCompensator.q is the local reactive power
+        // target in both directions since powsybl-core #3699.
+        RegulationRef regulation = RegulationRef.of(svc);
         CgmesPropertyBuffer svcBlock = newUpdates("StaticVarCompensator", cgmesId(svc))
-                .value(REGULATING_COND_EQ_CONTROL_ENABLED, state.getBoolean(svc, REGULATING, svc::isRegulating))
-                // The reactive power of the terminal is a state variable, not part of a steady state change set
-                .value("StaticVarCompensator.q", svc.getTerminal().getQ())
+                .value(REGULATING_COND_EQ_CONTROL_ENABLED, regulation.isRegulating(state))
+                .value("StaticVarCompensator.q", regulation.localTargetQ(state))
                 .updates();
         return regulatingControlUpdates(svc).map(regulatingControl -> merge(svcBlock, regulatingControl));
     }
@@ -1025,23 +1028,27 @@ class CgmesChangeTranslator {
 
     /**
      * The block describing the control of a voltage source converter station: both control modes, which the CGMES
-     * import only reads together, and the setpoints of both modes when they carry a usable value.
+     * import only reads together, and both targets as the full export writes them.
      *
-     * <p>The import derives which of the two setpoints it applies from {@code qPccControl} and resets the other one
-     * to zero, so the inactive setpoint of the sender is not transportable. It does not need to be: a later change
-     * of the regulation mode re-exports the then active value.</p>
+     * <p>IIDM holds one regulation target and a mode since powsybl-core #3699: the target of the mode the station is
+     * not in is written as zero, and the import rebuilds the whole VoltageRegulation from {@code qPccControl} and the
+     * target of that mode. The reactive power of the station, {@code ACDCConverter.q}, is its local reactive power
+     * target, so a change of it writes the converter block as well.</p>
      */
-    private CgmesPropertyBuffer vscStationUpdates(VscConverterStation converter) {
-        CgmesPropertyBuffer.ObjectUpdate update = vscControlModeUpdates(converter).object(CgmesNames.VS_CONVERTER, cgmesId(converter));
-        double voltageSetpoint = state.getDouble(converter, VOLTAGE_SETPOINT, converter::getVoltageSetpoint);
-        if (voltageSetpoint > 0) {
-            update.value("VsConverter.targetUpcc", voltageSetpoint);
+    private Result<CgmesPropertyBuffer, String> vscStationUpdates(VscConverterStation converter, String attribute) {
+        RegulationRef regulation = RegulationRef.of(converter);
+        if (regulation.regulation() != null && regulation.mode(state) == null) {
+            return failure("the voltage regulation of converter " + converter.getId() + " has no mode in this"
+                    + " variant, so qPccControl cannot be written");
         }
-        double targetQpcc = SteadyStateHypothesisExport.vscTargetQpcc(converter, state);
-        if (Double.isFinite(targetQpcc)) {
-            update.value("VsConverter.targetQpcc", targetQpcc);
+        CgmesPropertyBuffer control = vscControlModeUpdates(converter).object(CgmesNames.VS_CONVERTER, cgmesId(converter))
+                .value("VsConverter.targetUpcc", SteadyStateHypothesisExport.vscTargetUpcc(regulation, state))
+                .value("VsConverter.targetQpcc", SteadyStateHypothesisExport.vscTargetQpcc(regulation, state))
+                .updates();
+        if (!LOCAL_TARGET_Q.equals(attribute) || converter.getHvdcLine() == null) {
+            return success(control);
         }
-        return update.updates();
+        return success(merge(control, converterActivePowerUpdates(converter)));
     }
 
     // Detailed DC model converters
@@ -1097,16 +1104,10 @@ class CgmesChangeTranslator {
         CgmesPropertyBuffer.ObjectUpdate update = converterStateUpdate(CgmesNames.VS_CONVERTER, cgmesId(converter), converterState)
                 .enumValue("VsConverter.pPccControl", "VsPpccControlKind", converterState.pPccControl())
                 .enumValue("VsConverter.qPccControl", "VsQpccControlKind", converterState.operatingModeOrQpccControl());
-        double reactivePowerSetpoint = state.getDouble(converter, REACTIVE_POWER_SETPOINT, converter::getReactivePowerSetpoint);
-        if (Double.isFinite(reactivePowerSetpoint)) {
-            // The detailed model importer reads this target without applying the sign of the regulating terminal
-            update.value("VsConverter.targetQpcc", reactivePowerSetpoint);
-        }
-        double voltageSetpoint = state.getDouble(converter, VOLTAGE_SETPOINT, converter::getVoltageSetpoint);
-        if (Double.isFinite(voltageSetpoint)) {
-            update.value("VsConverter.targetUpcc", voltageSetpoint);
-        }
-        return update.updates();
+        // Both targets as the full export writes them: the one of the other mode is zero
+        return update.value("VsConverter.targetQpcc", converterState.targetQpcc())
+                .value("VsConverter.targetUpcc", converterState.targetUpcc())
+                .updates();
     }
 
     /** The CGMES import only reads the targets of a voltage source converter when both control modes are present. */
@@ -1115,8 +1116,7 @@ class CgmesChangeTranslator {
                 .enumValue("VsConverter.pPccControl", "VsPpccControlKind",
                         CgmesExportUtil.isConverterStationRectifier(converter, state) ? "pPcc" : "udc")
                 .enumValue("VsConverter.qPccControl", "VsQpccControlKind",
-                        state.getBoolean(converter, VOLTAGE_REGULATOR_ON, converter::isVoltageRegulatorOn)
-                                ? "voltagePcc" : "reactivePcc")
+                        SteadyStateHypothesisExport.vscQpccControl(RegulationRef.of(converter), state))
                 .updates();
     }
 

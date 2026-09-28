@@ -17,12 +17,13 @@ import com.powsybl.iidm.network.Generator;
 import com.powsybl.iidm.network.Identifiable;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.PhaseTapChanger;
+import com.powsybl.iidm.network.RatioTapChanger;
 import com.powsybl.iidm.network.ShuntCompensator;
 import com.powsybl.iidm.network.StaticVarCompensator;
 import com.powsybl.iidm.network.TapChanger;
 import com.powsybl.iidm.network.ThreeWindingsTransformer;
 import com.powsybl.iidm.network.TwoWindingsTransformer;
-import com.powsybl.iidm.network.extensions.RemoteReactivePowerControl;
+import com.powsybl.iidm.network.regulation.RegulationMode;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -171,25 +172,20 @@ class CgmesChangeRegulatingControls {
             }
         }
         for (Generator generator : network.getGenerators()) {
-            regulatingControlId(generator).ifPresent(id -> add(index, id, new User(
-                    state -> state.getBoolean(generator, CgmesChangeTranslator.VOLTAGE_REGULATOR_ON,
-                            generator::isVoltageRegulatorOn),
-                    false, state -> generatorView(generator, id, state))));
+            indexHolder(index, generator, RegulationRef.of(generator));
         }
         for (ShuntCompensator shunt : network.getShuntCompensators()) {
-            regulatingControlId(shunt).ifPresent(id -> add(index, id, new User(
-                    state -> state.getBoolean(shunt, CgmesChangeTranslator.VOLTAGE_REGULATOR_ON,
-                            shunt::isVoltageRegulatorOn),
-                    false,
-                    state -> viewOrFailure(SteadyStateHypothesisExport.regulatingControlView(shunt, context, state), shunt))));
+            indexHolder(index, shunt, RegulationRef.of(shunt));
         }
         for (StaticVarCompensator svc : network.getStaticVarCompensators()) {
-            regulatingControlId(svc).ifPresent(id -> add(index, id, new User(
-                    state -> state.getBoolean(svc, CgmesChangeTranslator.REGULATING, svc::isRegulating),
-                    false,
-                    state -> viewOrFailure(SteadyStateHypothesisExport.regulatingControlView(svc, context, state), svc))));
+            indexHolder(index, svc, RegulationRef.of(svc));
         }
         return index;
+    }
+
+    private void indexHolder(Map<String, List<User>> index, Identifiable<?> holder, RegulationRef regulation) {
+        regulatingControlId(holder).ifPresent(id -> add(index, id, new User(regulation::isRegulating, false,
+                state -> holderView(regulation, id, state))));
     }
 
     private <C extends Connectable<C>> void indexTapChanger(Map<String, List<User>> index, C transformer, String end,
@@ -199,9 +195,11 @@ class CgmesChangeRegulatingControls {
             return;
         }
         TapChangerRef ref = new TapChangerRef(transformer, attributePrefix, tapChanger);
-        controlId(transformer, aliasType).ifPresent(id -> add(index, id, new User(
-                state -> ref.getBoolean(state, CgmesChangeTranslator.REGULATING_SUFFIX, tapChanger::isRegulating),
-                true, state -> tapChangerView(transformer, end, ref, id, state))));
+        Predicate<IidmStateView> regulatesIn = tapChanger instanceof RatioTapChanger
+                ? ref.regulation()::isRegulating
+                : state -> ref.getBoolean(state, CgmesChangeTranslator.REGULATING_SUFFIX, tapChanger::isRegulating);
+        controlId(transformer, aliasType).ifPresent(id -> add(index, id, new User(regulatesIn, true,
+                state -> tapChangerView(transformer, end, ref, id, state))));
     }
 
     private static void add(Map<String, List<User>> index, String controlId, User user) {
@@ -229,33 +227,43 @@ class CgmesChangeRegulatingControls {
     // The views
 
     /**
-     * The view of a generator, built here rather than taken from the full export because the receiving side picks
-     * the meaning of the target from the CGMES mode the import recorded, not from the state the generator is in.
+     * The view of a voltage regulation holder: a generator, a shunt compensator, a static var compensator or a ratio
+     * tap changer, described exactly as the full export describes it but read from the given state.
+     *
+     * <p>A regulation whose mode is undefined in this variant (it was created from another variant) has no CGMES
+     * mode and is refused. For a generator the receiving side does not dispatch on the mode of the regulation but on
+     * the CGMES mode its import recorded ({@code AbstractReactiveLimitsOwnerConversion#updateRegulatingControl}), so a
+     * regulation whose mode was changed after the import is refused as well: its target would be read as the other
+     * quantity.</p>
      */
-    private Result<RegulatingControlView, String> generatorView(Generator generator, String controlId, IidmStateView state) {
-        String mode = generator.getProperty(PROPERTY_MODE);
-        if (RegulatingControlMapping.isControlModeVoltage(mode)) {
-            return success(new RegulatingControlView(controlId, RegulatingControlType.REGULATING_CONTROL, false,
-                    state.getBoolean(generator, CgmesChangeTranslator.VOLTAGE_REGULATOR_ON, generator::isVoltageRegulatorOn),
-                    0.0, SteadyStateHypothesisExport.generatorTargetV(generator, context, state), "k"));
+    private Result<RegulatingControlView, String> holderView(RegulationRef regulation, String controlId, IidmStateView state) {
+        Identifiable<?> owner = regulation.owner();
+        if (regulation.regulation() == null) {
+            return failure(owner.getType() + " " + owner.getId() + " has no voltage regulation the steady state"
+                    + " hypothesis profile can express");
         }
-        if (RegulatingControlMapping.isControlModeReactivePower(mode)) {
-            RemoteReactivePowerControl reactivePowerControl = generator.getExtension(RemoteReactivePowerControl.class);
-            if (reactivePowerControl == null) {
-                return failure("generator " + generator.getId() + " regulates reactive power in CGMES but has no"
-                        + " remote reactive power control the target could be read from");
-            }
-            state.requireExtensionNotCreated(generator, RemoteReactivePowerControl.NAME);
-            // The import negates the target of a regulating terminal oriented the other way
-            double target = CgmesExportUtil.terminalSign(generator, "")
-                    * state.getExtensionDouble(generator, RemoteReactivePowerControl.NAME,
-                            CgmesChangeTranslator.RRPC_TARGET_Q, reactivePowerControl::getTargetQ);
-            return success(new RegulatingControlView(controlId, RegulatingControlType.REGULATING_CONTROL, false,
-                    state.getExtensionBoolean(generator, RemoteReactivePowerControl.NAME,
-                            CgmesChangeTranslator.RRPC_ENABLED, reactivePowerControl::isEnabled),
-                    0.0, target, "M"));
+        RegulationMode mode = regulation.mode(state);
+        if (mode == null) {
+            return failure("the voltage regulation of " + owner.getType() + " " + owner.getId()
+                    + " has no mode in this variant");
         }
-        return failure("generator " + generator.getId() + " has no CGMES regulating control mode the update can read");
+        if (regulation.holder() instanceof Generator generator && !agreesWithCgmesMode(generator, mode)) {
+            return failure("the voltage regulation of generator " + generator.getId() + " is in mode " + mode
+                    + ", but the CGMES update reads its RegulatingControl in the mode "
+                    + generator.getProperty(PROPERTY_MODE) + " recorded at import");
+        }
+        return success(SteadyStateHypothesisExport.regulatingControlView(regulation, controlId, context, state));
+    }
+
+    private static boolean agreesWithCgmesMode(Generator generator, RegulationMode mode) {
+        String cgmesMode = generator.getProperty(PROPERTY_MODE);
+        if (cgmesMode == null) {
+            // Not imported from CGMES: nothing on the receiving side to disagree with
+            return true;
+        }
+        return mode == RegulationMode.REACTIVE_POWER
+                ? RegulatingControlMapping.isControlModeReactivePower(cgmesMode)
+                : RegulatingControlMapping.isControlModeVoltage(cgmesMode);
     }
 
     /**
@@ -272,7 +280,9 @@ class CgmesChangeRegulatingControls {
                         == PhaseTapChanger.RegulationMode.CURRENT_LIMITER) {
             return success(currentLimiterView(phaseTapChanger, controlId, ref, state));
         }
-        RegulatingControlView view = SteadyStateHypothesisExport.regulatingControlView(transformer, end, controlId, ref, state);
+        RegulatingControlView view = tapChanger instanceof RatioTapChanger
+                ? SteadyStateHypothesisExport.regulatingControlView(ref.regulation(), controlId, context, state)
+                : SteadyStateHypothesisExport.regulatingControlView((PhaseTapChanger) tapChanger, controlId, ref, state);
         if (view == null) {
             return failure("tap changer " + controlId + " of " + transformer.getId()
                     + " has no regulation the steady state hypothesis profile can express");
@@ -290,20 +300,12 @@ class CgmesChangeRegulatingControls {
                 "none");
     }
 
-    private static Result<RegulatingControlView, String> viewOrFailure(RegulatingControlView view, Identifiable<?> user) {
-        return view != null ? success(view)
-                : failure(user.getType() + " " + user.getId() + " has no regulation the steady state hypothesis"
-                        + " profile can express");
-    }
-
     /**
      * One equipment regulating through a control, kept as a supplier so that the index costs one pass over the
      * network and nothing more: the view itself is only built for the controls an export actually writes.
      *
-     * @param regulatesIn  whether this equipment regulates in a given state of the network. Only read for tap changers, whose state the
-     *                     CGMES update cannot hold separately, so it is the plain IIDM flag and not the mode aware
-     *                     one that {@code CgmesChangeTranslator#generatorControlEnabled} computes for the
-     *                     {@code RegulatingCondEq.controlEnabled} of a generator
+     * @param regulatesIn  whether this equipment regulates in a given state of the network. Only read for tap changers,
+     *                     whose state the CGMES update cannot hold separately
      * @param isTapChanger whether this user is a tap changer, whose state the CGMES update cannot hold separately
      * @param view         the view of the control this user describes, in a given state of the network
      */
