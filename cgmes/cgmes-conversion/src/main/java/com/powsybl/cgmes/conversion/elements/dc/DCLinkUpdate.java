@@ -154,14 +154,6 @@ public class DCLinkUpdate {
         }
     }
 
-    /**
-     * The converter of the rectifier side, the only one whose targetPpcc carries the setpoint of the link: the
-     * inverter side always writes a targetPpcc of zero, so its presence says nothing about the setpoint.
-     */
-    private PropertyBag rectifierConverter() {
-        return mode == SIDE_1_RECTIFIER_SIDE_2_INVERTER ? converter1 : converter2;
-    }
-
     private void computeLossFactors() {
         // Loss factor is pole losses divided by incoming power.
         if (targetP == 0.0) {

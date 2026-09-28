@@ -291,8 +291,9 @@ public final class FastRouteCapabilities {
                 List.of(PropertyGroup.of("EnergySource.activePower", "EnergySource.reactivePower"))));
         table.add(ssh(Family.ASYNCHRONOUS_MACHINE, "asynchronousMachines", "AsynchronousMachine",
                 Set.of("AsynchronousMachine"),
-                List.of(new PropertyGroup(Set.of(ROTATING_MACHINE_P, ROTATING_MACHINE_Q),
-                        Set.of("AsynchronousMachine.asynchronousMachineType", REGULATING_COND_EQ_CONTROL_ENABLED)))));
+                // The update query reads the four properties as one required block (powsybl-core #4103)
+                List.of(PropertyGroup.of(ROTATING_MACHINE_P, ROTATING_MACHINE_Q,
+                        "AsynchronousMachine.asynchronousMachineType", REGULATING_COND_EQ_CONTROL_ENABLED))));
         // The query reads p and q in two optional blocks, but the conversion only takes either of them when BOTH
         // are bound (SynchronousMachineConversion: the updated power flow has to be "defined"). A difference that
         // states the active power alone would therefore be read, accepted and silently not applied, so the two
