@@ -18,6 +18,7 @@ import com.powsybl.triplestore.api.PropertyBag;
 import com.powsybl.triplestore.api.PropertyBags;
 
 import java.util.*;
+import java.util.function.Supplier;
 
 /**
  * @author Luma Zamarreño {@literal <zamarrenolm at aia.es>}
@@ -234,7 +235,19 @@ public final class Update {
     static void createFictitiousSwitchesForDisconnectedTerminalsDuringUpdate(Network network, CgmesModel cgmes, Context context) {
         if (createFictitiousSwitches(context)) {
             context.pushReportNode(CgmesReports.convertingDuringUpdateElementTypeReport(context.getReportNode(), CgmesNames.TERMINAL));
-            cgmes.terminals().forEach(cgmesTerminal -> TerminalConversion.create(network, cgmesTerminal, context));
+            // The switches already created are indexed once, on the first disconnected terminal, for the whole pass
+            Supplier<Set<String>> terminalsWithFictitiousSwitch = new Supplier<>() {
+                private Set<String> terminals;
+
+                @Override
+                public Set<String> get() {
+                    if (terminals == null) {
+                        terminals = TerminalConversion.terminalsWithFictitiousSwitch(network);
+                    }
+                    return terminals;
+                }
+            };
+            cgmes.terminals().forEach(cgmesTerminal -> TerminalConversion.create(network, cgmesTerminal, context, terminalsWithFictitiousSwitch));
             context.popReportNode();
         }
     }
