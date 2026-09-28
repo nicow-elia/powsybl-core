@@ -462,7 +462,8 @@ class CgmesChangeTranslator {
 
     private static String equipmentOnlyRegulation(String attribute) {
         return switch (attribute.substring(attribute.lastIndexOf('.') + 1)) {
-            case "RegulationMode" -> "the regulation mode is RegulatingControl.mode, which belongs to the EQ profile";
+            case "RegulationMode", "regulationMode" ->
+                "the regulation mode is RegulatingControl.mode, which belongs to the EQ profile";
             case "Terminal" -> "the regulating terminal is RegulatingControl.Terminal, which belongs to the EQ profile";
             default -> "a CGMES RegulatingControl has no slope, the " + attribute + " has no CGMES property";
         };
