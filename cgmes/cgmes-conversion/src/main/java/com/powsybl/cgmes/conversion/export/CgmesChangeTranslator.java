@@ -1034,7 +1034,7 @@ class CgmesChangeTranslator {
      * <p>IIDM holds one regulation target and a mode since powsybl-core #3699: the target of the mode the station is
      * not in is written as zero, and the import rebuilds the whole VoltageRegulation from {@code qPccControl} and the
      * target of that mode. The reactive power of the station, {@code ACDCConverter.q}, is its local reactive power
-     * target, so a change of it writes the converter block as well.</p>
+     * target, so a change of it writes the converter blocks of both stations of the line.</p>
      */
     private Result<CgmesPropertyBuffer, String> vscStationUpdates(VscConverterStation converter, String attribute) {
         RegulationRef regulation = RegulationRef.of(converter);
@@ -1049,7 +1049,9 @@ class CgmesChangeTranslator {
         if (!LOCAL_TARGET_Q.equals(attribute) || converter.getHvdcLine() == null) {
             return success(control);
         }
-        return success(merge(control, converterActivePowerUpdates(converter)));
+        // ACDCConverter.q travels in one block with targetPpcc, and the import takes a targetPpcc stated on either side
+        // as the power of the link (powsybl-core #4057): the zero of the inverter alone would bring the link down
+        return success(merge(control, bothConverterUpdates(converter.getHvdcLine())));
     }
 
     // Detailed DC model converters

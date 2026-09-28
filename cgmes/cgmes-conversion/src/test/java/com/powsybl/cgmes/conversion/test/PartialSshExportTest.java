@@ -51,6 +51,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -1046,6 +1047,27 @@ class PartialSshExportTest extends AbstractSerDeTest {
         assertHvdcSetpoint(result, "DCLineSegment-Vsc");
         assertVscVoltageSetpoint(result, 1);
         assertVscVoltageSetpoint(result, 2);
+    }
+
+    /**
+     * The local reactive power target of a VSC station is its {@code ACDCConverter.q}, which the import reads in one
+     * block with {@code targetPpcc}. That block of the inverter carries a {@code targetPpcc} of zero, and since
+     * powsybl-core #4057 the import takes a zero stated on either side as the power of the link: writing the block of
+     * the changed station alone would bring the link down. Both converters are therefore written, as for any change of
+     * the power of the link.
+     */
+    @ParameterizedTest(name = "converter {0}")
+    @ValueSource(ints = {1, 2})
+    void vscLocalReactiveTargetKeepsTheActivePowerOfTheLink(int side) throws IOException {
+        RoundTripResult result = roundTrip(HVDC_DIR, sender -> converter(sender, side).setLocalTargetQ(12.5),
+                "hvdc_EQ.xml", "hvdc_SSH.xml");
+
+        HvdcLine expected = result.sender().getHvdcLine("DCLineSegment-Vsc");
+        HvdcLine actual = result.receiver().getHvdcLine("DCLineSegment-Vsc");
+        assertEquals(12.5, converter(result.receiver(), side).getLocalTargetQ(), TOLERANCE);
+        assertEquals(expected.getActivePowerSetpoint(), actual.getActivePowerSetpoint(), TOLERANCE);
+        assertEquals(expected.getMaxP(), actual.getMaxP(), TOLERANCE);
+        assertEquals(expected.getConvertersMode(), actual.getConvertersMode());
     }
 
     /**
