@@ -14,6 +14,7 @@ import com.powsybl.iidm.network.ActivePowerLimits;
 import com.powsybl.iidm.network.ApparentPowerLimits;
 import com.powsybl.iidm.network.BoundaryLine;
 import com.powsybl.iidm.network.CurrentLimits;
+import com.powsybl.iidm.network.Generator;
 import com.powsybl.iidm.network.HvdcLine;
 import com.powsybl.iidm.network.LccConverterStation;
 import com.powsybl.iidm.network.Line;
@@ -27,6 +28,7 @@ import com.powsybl.iidm.network.VscConverterStation;
 import com.powsybl.iidm.network.events.NetworkEvent;
 import com.powsybl.iidm.network.extensions.ActivePowerControl;
 import com.powsybl.iidm.network.extensions.ReferencePriority;
+import com.powsybl.iidm.network.regulation.RegulationMode;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -164,6 +166,14 @@ public final class RecordedChangeScenarios {
     private static Scenario scenario(String name, Properties importParams, String dir, String[] files,
                                      Consumer<Network> prepare, Consumer<Network> forward, Consumer<Network> backward) {
         return new Scenario(name, importParams, dir, files, prepare, forward, backward);
+    }
+
+    /**
+     * Make a converter station regulate its own terminal explicitly, with the target it regulates to now, which is
+     * what a switch to reactive power regulation needs in IIDM (powsybl-core #3699).
+     */
+    static void regulateOwnTerminal(VscConverterStation station) {
+        station.getVoltageRegulation().setTerminal(station.getTerminal(), station.getRegulatingTargetV());
     }
 
     private static VscConverterStation vsc(Network network, int side) {
@@ -379,11 +389,26 @@ public final class RecordedChangeScenarios {
         scenarios.add(scenario("equivalentInjectionSetpoints", GENERATOR_DIR, GENERATOR_FILES,
                 n -> n.getGenerator("EquivalentInjection").setTargetP(-70.0).setTargetQ(15.0),
                 n -> n.getGenerator("EquivalentInjection").setTargetP(-184.0).setTargetQ(-0.0)));
+        // Since powsybl-core #3699 the regulation of the injection is a VoltageRegulation, which the fixture does not
+        // give it. Creating one is not a recorded change and cannot be undone by a difference (gap G1 of plan 21), so
+        // the preparation creates it, switched off, with a target the regulation can later be switched on with
         scenarios.add(scenario("equivalentInjectionRegulation", GENERATOR_DIR, GENERATOR_FILES,
-                n -> n.getGenerator("EquivalentInjection")
-                        .setProperty(Conversion.PROPERTY_REGULATION_CAPABILITY, "true"),
-                n -> n.getGenerator("EquivalentInjection").setTargetV(401.0).setVoltageRegulatorOn(true),
-                n -> n.getGenerator("EquivalentInjection").setVoltageRegulatorOn(false).setTargetV(Double.NaN)));
+                n -> {
+                    Generator injection = n.getGenerator("EquivalentInjection");
+                    injection.setProperty(Conversion.PROPERTY_REGULATION_CAPABILITY, "true");
+                    injection.newVoltageRegulation().withMode(RegulationMode.VOLTAGE).withRegulating(false).build();
+                    injection.setLocalTargetV(400.0);
+                },
+                n -> {
+                    Generator injection = n.getGenerator("EquivalentInjection");
+                    injection.setLocalTargetV(401.0);
+                    injection.getVoltageRegulation().setRegulating(true);
+                },
+                n -> {
+                    Generator injection = n.getGenerator("EquivalentInjection");
+                    injection.getVoltageRegulation().setRegulating(false);
+                    injection.setLocalTargetV(400.0);
+                }));
         scenarios.add(scenario("generatorReferencePriority", GENERATOR_DIR, GENERATOR_FILES,
                 n -> ReferencePriority.set(n.getGenerator(SYNCHRONOUS_MACHINE), 3),
                 n -> ReferencePriority.set(n.getGenerator(SYNCHRONOUS_MACHINE), 0)));
@@ -485,10 +510,24 @@ public final class RecordedChangeScenarios {
         scenarios.add(scenario("vscVoltageSetpoint", HVDC_DIR, HVDC_FILES,
                 n -> vsc(n, 1).setVoltageSetpoint(396.54),
                 n -> vsc(n, 1).setVoltageSetpoint(392.54)));
+        // Switching a station from voltage to reactive power regulation is a change of the mode of its
+        // VoltageRegulation since powsybl-core #3699 (the deprecated setVoltageRegulatorOn(false) now keeps the voltage
+        // mode and only stops regulating). IIDM only accepts reactive power regulation with a regulating terminal,
+        // which is not a per variant value and not a steady state one, so the preparation sets it: the station
+        // regulates its own terminal, as the CGMES import sets it for reactive power regulation
         scenarios.add(scenario("vscReactivePowerSetpointAndRegulation", HVDC_DIR, HVDC_FILES,
-                n -> vsc(n, 2).setReactivePowerSetpoint(20.0),
-                n -> vsc(n, 2).setVoltageRegulatorOn(false).setReactivePowerSetpoint(30.0),
-                n -> vsc(n, 2).setReactivePowerSetpoint(20.0).setVoltageRegulatorOn(true)));
+                n -> {
+                    vsc(n, 2).setLocalTargetQ(20.0);
+                    regulateOwnTerminal(vsc(n, 2));
+                },
+                n -> {
+                    vsc(n, 2).getVoltageRegulation().setMode(RegulationMode.REACTIVE_POWER);
+                    vsc(n, 2).getVoltageRegulation().setTargetValue(30.0);
+                },
+                n -> {
+                    vsc(n, 2).getVoltageRegulation().setTargetValue(vsc(n, 2).getLocalTargetV());
+                    vsc(n, 2).getVoltageRegulation().setMode(RegulationMode.VOLTAGE);
+                }));
 
         // HVDC, detailed model
         scenarios.add(scenario("detailedVscReactivePowerSetpoint", detailedDcModel(), DC_DIR, DC_FILES,

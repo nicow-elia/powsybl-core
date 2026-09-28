@@ -48,10 +48,13 @@ class CgmesDiffExportInternalsTest {
      * inactive setpoint of a converter to zero. A change of it is therefore exported as the object description that
      * does change, without a statement of its own. The DC voltage target of a converter controlling its active
      * power is the same case: {@code ACDCConverter.targetUdc} is zero while the converter is in that mode.</p>
+     *
+     * <p>Since powsybl-core #3699 the local reactive power target of a compensator is its
+     * {@code StaticVarCompensator.q} and is always read; only the voltage target of a compensator regulating reactive
+     * power remains inexpressible.</p>
      */
     private static final Set<String> INACTIVE_SETPOINT_KEYS = Set.of(
-            "StaticVarCompensator-V.reactivePowerSetpoint",
-            "StaticVarCompensator-Q.voltageSetpoint",
+            "StaticVarCompensator-Q.localTargetV",
             "CSC_1_1.targetVdc");
 
     static List<Scenario> scenarios() {
@@ -86,7 +89,7 @@ class CgmesDiffExportInternalsTest {
     private static Set<String> unconsumedKeysOf(Scenario scenario) {
         Network network = scenario.load();
         List<NetworkEvent> events = RecordedChangeScenarios.record(network, scenario.forwardChange());
-        CompactedChanges changes = EventCompactor.compact(events, network.getVariantManager().getWorkingVariantId());
+        CompactedChanges changes = EventCompactor.compact(events, network.getVariantManager().getWorkingVariantId(), network);
         DifferenceModelBuilder builder = new DifferenceModelBuilder(network, new CgmesExportContext(network), changes,
                 new CgmesDiffExport.ExportOptions());
         builder.build();
@@ -110,7 +113,7 @@ class CgmesDiffExportInternalsTest {
         options.header(SSH).addDependentOn(sourceEquipmentId);
         CgmesExportContext context = new CgmesExportContext(network);
         DifferenceModelBuilder builder = new DifferenceModelBuilder(network, context,
-                EventCompactor.compact(List.of(), null), options);
+                EventCompactor.compact(List.of(), null, null), options);
 
         // No mapping produces equipment statements yet, so the two buffers are built by hand
         CgmesPropertyBuffer after = new CgmesPropertyBuffer();
@@ -145,7 +148,7 @@ class CgmesDiffExportInternalsTest {
         options.header(SSH).clearDependencies().addDependentOn("urn:uuid:explicit");
 
         DifferenceModelBuilder builder = new DifferenceModelBuilder(network, new CgmesExportContext(network),
-                EventCompactor.compact(List.of(), null), options);
+                EventCompactor.compact(List.of(), null, null), options);
         CgmesPropertyBuffer after = new CgmesPropertyBuffer();
         after.mergeFrom(CgmesPropertyBuffer.newUpdates("ConformLoad", "EnergyConsumer").value("EnergyConsumer.p", 12.5)
                 .object(EQ, "ConformLoad", "EnergyConsumer").value("EnergyConsumer.pfixed", 2.0).updates());

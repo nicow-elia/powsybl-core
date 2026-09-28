@@ -73,15 +73,10 @@ class CgmesDiffRoundTripTest {
             // The steady state hypothesis has no property for the setpoint of a regulation mode that is not active,
             // so that value cannot travel at all. Both receivers keep what their equipment model
             // gave them.
-            "StaticVarCompensator-V.reactivePowerSetpoint",
-            "StaticVarCompensator-Q.voltageSetpoint",
-            "DCLineSegment-Vsc-VscConverter-2.voltageSetpoint",
-            "DCLineSegment-Vsc-VscConverter-2.reactivePowerSetpoint",
+            // (powsybl-core #3699: the voltage target of a compensator regulating reactive power is its local one)
+            "StaticVarCompensator-Q.localTargetV",
+            "StaticVarCompensator-Q.regulatingTargetV",
             "CSC_1_1.targetVdc",
-            // Same reason for an equivalent injection whose regulation is switched off: cim:EquivalentInjection
-            // .regulationTarget is only written while the regulation is on, so the receiver keeps the last target
-            // instead of clearing it. The regulation itself is off in both networks.
-            "EquivalentInjection.targetV",
             // A detailed converter that changes to DC voltage control has cim:ACDCConverter.targetPpcc = 0, and the
             // importer turns a converter that does not control its active power into one with an undefined target
             "CSC_1_1.targetP",
@@ -93,7 +88,10 @@ class CgmesDiffRoundTripTest {
             // The importer represents a terminal that is disconnected in a node/breaker voltage level by a
             // fictitious switch. Opening or closing a branch that CGMES models as a switch changes the state of its
             // terminals, so any update closes that switch, while setting Switch.open on a network in memory does not
-            "SeriesCompensator-T1_SW_fict.open");
+            "SeriesCompensator-T1_SW_fict.open",
+            // Since powsybl-core #4085 an update that disconnects a terminal of a node/breaker voltage level creates
+            // that fictitious switch when it does not exist yet: undoing the closing of such a branch creates it
+            "SeriesCompensator-T2_SW_fict.open");
 
     /**
      * The single case in which a {@code CHANGED_ONLY} difference cannot be undone, with the reason.

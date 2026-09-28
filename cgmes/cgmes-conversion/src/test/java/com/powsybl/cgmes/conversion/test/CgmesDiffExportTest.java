@@ -44,6 +44,7 @@ import com.powsybl.iidm.network.events.NetworkEvent;
 import com.powsybl.iidm.network.events.UpdateNetworkEvent;
 import com.powsybl.iidm.network.extensions.ActivePowerControl;
 import com.powsybl.iidm.network.extensions.ReferencePriority;
+import com.powsybl.iidm.network.regulation.RegulationMode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -401,15 +402,20 @@ class CgmesDiffExportTest extends AbstractSerDeTest {
     void vscSetpointsAndRegulationState() {
         Network network = readCgmesResources(HVDC_DIR, "hvdc_EQ.xml", "hvdc_SSH.xml");
         VscConverterStation converter = (VscConverterStation) network.getHvdcLine("DCLineSegment-Vsc").getConverterStation2();
-        converter.setReactivePowerSetpoint(20.0);
-        DifferenceModel model = diff(network, RecordedChangeScenarios.record(network,
-                n -> converter.setVoltageRegulatorOn(false).setReactivePowerSetpoint(30.0)));
+        converter.setLocalTargetQ(20.0);
+        RecordedChangeScenarios.regulateOwnTerminal(converter);
+        // Switching to reactive power regulation is a change of the mode since powsybl-core #3699
+        DifferenceModel model = diff(network, RecordedChangeScenarios.record(network, n -> {
+            converter.getVoltageRegulation().setMode(RegulationMode.REACTIVE_POWER);
+            converter.getVoltageRegulation().setTargetValue(30.0);
+        }));
 
         String subject = "DCLineSegment-Vsc-VscConverter-2";
         assertEquals("VsQpccControlKind.voltagePcc", value(model.reverse(), subject, "VsConverter.qPccControl"));
         assertEquals("VsQpccControlKind.reactivePcc", value(model.forward(), subject, "VsConverter.qPccControl"));
-        // The import reads the setpoint back as -terminalSign * targetQpcc, so the export negates it
-        assertEquals("-20", value(model.reverse(), subject, "VsConverter.targetQpcc"));
+        // The import reads the setpoint back as -terminalSign * targetQpcc, so the export negates it. The target of
+        // the mode the station is not in is written as zero, as the full export does (powsybl-core #3699)
+        assertEquals("0", value(model.reverse(), subject, "VsConverter.targetQpcc"));
         assertEquals("-30", value(model.forward(), subject, "VsConverter.targetQpcc"));
     }
 
@@ -502,7 +508,7 @@ class CgmesDiffExportTest extends AbstractSerDeTest {
         });
         CgmesDiffExport.Result result = CgmesDiffExport.toDifferences(network, events, new ExportOptions());
         assertTrue(result.differences().isEmpty());
-        assertEquals(PartialSshExport.compactEvents(events), result.exportedEvents());
+        assertEquals(PartialSshExport.compactEvents(events, network), result.exportedEvents());
     }
 
     @Test

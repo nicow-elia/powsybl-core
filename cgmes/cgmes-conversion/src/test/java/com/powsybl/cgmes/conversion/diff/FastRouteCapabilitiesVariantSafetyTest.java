@@ -42,14 +42,16 @@ class FastRouteCapabilitiesVariantSafetyTest {
     /** The verdict the authoritative table of the documentation gives each family. */
     private static final Map<Family, VariantSafety> EXPECTED = Map.ofEntries(
             Map.entry(Family.SWITCH, VariantSafety.SAFE),
-            Map.entry(Family.TERMINAL, VariantSafety.SAFE),
+            // powsybl-core #4085: disconnecting a node/breaker terminal may create its fictitious switch
+            Map.entry(Family.TERMINAL, VariantSafety.NETWORK_DEPENDENT),
             Map.entry(Family.DC_TERMINAL, VariantSafety.SAFE),
             Map.entry(Family.ENERGY_CONSUMER, VariantSafety.SAFE),
             Map.entry(Family.ENERGY_SOURCE, VariantSafety.SAFE),
             Map.entry(Family.ASYNCHRONOUS_MACHINE, VariantSafety.SAFE),
             Map.entry(Family.SYNCHRONOUS_MACHINE, VariantSafety.NETWORK_DEPENDENT),
             Map.entry(Family.EXTERNAL_NETWORK_INJECTION, VariantSafety.NETWORK_DEPENDENT),
-            Map.entry(Family.EQUIVALENT_INJECTION, VariantSafety.SAFE),
+            // powsybl-core #3699: switching the regulation on may create the VoltageRegulation of the generator
+            Map.entry(Family.EQUIVALENT_INJECTION, VariantSafety.NETWORK_DEPENDENT),
             Map.entry(Family.GENERATING_UNIT, VariantSafety.NETWORK_DEPENDENT),
             Map.entry(Family.STATIC_VAR_COMPENSATOR, VariantSafety.SAFE),
             Map.entry(Family.SHUNT_COMPENSATOR, VariantSafety.SAFE),

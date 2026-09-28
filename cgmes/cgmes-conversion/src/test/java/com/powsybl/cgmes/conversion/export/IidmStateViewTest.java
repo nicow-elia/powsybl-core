@@ -54,7 +54,7 @@ class IidmStateViewTest {
     }
 
     private static IidmStateView before(NetworkEvent... events) {
-        CompactedChanges changes = EventCompactor.compact(List.of(events), VARIANT);
+        CompactedChanges changes = EventCompactor.compact(List.of(events), VARIANT, null);
         return IidmStateView.before(changes);
     }
 
@@ -155,9 +155,9 @@ class IidmStateViewTest {
     void extensionAttributesAreNamespacedByTheirExtension() {
         IidmStateView state = before(
                 new ExtensionUpdateNetworkEvent(load.getId(), APC, "enabled", VARIANT, true, false),
-                new ExtensionUpdateNetworkEvent(load.getId(), "generatorRemoteReactivePowerControl", "enabled", VARIANT, false, true));
+                new ExtensionUpdateNetworkEvent(load.getId(), "referencePriorities", "enabled", VARIANT, false, true));
         assertTrue(state.getExtensionBoolean(load, APC, "enabled", () -> false));
-        assertFalse(state.getExtensionBoolean(load, "generatorRemoteReactivePowerControl", "enabled", () -> true));
+        assertFalse(state.getExtensionBoolean(load, "referencePriorities", "enabled", () -> true));
     }
 
     @Test
@@ -290,7 +290,7 @@ class IidmStateViewTest {
     @Test
     void changesOfAnotherVariantAreNotInTheOverlay() {
         CompactedChanges changes = EventCompactor.compact(
-                List.of(new UpdateNetworkEvent(load.getId(), "p0", "OtherVariant", 1.0, 2.0)), VARIANT);
+                List.of(new UpdateNetworkEvent(load.getId(), "p0", "OtherVariant", 1.0, 2.0)), VARIANT, network);
         IidmStateView state = IidmStateView.before(changes);
         assertEquals(load.getP0(), state.getDouble(load, "p0", load::getP0), TOLERANCE);
         assertTrue(state.unconsumedKeys().isEmpty());

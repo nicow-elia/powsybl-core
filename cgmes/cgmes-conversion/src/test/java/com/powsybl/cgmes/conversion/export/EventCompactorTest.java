@@ -8,6 +8,11 @@
 package com.powsybl.cgmes.conversion.export;
 
 import com.powsybl.cgmes.conversion.export.EventCompactor.CompactedChanges;
+import com.powsybl.iidm.network.BoundaryLine;
+import com.powsybl.iidm.network.Generator;
+import com.powsybl.iidm.network.Network;
+import com.powsybl.iidm.network.NetworkEventRecorder;
+import com.powsybl.iidm.network.StaticVarCompensator;
 import com.powsybl.iidm.network.events.CreationNetworkEvent;
 import com.powsybl.iidm.network.events.ExtensionCreationNetworkEvent;
 import com.powsybl.iidm.network.events.ExtensionUpdateNetworkEvent;
@@ -17,6 +22,9 @@ import com.powsybl.iidm.network.events.PermanentLimitInfo;
 import com.powsybl.iidm.network.events.RemovalNetworkEvent;
 import com.powsybl.iidm.network.events.TemporaryLimitInfo;
 import com.powsybl.iidm.network.events.UpdateNetworkEvent;
+import com.powsybl.iidm.network.test.BoundaryLineNetworkFactory;
+import com.powsybl.iidm.network.test.EurostagTutorialExample1Factory;
+import com.powsybl.iidm.network.test.SvcTestCaseFactory;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -41,7 +49,7 @@ class EventCompactorTest {
     void keepsLastEventAndFirstOldValue() {
         UpdateNetworkEvent first = update("L", "p0", 10.0, 11.0);
         UpdateNetworkEvent second = update("L", "p0", 11.0, 12.5);
-        CompactedChanges changes = EventCompactor.compact(List.of(first, second), VARIANT);
+        CompactedChanges changes = EventCompactor.compact(List.of(first, second), VARIANT, null);
 
         assertEquals(List.of(second), changes.events());
         assertTrue(changes.hasChange("L", "p0"));
@@ -59,7 +67,7 @@ class EventCompactorTest {
     void firstOldValueMayBeNullAndIsKeptWhenTheAttributeChangesAgain() {
         CompactedChanges changes = EventCompactor.compact(List.of(
                 update("S", "sectionCount", null, 2),
-                update("S", "sectionCount", 2, 1)), VARIANT);
+                update("S", "sectionCount", 2, 1)), VARIANT, null);
 
         assertTrue(changes.hasChange("S", "sectionCount"));
         assertNull(changes.firstOldValue("S", "sectionCount"));
@@ -71,12 +79,12 @@ class EventCompactorTest {
         ExtensionUpdateNetworkEvent enabledOfOne =
                 new ExtensionUpdateNetworkEvent("G", "activePowerControl", "enabled", VARIANT, true, false);
         ExtensionUpdateNetworkEvent enabledOfAnother =
-                new ExtensionUpdateNetworkEvent("G", "generatorRemoteReactivePowerControl", "enabled", VARIANT, false, true);
-        CompactedChanges changes = EventCompactor.compact(List.of(enabledOfOne, enabledOfAnother), VARIANT);
+                new ExtensionUpdateNetworkEvent("G", "referencePriorities", "enabled", VARIANT, false, true);
+        CompactedChanges changes = EventCompactor.compact(List.of(enabledOfOne, enabledOfAnother), VARIANT, null);
 
         assertEquals(List.of(enabledOfOne, enabledOfAnother), changes.events());
         assertEquals(true, changes.firstOldValue("G", "activePowerControl#enabled"));
-        assertEquals(false, changes.firstOldValue("G", "generatorRemoteReactivePowerControl#enabled"));
+        assertEquals(false, changes.firstOldValue("G", "referencePriorities#enabled"));
         assertFalse(changes.hasChange("G", "enabled"));
     }
 
@@ -84,7 +92,7 @@ class EventCompactorTest {
     void eventsOfOtherVariantsDoNotFeedOldValues() {
         NetworkEvent otherVariant = new UpdateNetworkEvent("L", "p0", "OtherVariant", 1.0, 2.0);
         NetworkEvent thisVariant = update("L", "p0", 10.0, 12.5);
-        CompactedChanges changes = EventCompactor.compact(List.of(otherVariant, thisVariant), VARIANT);
+        CompactedChanges changes = EventCompactor.compact(List.of(otherVariant, thisVariant), VARIANT, null);
 
         // Both are still compacted, only the previous value comes from the change of this variant
         assertEquals(List.of(thisVariant), changes.events());
@@ -94,7 +102,7 @@ class EventCompactorTest {
     @Test
     void eventsWithoutAVariantAlwaysFeedOldValues() {
         NetworkEvent noVariant = new UpdateNetworkEvent("L", "p0", null, 10.0, 12.5);
-        CompactedChanges changes = EventCompactor.compact(List.of(noVariant), VARIANT);
+        CompactedChanges changes = EventCompactor.compact(List.of(noVariant), VARIANT, null);
         assertEquals(10.0, changes.firstOldValue("L", "p0"));
     }
 
@@ -106,7 +114,7 @@ class EventCompactorTest {
         NetworkEvent first = update("L", "p0", 10.0, 11.0);
         NetworkEvent second = update("L", "p0", 11.0, 12.5);
         CompactedChanges changes =
-                EventCompactor.compact(List.of(creation, first, removal, second, extensionCreation), VARIANT);
+                EventCompactor.compact(List.of(creation, first, removal, second, extensionCreation), VARIANT, null);
 
         assertEquals(List.of(creation, removal, second, extensionCreation), changes.events());
         assertTrue(changes.extensionCreated("G", "referencePriorities"));
@@ -140,7 +148,7 @@ class EventCompactorTest {
         UpdateNetworkEvent tatl600 = temporaryLimit("A", 600, 300.0, 310.0);
         UpdateNetworkEvent tatl900 = temporaryLimit("A", 900, 400.0, 410.0);
         CompactedChanges changes =
-                EventCompactor.compact(List.of(groupA, groupB, tatl600, tatl900), VARIANT);
+                EventCompactor.compact(List.of(groupA, groupB, tatl600, tatl900), VARIANT, null);
 
         assertEquals(List.of(groupA, groupB, tatl600, tatl900), changes.events());
         assertEquals(100.0, ((PermanentLimitInfo) changes.firstOldValue("L", "limits1_CURRENT.permanentLimit@A")).value());
@@ -157,8 +165,8 @@ class EventCompactorTest {
     @Test
     void selectionEventsKeepThePlainAttribute() {
         UpdateNetworkEvent selection = update("L", "limits1_CURRENT", "someLimitsObject", null);
-        CompactedChanges changes = EventCompactor.compact(List.of(selection), VARIANT);
-        assertEquals("limits1_CURRENT", EventCompactor.attributeKey(selection));
+        CompactedChanges changes = EventCompactor.compact(List.of(selection), VARIANT, null);
+        assertEquals("limits1_CURRENT", EventCompactor.attributeKey(selection, (Network) null));
         assertTrue(changes.hasChange("L", "limits1_CURRENT"));
     }
 
@@ -166,8 +174,8 @@ class EventCompactorTest {
     void wholeReplacementsAreKeyedPerGroup() {
         UpdateNetworkEvent replacement = update("L", "limits1_CURRENT",
                 new OperationalLimitsInfo(null, "A", true), new OperationalLimitsInfo(null, "A", true));
-        CompactedChanges changes = EventCompactor.compact(List.of(replacement), VARIANT);
-        assertEquals("limits1_CURRENT@A", EventCompactor.attributeKey(replacement));
+        CompactedChanges changes = EventCompactor.compact(List.of(replacement), VARIANT, null);
+        assertEquals("limits1_CURRENT@A", EventCompactor.attributeKey(replacement, (Network) null));
         assertTrue(changes.hasChange("L", "limits1_CURRENT@A"));
     }
 
@@ -175,7 +183,7 @@ class EventCompactorTest {
     @Test
     void anAlreadyRefinedKeyIsKept() {
         UpdateNetworkEvent probe = update("L", "limits1_CURRENT.permanentLimit@A", null, null);
-        assertEquals("limits1_CURRENT.permanentLimit@A", EventCompactor.attributeKey(probe));
+        assertEquals("limits1_CURRENT.permanentLimit@A", EventCompactor.attributeKey(probe, (Network) null));
     }
 
     @Test
@@ -183,13 +191,13 @@ class EventCompactorTest {
         UpdateNetworkEvent member = permanentLimit("A", 100.0, 110.0);
         UpdateNetworkEvent whole = update("L", "limits1_CURRENT",
                 new OperationalLimitsInfo(null, "A", true), new OperationalLimitsInfo(null, "A", true));
-        CompactedChanges changes = EventCompactor.compact(List.of(member, whole), VARIANT);
+        CompactedChanges changes = EventCompactor.compact(List.of(member, whole), VARIANT, null);
 
         assertEquals(0, changes.firstEventIndex("L", "limits1_CURRENT.permanentLimit@A"));
         assertEquals(1, changes.firstEventIndex("L", "limits1_CURRENT@A"));
         assertEquals(-1, changes.firstEventIndex("L", "limits2_CURRENT@A"));
 
-        CompactedChanges reversed = EventCompactor.compact(List.of(whole, member), VARIANT);
+        CompactedChanges reversed = EventCompactor.compact(List.of(whole, member), VARIANT, null);
         assertEquals(0, reversed.firstEventIndex("L", "limits1_CURRENT@A"));
         assertEquals(1, reversed.firstEventIndex("L", "limits1_CURRENT.permanentLimit@A"));
     }
@@ -208,6 +216,66 @@ class EventCompactorTest {
 
         // The public contract: one change per attribute, in the order of its last occurrence
         assertEquals(List.of(creation, other, second, extensionAgain), PartialSshExport.compactEvents(events));
-        assertEquals(PartialSshExport.compactEvents(events), EventCompactor.compact(events, null).events());
+        assertEquals(PartialSshExport.compactEvents(events), EventCompactor.compact(events, null, null).events());
+    }
+
+    // The echoes of the deprecated voltage regulation setters (powsybl-core #3699), see LegacyRegulationKeys
+
+    private static List<NetworkEvent> recordedBy(Network network, Runnable change) {
+        NetworkEventRecorder recorder = new NetworkEventRecorder();
+        network.addListener(recorder);
+        change.run();
+        network.removeListener(recorder);
+        return List.copyOf(recorder.getEvents());
+    }
+
+    /** The canonical event and its echo compact to one key, and the old value kept is the canonical one. */
+    @Test
+    @SuppressWarnings("removal")
+    void aFlagEchoCompactsWithItsCanonicalEvent() {
+        Network network = EurostagTutorialExample1Factory.create();
+        Generator generator = network.getGenerator("GEN");
+        boolean regulating = generator.getVoltageRegulation().isRegulating();
+        List<NetworkEvent> events = recordedBy(network, () -> {
+            generator.setVoltageRegulatorOn(!regulating);
+            generator.getVoltageRegulation().setRegulating(regulating);
+            generator.setVoltageRegulatorOn(!regulating);
+        });
+        // Canonical and echo, canonical alone, canonical and echo
+        assertEquals(5, events.size());
+        CompactedChanges changes = EventCompactor.compact(events, VARIANT, network);
+
+        assertEquals(List.of(events.get(4)), changes.events());
+        assertEquals(regulating, changes.firstOldValue("GEN", CgmesChangeTranslator.VR_REGULATING));
+        assertFalse(changes.hasChange("GEN", "voltageRegulatorOn"));
+    }
+
+    /** The echo of a target is dropped: the target was reported under its own name first. */
+    @Test
+    @SuppressWarnings("removal")
+    void aTargetEchoIsDropped() {
+        Network network = SvcTestCaseFactory.create();
+        StaticVarCompensator svc = network.getStaticVarCompensator("SVC2");
+        double before = svc.getLocalTargetV();
+        List<NetworkEvent> events = recordedBy(network, () -> svc.setVoltageSetpoint(before + 1.0));
+        assertEquals(2, events.size());
+        CompactedChanges changes = EventCompactor.compact(events, VARIANT, network);
+
+        assertEquals(List.of(events.get(0)), changes.events());
+        assertEquals(before, changes.firstOldValue("SVC2", CgmesChangeTranslator.LOCAL_TARGET_V));
+        assertFalse(changes.hasChange("SVC2", "voltageSetpoint"));
+        assertNull(EventCompactor.attributeKey((UpdateNetworkEvent) events.get(1), network));
+    }
+
+    /** A boundary line generation is not a voltage regulation holder: its targetV is a value of its own. */
+    @Test
+    void aBoundaryLineTargetIsNotAnEcho() {
+        Network network = BoundaryLineNetworkFactory.createWithGeneration();
+        BoundaryLine.Generation generation = network.getBoundaryLine("BL").getGeneration();
+        List<NetworkEvent> events = recordedBy(network, () -> generation.setTargetV(generation.getTargetV() + 1.0));
+        CompactedChanges changes = EventCompactor.compact(events, VARIANT, network);
+
+        assertEquals(events, changes.events());
+        assertTrue(changes.hasChange("BL", CgmesChangeTranslator.TARGET_V));
     }
 }

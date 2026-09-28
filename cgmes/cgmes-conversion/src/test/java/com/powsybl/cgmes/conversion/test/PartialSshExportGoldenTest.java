@@ -9,6 +9,7 @@ package com.powsybl.cgmes.conversion.test;
 
 import com.powsybl.cgmes.conversion.export.PartialSshExport;
 import com.powsybl.cgmes.conversion.test.RecordedChangeScenarios.Scenario;
+import com.powsybl.iidm.network.BoundaryLine;
 import com.powsybl.iidm.network.LoadingLimits;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.events.ExtensionUpdateNetworkEvent;
@@ -31,6 +32,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -97,7 +99,8 @@ class PartialSshExportGoldenTest {
 
             Map<String, Object> firstOld = new LinkedHashMap<>();
             for (NetworkEvent event : forward) {
-                String key = key(event);
+                String key = event instanceof UpdateNetworkEvent update && isVoltageRegulationEcho(update, network)
+                        ? null : key(event);
                 // containsKey, not putIfAbsent: a recorded old value may legitimately be null, which putIfAbsent
                 // would treat as no value at all
                 if (key != null && !firstOld.containsKey(key)) {
@@ -156,6 +159,22 @@ class PartialSshExportGoldenTest {
         if (key != null) {
             lastNew.put(key, newValue(event));
         }
+    }
+
+    /**
+     * The deprecated voltage regulation setters of IIDM repeat the change the VoltageRegulation reported under its
+     * own name, and the old value of that echo is not always the value the attribute had (powsybl-core #3699, F3 of
+     * plan 21), so the check reads the canonical events only. A boundary line generation is no voltage regulation
+     * holder: its targetV is a value of its own.
+     */
+    private static final Set<String> VOLTAGE_REGULATION_ECHOES = Set.of("voltageRegulatorOn", "targetV",
+            "targetDeadband", "voltageSetpoint", "reactivePowerSetpoint", "regulating", "regulationMode",
+            "regulatingTerminal");
+
+    private static boolean isVoltageRegulationEcho(UpdateNetworkEvent update, Network network) {
+        return VOLTAGE_REGULATION_ECHOES.contains(update.attribute())
+                && !(network.getIdentifiable(update.id()) instanceof BoundaryLine)
+                || update.attribute().matches("^ratioTapChanger[123]?\\.(regulating|regulationMode|targetDeadband|regulationTerminal|regulationValue)$");
     }
 
     private static String key(NetworkEvent event) {

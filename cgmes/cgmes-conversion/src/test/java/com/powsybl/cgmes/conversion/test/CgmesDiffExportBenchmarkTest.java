@@ -168,7 +168,7 @@ class CgmesDiffExportBenchmarkTest {
                 () -> CgmesDiffExport.toDifferences(network, events, new CgmesDiffExport.ExportOptions()).differences(),
                 diffExport(network, events),
                 () -> new CgmesExportContext(network),
-                () -> PartialSshExport.compactEvents(events));
+                () -> PartialSshExport.compactEvents(events, network));
         double statements = measured[0];
         double document = measured[1];
         double context = measured[2];

@@ -45,9 +45,12 @@ import com.powsybl.iidm.network.events.UpdateNetworkEvent;
 import com.powsybl.iidm.network.extensions.ActivePowerControl;
 import com.powsybl.iidm.network.extensions.ActivePowerControlAdder;
 import com.powsybl.iidm.network.extensions.ReferencePriority;
-import com.powsybl.iidm.network.extensions.RemoteReactivePowerControl;
-import com.powsybl.iidm.network.extensions.RemoteReactivePowerControlAdder;
+import com.powsybl.iidm.network.regulation.RegulationMode;
+import com.powsybl.iidm.network.regulation.VoltageRegulation;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -63,6 +66,7 @@ import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static com.powsybl.cgmes.conversion.test.ConversionUtil.readCgmesResources;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -158,7 +162,7 @@ class PartialSshExportTest extends AbstractSerDeTest {
 
         // Nothing can be dropped when unsupported changes are rejected, so every compacted change has to be
         // reported as exported. This catches a mapping that silently writes nothing without rejecting.
-        assertEquals(PartialSshExport.compactEvents(recorder.getEvents()), exportedEvents);
+        assertEquals(PartialSshExport.compactEvents(recorder.getEvents(), sender), exportedEvents);
 
         Properties updateParameters = new Properties();
         updateParameters.putAll(importParameters);
@@ -553,6 +557,89 @@ class PartialSshExportTest extends AbstractSerDeTest {
     }
 
     /**
+     * The deprecated voltage regulation setters of IIDM report every change twice, under the name of the
+     * VoltageRegulation and under their historical one (powsybl-core #3699). The export has to write the same file
+     * whichever of the two APIs the change was made with.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("deprecatedSetterTwins")
+    @SuppressWarnings("removal")
+    void deprecatedSettersExportLikeTheVoltageRegulation(String name, String dir, String[] files,
+                                                         Consumer<Network> throughDeprecatedSetter,
+                                                         Consumer<Network> throughVoltageRegulation) {
+        assertEquals(partialSshOf(dir, files, throughVoltageRegulation), partialSshOf(dir, files, throughDeprecatedSetter), name);
+    }
+
+    @SuppressWarnings("removal")
+    static Stream<Arguments> deprecatedSetterTwins() {
+        String[] generator = {"generator_EQ.xml", "generator_SSH.xml"};
+        String[] shunt = {"shuntCompensator_EQ.xml", "shuntCompensator_SSH.xml"};
+        String[] svc = {"staticVarCompensator_EQ.xml", "staticVarCompensator_SSH.xml"};
+        String[] transformer = {"transformer_EQ.xml", "transformer_SSH.xml"};
+        return Stream.of(
+                Arguments.of("generatorTargetVThroughDeprecatedSetter", GENERATOR_DIR, generator,
+                        (Consumer<Network>) n -> n.getGenerator("SynchronousMachine").setTargetV(410.0),
+                        (Consumer<Network>) n -> {
+                            Generator g = n.getGenerator("SynchronousMachine");
+                            if (g.hasRegulatingTerminal()) {
+                                g.getVoltageRegulation().setTargetValue(410.0);
+                            } else {
+                                g.setLocalTargetV(410.0);
+                            }
+                        }),
+                Arguments.of("generatorRegulationOffThroughDeprecatedSetter", GENERATOR_DIR, generator,
+                        (Consumer<Network>) n -> n.getGenerator("SynchronousMachine").setVoltageRegulatorOn(false),
+                        (Consumer<Network>) n -> n.getGenerator("SynchronousMachine").getVoltageRegulation().setRegulating(false)),
+                Arguments.of("generatorTargetQThroughDeprecatedSetter", GENERATOR_DIR, generator,
+                        (Consumer<Network>) n -> n.getGenerator("SynchronousMachine").setTargetQ(-5.0),
+                        (Consumer<Network>) n -> n.getGenerator("SynchronousMachine").setLocalTargetQ(-5.0)),
+                Arguments.of("shuntTargetVThroughDeprecatedSetter", SHUNT_DIR, shunt,
+                        (Consumer<Network>) n -> n.getShuntCompensator("LinearShuntCompensator").setTargetV(407.0),
+                        (Consumer<Network>) n -> {
+                            ShuntCompensator s = n.getShuntCompensator("LinearShuntCompensator");
+                            if (s.hasRegulatingTerminal()) {
+                                s.getVoltageRegulation().setTargetValue(407.0);
+                            } else {
+                                s.setLocalTargetV(407.0);
+                            }
+                        }),
+                Arguments.of("shuntRegulationThroughDeprecatedSetter", SHUNT_DIR, shunt,
+                        (Consumer<Network>) n -> n.getShuntCompensator("LinearShuntCompensator").setVoltageRegulatorOn(true).setTargetDeadband(1.0),
+                        (Consumer<Network>) n -> n.getShuntCompensator("LinearShuntCompensator").getVoltageRegulation()
+                                .setRegulating(true).setTargetDeadband(1.0)),
+                Arguments.of("staticVarCompensatorVoltageSetpointThroughDeprecatedSetter", STATIC_VAR_COMPENSATOR_DIR, svc,
+                        (Consumer<Network>) n -> n.getStaticVarCompensator("StaticVarCompensator-V").setVoltageSetpoint(400.0),
+                        (Consumer<Network>) n -> {
+                            StaticVarCompensator c = n.getStaticVarCompensator("StaticVarCompensator-V");
+                            if (c.hasRegulatingTerminal()) {
+                                c.getVoltageRegulation().setTargetValue(400.0);
+                            } else {
+                                c.setLocalTargetV(400.0);
+                            }
+                        }),
+                Arguments.of("staticVarCompensatorRegulationOffThroughDeprecatedSetter", STATIC_VAR_COMPENSATOR_DIR, svc,
+                        (Consumer<Network>) n -> n.getStaticVarCompensator("StaticVarCompensator-V").setRegulating(false),
+                        (Consumer<Network>) n -> n.getStaticVarCompensator("StaticVarCompensator-V").getVoltageRegulation().setRegulating(false)),
+                Arguments.of("ratioTapChangerRegulationThroughDeprecatedSetter", TRANSFORMER_DIR, transformer,
+                        (Consumer<Network>) n -> n.getThreeWindingsTransformer("T3W").getLeg2().getRatioTapChanger()
+                                .setRegulationValue(226.0).setTargetDeadband(3.0),
+                        (Consumer<Network>) n -> n.getThreeWindingsTransformer("T3W").getLeg2().getRatioTapChanger()
+                                .getVoltageRegulation().setTargetValue(226.0).setTargetDeadband(3.0)));
+    }
+
+    private static String partialSshOf(String dir, String[] files, Consumer<Network> change) {
+        Network network = readCgmesResources(dir, files);
+        NetworkEventRecorder recorder = new NetworkEventRecorder();
+        network.addListener(recorder);
+        change.accept(network);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        PartialSshExport.write(network, recorder.getEvents(), out, new PartialSshExport.ExportOptions()
+                .setUnsupportedChangeBehavior(UnsupportedChangeBehavior.FAIL)
+                .setCreated(ZonedDateTime.parse("2026-09-28T12:00:00Z")));
+        return out.toString(StandardCharsets.UTF_8);
+    }
+
+    /**
      * Whether a tap changer regulates is only carried by its TapChangerControl: the CGMES update ignores
      * {@code TapChanger.controlEnabled}, so both directions of the switch have to travel on the control.
      */
@@ -743,8 +830,9 @@ class PartialSshExportTest extends AbstractSerDeTest {
     /**
      * A RegulatingControl carries a single target, whose meaning is the CGMES mode, which belongs to the equipment
      * model. A generator whose control regulates voltage has nowhere to put a reactive power target, so a change of
-     * its remote reactive power control cannot be exported: writing the block anyway would send the voltage target
-     * and lose the change silently.
+     * its reactive power regulation cannot be exported: writing the block anyway would send a target the receiver
+     * reads as a voltage and lose the change silently. Before powsybl-core #3699 this regulation was the
+     * RemoteReactivePowerControl extension; it is now the VoltageRegulation of the generator, in reactive power mode.
      */
     @Test
     void remoteReactivePowerControlOnVoltageRegulatingGeneratorIsRejected() {
@@ -752,19 +840,20 @@ class PartialSshExportTest extends AbstractSerDeTest {
         Generator generator = sender.getGenerator("SynchronousMachine");
         assertTrue(generator.getProperty(Conversion.PROPERTY_MODE).endsWith("voltage"),
                 "the test model is expected to give the generator a voltage regulating control");
-        generator.newExtension(RemoteReactivePowerControlAdder.class)
-                .withTargetQ(25.0)
-                .withRegulatingTerminal(generator.getTerminal())
-                .withEnabled(false)
-                .add();
+        VoltageRegulation regulation = generator.newVoltageRegulation()
+                .withMode(RegulationMode.REACTIVE_POWER)
+                .withTargetValue(25.0)
+                .withTerminal(generator.getTerminal())
+                .withRegulating(false)
+                .build();
 
         NetworkEventRecorder recorder = new NetworkEventRecorder();
         sender.addListener(recorder);
-        generator.getExtension(RemoteReactivePowerControl.class).setTargetQ(55.0);
+        regulation.setTargetValue(55.0);
 
         PowsyblException exception = assertThrows(PowsyblException.class,
                 () -> PartialSshExport.toString(sender, recorder.getEvents(), UnsupportedChangeBehavior.FAIL));
-        assertTrue(exception.getMessage().contains("does not regulate reactive power in CGMES"), exception.getMessage());
+        assertTrue(exception.getMessage().contains("reads its RegulatingControl in the mode"), exception.getMessage());
 
         String sshXml = PartialSshExport.toString(sender, recorder.getEvents(), UnsupportedChangeBehavior.IGNORE);
         assertFalse(sshXml.contains("<cim:SynchronousMachine rdf:about="));
@@ -772,31 +861,32 @@ class PartialSshExportTest extends AbstractSerDeTest {
     }
 
     /**
-     * A generator whose CGMES regulating control regulates reactive power carries the target of its remote reactive
-     * power control, in MVAr and with the sign of the regulating terminal the import recorded. No fixture of this
-     * repository holds such a generator, so the regulation is built here and only the exported file is checked.
+     * A generator whose CGMES regulating control regulates reactive power carries the target of its voltage
+     * regulation in reactive power mode, in MVAr. No fixture of this repository holds such a generator, so the
+     * regulation is built here and only the exported file is checked.
      */
     @Test
     void generatorReactivePowerRegulationIsExportedInMegavar() {
         Network sender = readCgmesResources(GENERATOR_DIR, "generator_EQ.xml", "generator_SSH.xml");
         Generator generator = sender.getGenerator("SynchronousMachine");
-        generator.setVoltageRegulatorOn(false);
         generator.setProperty(Conversion.PROPERTY_MODE, "RegulatingControlModeKind.reactivePower");
         generator.setProperty(CgmesExportUtil.getTerminalSignPropertyName(""), "-1");
-        generator.newExtension(RemoteReactivePowerControlAdder.class)
-                .withTargetQ(25.0)
-                .withRegulatingTerminal(generator.getTerminal())
-                .withEnabled(true)
-                .add();
+        VoltageRegulation regulation = generator.newVoltageRegulation()
+                .withMode(RegulationMode.REACTIVE_POWER)
+                .withTargetValue(25.0)
+                .withTerminal(generator.getTerminal())
+                .withRegulating(true)
+                .build();
 
         NetworkEventRecorder recorder = new NetworkEventRecorder();
         sender.addListener(recorder);
-        generator.getExtension(RemoteReactivePowerControl.class).setTargetQ(30.0);
+        regulation.setTargetValue(30.0);
 
         String sshXml = PartialSshExport.toString(sender, recorder.getEvents(), UnsupportedChangeBehavior.FAIL);
         assertEquals(1, countOccurrences(sshXml, "<cim:RegulatingControl rdf:about="));
+        // Negated: CGMES uses the load sign convention for the target of a generator (powsybl-core #4115)
         assertTrue(sshXml.contains("<cim:RegulatingControl.targetValue>-30</cim:RegulatingControl.targetValue>"),
-                () -> "expected the target negated by the terminal sign, was " + sshXml);
+                () -> "expected the target negated by the sign convention, was " + sshXml);
         assertTrue(sshXml.contains("UnitMultiplier.M\"/>"));
         assertTrue(sshXml.contains("<cim:RegulatingControl.enabled>true</cim:RegulatingControl.enabled>"));
     }
@@ -852,11 +942,11 @@ class PartialSshExportTest extends AbstractSerDeTest {
         Network sender = readCgmesResources(STATIC_VAR_COMPENSATOR_DIR,
                 "staticVarCompensator_EQ.xml", "staticVarCompensator_SSH.xml");
         StaticVarCompensator svc = sender.getStaticVarCompensator("StaticVarCompensator-V");
-        svc.setReactivePowerSetpoint(10.0);
+        svc.setLocalTargetQ(10.0);
 
         NetworkEventRecorder recorder = new NetworkEventRecorder();
         sender.addListener(recorder);
-        svc.setRegulationMode(StaticVarCompensator.RegulationMode.REACTIVE_POWER);
+        svc.getVoltageRegulation().setMode(RegulationMode.REACTIVE_POWER);
 
         PowsyblException exception = assertThrows(PowsyblException.class,
                 () -> PartialSshExport.toString(sender, recorder.getEvents(), UnsupportedChangeBehavior.FAIL));
@@ -907,22 +997,26 @@ class PartialSshExportTest extends AbstractSerDeTest {
     /**
      * The reactive power setpoint of a voltage source converter. The import reads it as
      * {@code -terminalSign * targetQpcc}, so the export has to apply the same sign for the value to survive.
-     * (https://github.com/powsybl/powsybl-core/issues/4027)
+     * (https://github.com/powsybl/powsybl-core/issues/4027, fixed upstream by #4054)
      *
-     * <p>The setpoint is only the active one while the converter does not regulate voltage, so the sender switches
-     * the regulator off first: the import resets the setpoint of the inactive mode to zero.</p>
+     * <p>The setpoint is only the active one while the converter regulates reactive power, so the sender switches
+     * the mode of its VoltageRegulation first (powsybl-core #3699: {@code setVoltageRegulatorOn(false)} keeps the
+     * voltage mode and the exported targetQpcc is then zero).</p>
      */
     @Test
     void vscReactivePowerSetpointRoundTrip() throws IOException {
         RoundTripResult result = roundTrip(HVDC_DIR,
-                sender -> converter(sender, 2).setVoltageRegulatorOn(false).setReactivePowerSetpoint(30.0),
-                "hvdc_EQ.xml", "hvdc_SSH.xml");
+                network -> RecordedChangeScenarios.regulateOwnTerminal(converter(network, 2)),
+                sender -> {
+                    converter(sender, 2).getVoltageRegulation().setMode(RegulationMode.REACTIVE_POWER);
+                    converter(sender, 2).getVoltageRegulation().setTargetValue(30.0);
+                }, "hvdc_EQ.xml", "hvdc_SSH.xml");
 
-        assertEquals(30.0, converter(result.sender(), 2).getReactivePowerSetpoint(), TOLERANCE);
-        assertEquals(converter(result.sender(), 2).getReactivePowerSetpoint(),
-                converter(result.receiver(), 2).getReactivePowerSetpoint(), TOLERANCE);
-        assertEquals(converter(result.sender(), 2).isVoltageRegulatorOn(),
-                converter(result.receiver(), 2).isVoltageRegulatorOn());
+        assertEquals(30.0, converter(result.sender(), 2).getRegulatingTargetQ(), TOLERANCE);
+        assertEquals(converter(result.sender(), 2).getRegulatingTargetQ(),
+                converter(result.receiver(), 2).getRegulatingTargetQ(), TOLERANCE);
+        assertEquals(converter(result.sender(), 2).isRegulatingWithMode(RegulationMode.VOLTAGE),
+                converter(result.receiver(), 2).isRegulatingWithMode(RegulationMode.VOLTAGE));
     }
 
     /**
@@ -989,24 +1083,35 @@ class PartialSshExportTest extends AbstractSerDeTest {
      */
     @Test
     void vscVoltageRegulationStateRoundTrip() throws IOException {
+        // Switching from voltage to reactive power regulation is a change of the mode since powsybl-core #3699
         RoundTripResult switchedOff = roundTrip(HVDC_DIR,
-                sender -> converter(sender, 2).setVoltageRegulatorOn(false).setReactivePowerSetpoint(25.0),
-                "hvdc_EQ.xml", "hvdc_SSH.xml");
+                network -> RecordedChangeScenarios.regulateOwnTerminal(converter(network, 2)),
+                sender -> {
+                    converter(sender, 2).getVoltageRegulation().setMode(RegulationMode.REACTIVE_POWER);
+                    converter(sender, 2).getVoltageRegulation().setTargetValue(25.0);
+                }, "hvdc_EQ.xml", "hvdc_SSH.xml");
 
-        assertFalse(converter(switchedOff.sender(), 2).isVoltageRegulatorOn());
-        assertEquals(converter(switchedOff.sender(), 2).isVoltageRegulatorOn(),
-                converter(switchedOff.receiver(), 2).isVoltageRegulatorOn());
-        assertEquals(25.0, converter(switchedOff.receiver(), 2).getReactivePowerSetpoint(), TOLERANCE);
+        assertFalse(converter(switchedOff.sender(), 2).isRegulatingWithMode(RegulationMode.VOLTAGE));
+        assertEquals(converter(switchedOff.sender(), 2).isRegulatingWithMode(RegulationMode.VOLTAGE),
+                converter(switchedOff.receiver(), 2).isRegulatingWithMode(RegulationMode.VOLTAGE));
+        assertEquals(25.0, converter(switchedOff.receiver(), 2).getRegulatingTargetQ(), TOLERANCE);
 
         RoundTripResult switchedOn = roundTrip(HVDC_DIR,
-                network -> converter(network, 2).setVoltageRegulatorOn(false).setReactivePowerSetpoint(25.0),
-                sender -> converter(sender, 2).setVoltageSetpoint(394.0).setVoltageRegulatorOn(true),
+                network -> {
+                    RecordedChangeScenarios.regulateOwnTerminal(converter(network, 2));
+                    converter(network, 2).getVoltageRegulation().setMode(RegulationMode.REACTIVE_POWER);
+                    converter(network, 2).getVoltageRegulation().setTargetValue(25.0);
+                },
+                sender -> {
+                    converter(sender, 2).getVoltageRegulation().setMode(RegulationMode.VOLTAGE);
+                    converter(sender, 2).getVoltageRegulation().setTargetValue(394.0);
+                },
                 "hvdc_EQ.xml", "hvdc_SSH.xml");
 
-        assertTrue(converter(switchedOn.sender(), 2).isVoltageRegulatorOn());
-        assertEquals(converter(switchedOn.sender(), 2).isVoltageRegulatorOn(),
-                converter(switchedOn.receiver(), 2).isVoltageRegulatorOn());
-        assertEquals(394.0, converter(switchedOn.receiver(), 2).getVoltageSetpoint(), TOLERANCE);
+        assertTrue(converter(switchedOn.sender(), 2).isRegulatingWithMode(RegulationMode.VOLTAGE));
+        assertEquals(converter(switchedOn.sender(), 2).isRegulatingWithMode(RegulationMode.VOLTAGE),
+                converter(switchedOn.receiver(), 2).isRegulatingWithMode(RegulationMode.VOLTAGE));
+        assertEquals(394.0, converter(switchedOn.receiver(), 2).getRegulatingTargetV(), TOLERANCE);
     }
 
     /**
@@ -1024,14 +1129,19 @@ class PartialSshExportTest extends AbstractSerDeTest {
         assertEquals(reactivePower.sender().getVoltageSourceConverter("VSC_1_2").isVoltageRegulatorOn(),
                 reactivePower.receiver().getVoltageSourceConverter("VSC_1_2").isVoltageRegulatorOn());
 
-        RoundTripResult voltage = roundTrip(detailedDcModel(), DC_DIR,
-                sender -> sender.getVoltageSourceConverter("VSC_1_2").setVoltageSetpoint(400.0).setVoltageRegulatorOn(true),
-                "mixed_bipole_EQ.xml", "mixed_bipole_SSH.xml");
+        // Switching to voltage regulation is a change of the mode and of the one target since powsybl-core #3699:
+        // the deprecated setVoltageSetpoint(400) of a converter regulating reactive power only sets its local target
+        RoundTripResult voltage = roundTrip(detailedDcModel(), DC_DIR, sender -> {
+            VoltageRegulation regulation = sender.getVoltageSourceConverter("VSC_1_2").getVoltageRegulation();
+            regulation.setMode(RegulationMode.VOLTAGE);
+            regulation.setTargetValue(400.0);
+            regulation.setRegulating(true);
+        }, "mixed_bipole_EQ.xml", "mixed_bipole_SSH.xml");
 
-        assertTrue(voltage.sender().getVoltageSourceConverter("VSC_1_2").isVoltageRegulatorOn());
-        assertEquals(voltage.sender().getVoltageSourceConverter("VSC_1_2").isVoltageRegulatorOn(),
-                voltage.receiver().getVoltageSourceConverter("VSC_1_2").isVoltageRegulatorOn());
-        assertEquals(400.0, voltage.receiver().getVoltageSourceConverter("VSC_1_2").getVoltageSetpoint(), TOLERANCE);
+        assertTrue(voltage.sender().getVoltageSourceConverter("VSC_1_2").isRegulatingWithMode(RegulationMode.VOLTAGE));
+        assertEquals(voltage.sender().getVoltageSourceConverter("VSC_1_2").isRegulatingWithMode(RegulationMode.VOLTAGE),
+                voltage.receiver().getVoltageSourceConverter("VSC_1_2").isRegulatingWithMode(RegulationMode.VOLTAGE));
+        assertEquals(400.0, voltage.receiver().getVoltageSourceConverter("VSC_1_2").getRegulatingTargetV(), TOLERANCE);
     }
 
     /** Whether a converter controls the power at its connection point or the DC voltage is a steady state choice. */
@@ -1086,7 +1196,7 @@ class PartialSshExportTest extends AbstractSerDeTest {
                     .filter(s -> s.getSectionCount() < s.getMaximumSectionCount())
                     .forEach(s -> s.setSectionCount(s.getSectionCount() + 1));
             sender.getStaticVarCompensatorStream()
-                    .filter(s -> s.getRegulationMode() == StaticVarCompensator.RegulationMode.VOLTAGE)
+                    .filter(s -> s.getVoltageRegulation().getMode() == RegulationMode.VOLTAGE)
                     .forEach(s -> s.setVoltageSetpoint(s.getVoltageSetpoint() + 1.0));
             sender.getTwoWindingsTransformerStream()
                     .filter(t -> t.hasRatioTapChanger() && canMoveUp(t.getRatioTapChanger()))
@@ -1106,7 +1216,8 @@ class PartialSshExportTest extends AbstractSerDeTest {
                 .map(UpdateNetworkEvent.class::cast)
                 .map(UpdateNetworkEvent::attribute)
                 .collect(Collectors.toSet());
-        assertTrue(changedAttributes.containsAll(Set.of("p0", "q0", "targetP", "targetQ", "sectionCount",
+        // localTargetQ: the name the reactive target of a generator is reported under since powsybl-core #3699
+        assertTrue(changedAttributes.containsAll(Set.of("p0", "q0", "targetP", "localTargetQ", "sectionCount",
                         "voltageSetpoint", "ratioTapChanger.tapPosition", "ratioTapChanger2.tapPosition",
                         "phaseTapChanger.tapPosition")),
                 () -> "some equipment type was not exercised, changed attributes were " + changedAttributes);
@@ -1366,7 +1477,7 @@ class PartialSshExportTest extends AbstractSerDeTest {
         List<NetworkEvent> exportedEvents = PartialSshExport.write(sender, recorder.getEvents(),
                 tmpDir.resolve("manifest_SSH.xml"), UnsupportedChangeBehavior.FAIL);
 
-        assertEquals(PartialSshExport.compactEvents(recorder.getEvents()), exportedEvents);
+        assertEquals(PartialSshExport.compactEvents(recorder.getEvents(), sender), exportedEvents);
         assertNotEquals(recorder.getEvents().size(), exportedEvents.size());
     }
 
@@ -1423,26 +1534,25 @@ class PartialSshExportTest extends AbstractSerDeTest {
         Generator generator = sender.getGenerator("SynchronousMachine");
         generator.newExtension(ActivePowerControlAdder.class)
                 .withParticipate(true).withDroop(4.0).withParticipationFactor(1.0).add();
-        generator.newExtension(RemoteReactivePowerControlAdder.class)
-                .withTargetQ(10.0).withRegulatingTerminal(generator.getTerminal()).withEnabled(true).add();
+        ReferencePriority.set(generator, 1);
 
         NetworkEventRecorder recorder = new NetworkEventRecorder();
         sender.addListener(recorder);
         ActivePowerControl<Generator> activePowerControl = generator.getExtension(ActivePowerControl.class);
         activePowerControl.setParticipationFactor(2.0);
         activePowerControl.setParticipationFactor(3.0);
-        generator.getExtension(RemoteReactivePowerControl.class).setTargetQ(20.0);
+        ReferencePriority.set(generator, 2);
 
         List<NetworkEvent> compactedEvents = PartialSshExport.compactEvents(recorder.getEvents());
 
         assertEquals(3, recorder.getEvents().size());
-        // The two participation factors collapse, the reactive target of the other extension does not merge with them
+        // The two participation factors collapse, the priority of the other extension does not merge with them
+        // (the second extension was the RemoteReactivePowerControl before powsybl-core #3699 removed it)
         assertEquals(2, compactedEvents.size());
         assertEquals(List.of(
                         new ExtensionUpdateNetworkEvent("SynchronousMachine", ActivePowerControl.NAME,
                                 "participationFactor", VariantManagerConstants.INITIAL_VARIANT_ID, 2.0, 3.0),
-                        new ExtensionUpdateNetworkEvent("SynchronousMachine", RemoteReactivePowerControl.NAME,
-                                "targetQ", VariantManagerConstants.INITIAL_VARIANT_ID, 10.0, 20.0)),
+                        recorder.getEvents().get(2)),
                 compactedEvents);
     }
 
