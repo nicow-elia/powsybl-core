@@ -250,8 +250,13 @@ public final class FastRouteCapabilities {
         Map<Family, String> reasons = new EnumMap<>(Family.class);
         String referencePriority = "setting a reference priority above zero creates the ReferencePriorities"
                 + " extension when the generator has none, and creating an extension is not per variant";
-        reasons.put(Family.SYNCHRONOUS_MACHINE, referencePriority);
-        reasons.put(Family.EXTERNAL_NETWORK_INJECTION, referencePriority);
+        // powsybl-core #3699: the VoltageRegulation of a holder exists in every variant or in none
+        String generatorRegulation = "updating the voltage regulation of a generator creates its VoltageRegulation"
+                + " when it has none, and the object exists in every variant";
+        reasons.put(Family.SYNCHRONOUS_MACHINE, referencePriority + "; " + generatorRegulation);
+        reasons.put(Family.EXTERNAL_NETWORK_INJECTION, referencePriority + "; " + generatorRegulation);
+        reasons.put(Family.EQUIVALENT_INJECTION, "switching the regulation of an EquivalentInjection on creates the"
+                + " VoltageRegulation of its generator when it has none, and the object exists in every variant");
         reasons.put(Family.GENERATING_UNIT, "GeneratingUnit.normalPF creates the ActivePowerControl extension, or"
                 + " writes the property CGMES.normalPF, when a generator of the unit has no such extension, and"
                 + " neither is stored per variant");
@@ -259,10 +264,17 @@ public final class FastRouteCapabilities {
                 + " loadTapChangingCapabilities flag, which is not stored per variant in IIDM";
         reasons.put(Family.RATIO_TAP_CHANGER, tapChanger);
         reasons.put(Family.PHASE_TAP_CHANGER, tapChanger);
-        reasons.put(Family.REGULATING_CONTROL, tapChanger);
+        reasons.put(Family.REGULATING_CONTROL, tapChanger + "; " + generatorRegulation);
         reasons.put(Family.VS_CONVERTER, "in the simplified DC model - the default - a voltage source converter"
                 + " update writes HvdcLine.maxP and VscConverterStation.lossFactor, which are not stored per"
-                + " variant in IIDM");
+                + " variant in IIDM; in the detailed DC model the update rebuilds the VoltageRegulation of the"
+                + " converter, which creates it when absent and replaces its regulating terminal when the control"
+                + " kind changes, neither of which is per variant (IIDM refuses a terminal change with several"
+                + " variants)");
+        // powsybl-core #4085
+        reasons.put(Family.TERMINAL, "disconnecting a terminal of a node/breaker voltage level creates the"
+                + " fictitious switch of that terminal when it does not exist yet; the switch is created in every"
+                + " variant");
         return Map.copyOf(reasons);
     }
 
@@ -280,7 +292,7 @@ public final class FastRouteCapabilities {
                         "GroundDisconnector", "Jumper"),
                 List.of(PropertyGroup.of("Switch.open"))));
         table.add(ssh(Family.TERMINAL, "terminals", "Terminal", Set.of("Terminal"),
-                List.of(PropertyGroup.of(ACDC_TERMINAL_CONNECTED))));
+                List.of(PropertyGroup.of(ACDC_TERMINAL_CONNECTED)), VariantSafety.NETWORK_DEPENDENT));
         table.add(ssh(Family.DC_TERMINAL, "dcTerminals", "DCTerminal",
                 Set.of("DCTerminal", "ACDCConverterDCTerminal"),
                 List.of(PropertyGroup.of(ACDC_TERMINAL_CONNECTED))));
@@ -312,7 +324,8 @@ public final class FastRouteCapabilities {
         table.add(ssh(Family.EQUIVALENT_INJECTION, "equivalentInjections", "EquivalentInjection",
                 Set.of("EquivalentInjection"),
                 List.of(new PropertyGroup(Set.of("EquivalentInjection.p", "EquivalentInjection.q"),
-                        Set.of("EquivalentInjection.regulationStatus", "EquivalentInjection.regulationTarget")))));
+                        Set.of("EquivalentInjection.regulationStatus", "EquivalentInjection.regulationTarget"))),
+                VariantSafety.NETWORK_DEPENDENT));
         table.add(ssh(Family.GENERATING_UNIT, "generatingUnits", "GeneratingUnit",
                 Set.of("GeneratingUnit", "ThermalGeneratingUnit", "HydroGeneratingUnit", "NuclearGeneratingUnit",
                         "SolarGeneratingUnit", "WindGeneratingUnit"),

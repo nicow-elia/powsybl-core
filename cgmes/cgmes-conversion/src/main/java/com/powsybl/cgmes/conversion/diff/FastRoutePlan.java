@@ -8,6 +8,7 @@
 package com.powsybl.cgmes.conversion.diff;
 
 import com.powsybl.cgmes.conversion.Conversion;
+import com.powsybl.cgmes.conversion.RegulatingControlMapping;
 import com.powsybl.cgmes.conversion.UpdateScope;
 import com.powsybl.cgmes.conversion.diff.DiffSubjectResolver.ResolvedSubject;
 import com.powsybl.cgmes.conversion.diff.FastRouteCapabilities.PropertyGroup;
@@ -22,17 +23,22 @@ import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
 import com.powsybl.cgmes.model.diff.DifferenceModelParser;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
+import com.powsybl.iidm.network.Connectable;
 import com.powsybl.iidm.network.Generator;
 import com.powsybl.iidm.network.Identifiable;
 import com.powsybl.iidm.network.Network;
+import com.powsybl.iidm.network.Switch;
 import com.powsybl.iidm.network.TapChanger;
+import com.powsybl.iidm.network.Terminal;
 import com.powsybl.iidm.network.ThreeWindingsTransformer;
+import com.powsybl.iidm.network.TopologyKind;
 import com.powsybl.iidm.network.TwoWindingsTransformer;
 import com.powsybl.iidm.network.ValidationLevel;
 import com.powsybl.iidm.network.VoltageLevel;
 import com.powsybl.iidm.network.VoltageSourceConverter;
 import com.powsybl.iidm.network.extensions.ActivePowerControl;
 import com.powsybl.iidm.network.extensions.ReferencePriorities;
+import com.powsybl.iidm.network.regulation.VoltageRegulation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -81,6 +87,10 @@ final class FastRoutePlan {
     private static final String REFERENCE_PRIORITY_SUFFIX = ".referencePriority";
     private static final String NORMAL_PF = "GeneratingUnit.normalPF";
     private static final String TAP_CHANGER_CONTROL_ENABLED = "TapChanger.controlEnabled";
+    private static final String REGULATION_STATUS = "EquivalentInjection.regulationStatus";
+    private static final String Q_PCC_CONTROL = "VsConverter.qPccControl";
+    private static final String CONNECTED = "ACDCTerminal.connected";
+    private static final String FICTITIOUS_SWITCH_SUFFIX = "_SW_fict";
     private static final String REGULATING_CONTROL_ENABLED = "RegulatingControl.enabled";
 
     /**
@@ -350,7 +360,7 @@ final class FastRoutePlan {
          * Whether every statement of one subject writes state the receiving network stores per variant.
          *
          * <p>Only run when the caller asked for it, that is when a <em>variant</em> of the network is bound to a
-         * stored state. The family table answers most of it from the document alone; the rest &mdash; the four
+         * stored state. The family table answers most of it from the document alone; the rest &mdash; the
          * {@link FastRouteCapabilities.VariantSafety#NETWORK_DEPENDENT} cases &mdash; depends on what the receiving
          * network looks like and is decided here, against the resolved subject, while nothing is modified yet.</p>
          *
@@ -372,17 +382,24 @@ final class FastRoutePlan {
             }
         }
 
-        /** The four rules a {@link FastRouteCapabilities.VariantSafety#NETWORK_DEPENDENT} family is judged by. */
+        /** The rules a {@link FastRouteCapabilities.VariantSafety#NETWORK_DEPENDENT} family is judged by. */
         private void checkNetworkDependent(CgmesSubset subset, ResolvedSubject subject, CgmesStatement statement) {
             String property = statement.property();
             boolean unsafe = switch (subject.family()) {
                 case SYNCHRONOUS_MACHINE, EXTERNAL_NETWORK_INJECTION -> property.endsWith(REFERENCE_PRIORITY_SUFFIX)
-                        && referencePriorityWouldCreateTheExtension(subject, statement.value());
+                        && referencePriorityWouldCreateTheExtension(subject, statement.value())
+                        || aVoltageRegulatingGeneratorHasNoVoltageRegulation(subject);
+                case EQUIVALENT_INJECTION -> REGULATION_STATUS.equals(property)
+                        && Boolean.parseBoolean(statement.value().trim()) && aGeneratorHasNoVoltageRegulation(subject);
                 case GENERATING_UNIT -> NORMAL_PF.equals(property) && aGeneratorHasNoActivePowerControl(subject);
-                case RATIO_TAP_CHANGER, PHASE_TAP_CHANGER, REGULATING_CONTROL ->
-                    isRegulationSwitchedOn(property, statement.value())
+                case RATIO_TAP_CHANGER, PHASE_TAP_CHANGER -> isRegulationSwitchedOn(property, statement.value())
                             && aTapChangerHasNoLoadTapChangingCapabilities(subject);
-                case VS_CONVERTER -> !isDetailedConverter(subject);
+                case REGULATING_CONTROL -> isRegulationSwitchedOn(property, statement.value())
+                            && aTapChangerHasNoLoadTapChangingCapabilities(subject)
+                        || aVoltageRegulatingGeneratorHasNoVoltageRegulation(subject);
+                case VS_CONVERTER -> !isDetailedConverter(subject) || rebuildsSharedRegulation(subject, statement);
+                case TERMINAL -> CONNECTED.equals(property) && !Boolean.parseBoolean(statement.value().trim())
+                        && createsFictitiousSwitch(subject);
                 default -> false;
             };
             if (unsafe) {
@@ -420,6 +437,67 @@ final class FastRoutePlan {
             return objectsOf(subject).stream()
                     .filter(Generator.class::isInstance)
                     .anyMatch(object -> object.getExtension(ActivePowerControl.class) == null);
+        }
+
+        /**
+         * The update of a generator regulating voltage creates its {@code VoltageRegulation} when it has none
+         * ({@code AbstractReactiveLimitsOwnerConversion#setVoltageRegulation}, {@code EquivalentInjectionConversion}),
+         * and a VoltageRegulation exists in every variant or in none (powsybl-core #3699).
+         */
+        private boolean aGeneratorHasNoVoltageRegulation(ResolvedSubject subject) {
+            return objectsOf(subject).stream()
+                    .anyMatch(object -> object instanceof Generator generator && generator.getVoltageRegulation() == null);
+        }
+
+        /** As {@link #aGeneratorHasNoVoltageRegulation}, for the generators whose CGMES control regulates voltage. */
+        private boolean aVoltageRegulatingGeneratorHasNoVoltageRegulation(ResolvedSubject subject) {
+            return objectsOf(subject).stream()
+                    .anyMatch(object -> object instanceof Generator generator && generator.getVoltageRegulation() == null
+                            && RegulatingControlMapping.isControlModeVoltage(generator.getProperty(Conversion.PROPERTY_MODE)));
+        }
+
+        /**
+         * The update of a converter of the detailed DC model rebuilds its {@code VoltageRegulation}
+         * ({@code AcDcConverterConversion#updateReactivePowerControl}): it creates the object when it is absent, and
+         * sets its regulating terminal to the point of common coupling for a reactive power or remote voltage
+         * control and to none for a local voltage control. Neither the object nor its terminal is per variant.
+         */
+        private boolean rebuildsSharedRegulation(ResolvedSubject subject, CgmesStatement statement) {
+            for (Identifiable<?> object : objectsOf(subject)) {
+                if (object instanceof VoltageSourceConverter converter) {
+                    VoltageRegulation regulation = converter.getVoltageRegulation();
+                    if (regulation == null) {
+                        return true;
+                    }
+                    if (Q_PCC_CONTROL.equals(statement.property())) {
+                        boolean voltage = statement.value().trim().endsWith("voltagePcc");
+                        boolean remote = converter.getPccTerminal() != converter.getTerminal1();
+                        Terminal rebuilt = voltage && !remote ? null : converter.getPccTerminal();
+                        if (rebuilt != regulation.getTerminal()) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        /**
+         * Disconnecting a terminal of a node/breaker voltage level makes the update create the fictitious switch of
+         * that terminal when it does not exist yet (powsybl-core #4085), and a switch belongs to every variant. The
+         * subject lists that switch among its objects when it exists; the equipment is checked for a node/breaker
+         * terminal as a whole, which may call a terminal of a bus/breaker end unsafe but never the other way round.
+         */
+        private boolean createsFictitiousSwitch(ResolvedSubject subject) {
+            if (subject.iidmIds().stream().anyMatch(id -> id.endsWith(FICTITIOUS_SWITCH_SUFFIX))) {
+                return false;
+            }
+            return objectsOf(subject).stream().anyMatch(object -> switch (object) {
+                case Switch sw -> sw.getVoltageLevel().getTopologyKind() == TopologyKind.NODE_BREAKER;
+                case Connectable<?> connectable -> connectable.getTerminals().stream()
+                        .anyMatch(t -> t.getVoltageLevel().getTopologyKind() == TopologyKind.NODE_BREAKER);
+                default -> false;
+            });
         }
 
         private static boolean isRegulationSwitchedOn(String property, String value) {
