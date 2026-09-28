@@ -142,7 +142,7 @@ the same SPARQL queries and the same conversion code, so the two cannot drift ap
 | `DCTerminal`, `ACDCConverterDCTerminal` | `ACDCTerminal.connected` |
 | `EnergyConsumer`, `ConformLoad`, `NonConformLoad`, `StationSupply` | `EnergyConsumer.p`, `EnergyConsumer.q` |
 | `EnergySource` | `EnergySource.activePower`, `EnergySource.reactivePower` |
-| `AsynchronousMachine` | `RotatingMachine.p`, `RotatingMachine.q` (+ optional `AsynchronousMachine.asynchronousMachineType`, `RegulatingCondEq.controlEnabled`) |
+| `AsynchronousMachine` | `RotatingMachine.p`, `RotatingMachine.q`, `AsynchronousMachine.asynchronousMachineType`, `RegulatingCondEq.controlEnabled` |
 | `SynchronousMachine` | `RotatingMachine.p`; `RotatingMachine.q`, `SynchronousMachine.referencePriority`, `SynchronousMachine.operatingMode`, `RegulatingCondEq.controlEnabled` |
 | `ExternalNetworkInjection` | `ExternalNetworkInjection.p`, `.q`, `.referencePriority`, `RegulatingCondEq.controlEnabled` |
 | `EquivalentInjection` | `EquivalentInjection.p`, `.q` (+ optional `.regulationStatus`, `.regulationTarget`) |
@@ -273,10 +273,15 @@ as not verifiable and never fails the check.
 network variant**. Every statement whose IIDM target is a single field of the network — an operational limit value,
 a voltage limit, a branch impedance, the rating of an HVDC line in the default simplified DC model, an IIDM
 property — then blocks the update with a reason naming that field, instead of leaking into the other variants of
-the same network. Four cases depend on the receiving network and are decided against it before anything is
+the same network. Some cases depend on the receiving network and are decided against it before anything is
 written: a reference priority that would create the `ReferencePriorities` extension, a participation factor on a
 generator without `ActivePowerControl`, switching the regulation of a tap changer that has no
-`loadTapChangingCapabilities` on, and a voltage source converter of the simplified DC model. The flag also
+`loadTapChangingCapabilities` on, a voltage source converter of the simplified DC model, an update that would create
+the `VoltageRegulation` of a generator (a generator whose CGMES control regulates voltage and that has none, or an
+`EquivalentInjection` whose regulation is switched on) or rebuild the one of a detailed voltage source converter with
+another regulating terminal (a `VoltageRegulation` and its terminal exist in every variant), and disconnecting a
+terminal of a node/breaker voltage level that has no fictitious switch yet (the update creates it, powsybl-core
+#4085). The flag also
 requires the scoped update, because the full update writes properties and validation levels that belong to the
 whole network.
 

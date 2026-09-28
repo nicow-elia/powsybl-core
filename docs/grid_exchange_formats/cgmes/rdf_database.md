@@ -886,24 +886,25 @@ refused with `variant mode addresses snapshots`.
 IIDM stores the *operating* values per variant and the *equipment description* once per network. That is the whole
 of the rule, and the table below is its machine-readable form (`FastRouteCapabilities.VariantSafety`). Every row is
 asserted against `iidm-impl` by `VariantSafetyProbeTest`: the 61 characterized changes of
-`RecordedChangeScenarios` are swept in both directions, and the four network-dependent rules and the control-area
+`RecordedChangeScenarios` are swept in both directions, and the four original network-dependent rules and the control-area
 row &mdash; for which no characterized change exists &mdash; have receivers built for them, with and without the
 extension or the capability flag that makes the rule fire.
 
 | family / property | IIDM target written by the update | per variant? | verdict |
 |---|---|---|---|
 | `Switch.open` | `Switch.open` | yes | SAFE |
-| `ACDCTerminal.connected` (terminal, DC terminal) | terminal connection, node/breaker switch | yes | SAFE |
+| `ACDCTerminal.connected` (DC terminal) | terminal connection | yes | SAFE |
+| `ACDCTerminal.connected` (terminal) | terminal connection, node/breaker fictitious switch — `connected = false` in a node/breaker voltage level **creates** `<terminal>_SW_fict` when absent (powsybl-core #4085) | state yes, **creation no** | NETWORK_DEPENDENT: unsafe iff `connected = false` is stated for node/breaker equipment without that switch |
 | `EnergyConsumer`, `EnergySource`, `AsynchronousMachine` | `Load.p0/q0`, `LoadDetail` | yes | SAFE |
-| `SynchronousMachine`, `ExternalNetworkInjection` p/q, `controlEnabled` | `Generator.targetP/Q/V`, `voltageRegulatorOn`, `RemoteReactivePowerControl` | yes | SAFE |
+| `SynchronousMachine`, `ExternalNetworkInjection` p/q, `controlEnabled` | `Generator.targetP`, `localTargetQ`, `localTargetV`, its `VoltageRegulation` (target, flag) | values yes, **creation of the `VoltageRegulation` no** | NETWORK_DEPENDENT: unsafe iff a generator whose CGMES control regulates voltage has no `VoltageRegulation` |
 | … `*.referencePriority` | `ReferencePriorities` | value yes, **creation no** | NETWORK_DEPENDENT: unsafe iff the value is above zero and the generator has no `ReferencePriorities` extension |
-| `EquivalentInjection` | generator targets or `BoundaryLine.p0/q0` + `Generation` | yes | SAFE |
+| `EquivalentInjection` | generator targets and `VoltageRegulation`, or `BoundaryLine.p0/q0` + `Generation` | values yes, **creation of the `VoltageRegulation` no** | NETWORK_DEPENDENT: unsafe iff `regulationStatus = true` is stated for a generator without `VoltageRegulation` |
 | `GeneratingUnit.normalPF` | `ActivePowerControl.participationFactor`, or a new extension, or the property `CGMES.normalPF` | only the first | NETWORK_DEPENDENT: safe iff every generator of the unit already has `ActivePowerControl` |
-| `StaticVarCompensator` | setpoints, `regulating` | yes | SAFE |
-| `ShuntCompensator` | `sectionCount`, `targetV`, `targetDeadband`, `voltageRegulatorOn` | yes | SAFE |
-| ratio / phase tap changer, tap changer control | `tapPosition`, `regulationValue`, `targetDeadband`, `regulating` — but switching regulation on raises `loadTapChangingCapabilities` | all yes except that flag | NETWORK_DEPENDENT: unsafe iff regulation is switched on for a tap changer without the flag |
-| `RegulatingControl` of a generator, shunt or SVC | the targets above | yes | SAFE |
-| `VsConverter` | detailed DC model: setpoints, control mode. **Simplified model (the default)**: also `HvdcLine.maxP` and `VscConverterStation.lossFactor` | detailed yes; `maxP`, `lossFactor` no | NETWORK_DEPENDENT: safe iff the subject resolves to a `VoltageSourceConverter` |
+| `StaticVarCompensator` | `localTargetQ`, `localTargetV`, its `VoltageRegulation` (target, flag) | yes | SAFE |
+| `ShuntCompensator` | `sectionCount`, `localTargetV`, its `VoltageRegulation` (target, deadband, flag) | yes | SAFE |
+| ratio / phase tap changer, tap changer control | `tapPosition`, the `VoltageRegulation` of a ratio tap changer, `regulationValue`, `targetDeadband`, `regulating` of a phase tap changer — but switching regulation on raises `loadTapChangingCapabilities` | all yes except that flag | NETWORK_DEPENDENT: unsafe iff regulation is switched on for a tap changer without the flag |
+| `RegulatingControl` of a generator, shunt or SVC | the targets above | yes, **creation of a generator's `VoltageRegulation` no** | NETWORK_DEPENDENT: the tap changer rule, and unsafe iff a generator whose CGMES control regulates voltage has no `VoltageRegulation` |
+| `VsConverter` | detailed DC model: control mode, local targets, the `VoltageRegulation` rebuilt from `qPccControl`. **Simplified model (the default)**: also `HvdcLine.maxP` and `VscConverterStation.lossFactor` | detailed: values yes, the `VoltageRegulation` and its terminal no; `maxP`, `lossFactor` no | NETWORK_DEPENDENT: safe iff the subject resolves to a `VoltageSourceConverter` that has a `VoltageRegulation` and whose regulating terminal the stated `qPccControl` does not change |
 | `CsConverter` | `LccConverterStation.powerFactor/lossFactor`, `HvdcLine.maxP`; detailed: `LineCommutatedConverter.powerFactor` | no | UNSAFE |
 | `ControlArea.netInterchange` | `Area.interchangeTarget` | yes | SAFE |
 | `ControlArea.pTolerance` | the IIDM property `pTolerance` | no | UNSAFE |
