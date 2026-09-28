@@ -8,7 +8,6 @@
 package com.powsybl.cgmes.conversion.export;
 
 import com.powsybl.cgmes.conversion.CgmesExport;
-import com.powsybl.cgmes.conversion.export.elements.RegulatingControlEq;
 import com.powsybl.cgmes.extensions.CgmesTapChanger;
 import com.powsybl.cgmes.model.CgmesMetadataModel;
 import com.powsybl.cgmes.model.CgmesNames;
@@ -16,10 +15,12 @@ import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.PowsyblException;
 import com.powsybl.commons.exceptions.UncheckedXmlStreamException;
 import com.powsybl.iidm.network.*;
+import com.powsybl.iidm.network.Identifiable;
 import com.powsybl.iidm.network.extensions.ActivePowerControl;
 import com.powsybl.iidm.network.extensions.ReferencePriority;
-import com.powsybl.iidm.network.extensions.RemoteReactivePowerControl;
-import com.powsybl.iidm.network.extensions.VoltageRegulation;
+import com.powsybl.iidm.network.regulation.RegulationMode;
+import com.powsybl.iidm.network.regulation.VoltageRegulation;
+import com.powsybl.iidm.network.regulation.VoltageRegulationHolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,6 +30,7 @@ import java.util.*;
 
 import static com.powsybl.cgmes.conversion.Conversion.*;
 import static com.powsybl.cgmes.conversion.export.CgmesExportUtil.*;
+import static com.powsybl.cgmes.conversion.export.elements.RegulatingControlEq.*;
 import static com.powsybl.cgmes.conversion.naming.CgmesObjectReference.Part.*;
 import static com.powsybl.cgmes.conversion.naming.CgmesObjectReference.ref;
 import static com.powsybl.cgmes.conversion.naming.CgmesObjectReference.refTyped;
@@ -95,7 +97,10 @@ public final class SteadyStateHypothesisExport {
     private static void writeSwitches(Network network, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) {
         for (Switch sw : network.getSwitches()) {
             if (context.isExportedEquipment(sw)) {
-                writeSwitch(sw, cimNamespace, writer, context);
+                String switchType = sw.getProperty(PROPERTY_CGMES_ORIGINAL_CLASS); // may be null
+                if (!isSwitchImportedFromAcLineSegmentEquivalentBranchOrSeriesCompensator(switchType)) {
+                    writeSwitch(sw, cimNamespace, writer, context);
+                }
             }
         }
     }
@@ -103,13 +108,28 @@ public final class SteadyStateHypothesisExport {
     private static void writeTerminalForSwitches(Network network, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) {
         for (Switch sw : network.getSwitches()) {
             if (context.isExportedEquipment(sw)) {
-                // Terminals for switches are exported as always connected
-                // The status of the switch is "open" if any of the original terminals were not connected
-                // An original "closed" switch with any terminal disconnected
-                // will be exported as "open" with terminals connected
-                writeTerminal(context.getNamingStrategy().getCgmesIdFromAlias(sw, ALIAS_TERMINAL1), true, cimNamespace, writer, context);
-                writeTerminal(context.getNamingStrategy().getCgmesIdFromAlias(sw, ALIAS_TERMINAL2), true, cimNamespace, writer, context);
+                String switchType = sw.getProperty(PROPERTY_CGMES_ORIGINAL_CLASS); // may be null
+                boolean connected = isConnected(sw, switchType);
+
+                writeTerminal(context.getNamingStrategy().getCgmesIdFromAlias(sw, ALIAS_TERMINAL1), connected, cimNamespace, writer, context);
+                writeTerminal(context.getNamingStrategy().getCgmesIdFromAlias(sw, ALIAS_TERMINAL2), connected, cimNamespace, writer, context);
             }
+        }
+    }
+
+    private static boolean isSwitchImportedFromAcLineSegmentEquivalentBranchOrSeriesCompensator(String switchType) {
+        return "ACLineSegment".equals(switchType) || "EquivalentBranch".equals(switchType) || "SeriesCompensator".equals(switchType);
+    }
+
+    private static boolean isConnected(Switch sw, String switchType) {
+        if (isSwitchImportedFromAcLineSegmentEquivalentBranchOrSeriesCompensator(switchType)) {
+            return !sw.isOpen();
+        } else {
+            // Terminals for switches are exported as always connected
+            // The status of the switch is "open" if any of the original terminals were not connected
+            // An original "closed" switch with any terminal disconnected
+            // will be exported as "open" with terminals connected
+            return true;
         }
     }
 
@@ -267,9 +287,11 @@ public final class SteadyStateHypothesisExport {
         }
 
         writeTapChanger(type, tapChangerId, tc, cimNamespace, writer, context);
-        // Only a three windings transformer numbers its ends, a two windings one carries a single sign
-        String end = twt instanceof ThreeWindingsTransformer ? Integer.toString(endNumber) : "";
-        addRegulatingControlView(twt, end, tc, tapChangerControlId, regulatingControlViews);
+        if (tc instanceof RatioTapChanger rtc) {
+            addRegulatingControlView(rtc, tapChangerControlId, regulatingControlViews, context);
+        } else if (tc instanceof PhaseTapChanger ptc) {
+            addRegulatingControlView(ptc, tapChangerControlId, regulatingControlViews);
+        }
 
         // If we are exporting equipment definitions the hidden tap changer will not be exported
         // because it has been included in the model for the only tap changer left in IIDM
@@ -293,7 +315,7 @@ public final class SteadyStateHypothesisExport {
                 case LINEAR -> "Linear";
                 case NON_LINEAR -> "Nonlinear";
             };
-            boolean controlEnabled = s.isVoltageRegulatorOn();
+            boolean controlEnabled = s.isRegulating();
 
             CgmesExportUtil.writeStartAbout(shuntType + "ShuntCompensator", context.getNamingStrategy().getCgmesId(s), cimNamespace, writer, context);
             writer.writeStartElement(cimNamespace, "ShuntCompensator.sections");
@@ -303,17 +325,8 @@ public final class SteadyStateHypothesisExport {
             writer.writeCharacters(Boolean.toString(controlEnabled));
             writer.writeEndElement();
             writer.writeEndElement();
-            addRegulatingControlView(s, regulatingControlViews, context);
-        }
-    }
 
-    private static void addRegulatingControlView(ShuntCompensator s, Map<String, List<RegulatingControlView>> regulatingControlViews, CgmesExportContext context) {
-        addRegulatingControlView(regulatingControlView(s, context), regulatingControlViews);
-    }
-
-    private static void addRegulatingControlView(RegulatingControlView rcv, Map<String, List<RegulatingControlView>> regulatingControlViews) {
-        if (rcv != null) {
-            regulatingControlViews.computeIfAbsent(rcv.id, k -> new ArrayList<>()).add(rcv);
+            addRegulatingControlView(s, getRegulatingControlId(s, context), regulatingControlViews, context);
         }
     }
 
@@ -346,22 +359,23 @@ public final class SteadyStateHypothesisExport {
         for (Generator g : network.getGenerators()) {
             String cgmesOriginalClass = g.getProperty(PROPERTY_CGMES_ORIGINAL_CLASS, CgmesNames.SYNCHRONOUS_MACHINE);
 
+            boolean controlEnabled = g.isRegulating();
             switch (cgmesOriginalClass) {
                 case CgmesNames.EQUIVALENT_INJECTION:
-                    writeEquivalentInjection(context.getNamingStrategy().getCgmesId(g), -g.getTargetP(), -g.getTargetQ(),
-                            g.isVoltageRegulatorOn(), g.getTargetV(), cimNamespace, writer, context);
+                    writeEquivalentInjection(context.getNamingStrategy().getCgmesId(g), -g.getTargetP(), -g.getLocalTargetQ(),
+                            controlEnabled, g.getLocalTargetV(), cimNamespace, writer, context);
                     break;
                 case CgmesNames.EXTERNAL_NETWORK_INJECTION:
-                    writeExternalNetworkInjection(context.getNamingStrategy().getCgmesId(g), g.isVoltageRegulatorOn(),
-                            -g.getTargetP(), -g.getTargetQ(), ReferencePriority.get(g),
+                    writeExternalNetworkInjection(context.getNamingStrategy().getCgmesId(g), controlEnabled,
+                            -g.getTargetP(), -g.getLocalTargetQ(), ReferencePriority.get(g),
                             cimNamespace, writer, context);
-                    addRegulatingControlView(g, regulatingControlViews, context);
+                    addRegulatingControlView(g, getRegulatingControlId(g, context), regulatingControlViews, context);
                     break;
                 case CgmesNames.SYNCHRONOUS_MACHINE:
-                    writeSynchronousMachine(context.getNamingStrategy().getCgmesId(g), g.isVoltageRegulatorOn(),
-                            -g.getTargetP(), -g.getTargetQ(), ReferencePriority.get(g), obtainOperatingMode(g, g.getMinP(), g.getMaxP(), g.getTargetP()),
+                    writeSynchronousMachine(context.getNamingStrategy().getCgmesId(g), controlEnabled,
+                            -g.getTargetP(), -g.getLocalTargetQ(), ReferencePriority.get(g), obtainOperatingMode(g, g.getMinP(), g.getMaxP(), g.getTargetP()),
                             cimNamespace, writer, context);
-                    addRegulatingControlView(g, regulatingControlViews, context);
+                    addRegulatingControlView(g, getRegulatingControlId(g, context), regulatingControlViews, context);
                     break;
                 default:
                     throw new PowsyblException("Unexpected cgmes equipment " + cgmesOriginalClass);
@@ -410,8 +424,9 @@ public final class SteadyStateHypothesisExport {
 
     private static void writeBatteries(Network network, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
         for (Battery b : network.getBatteries()) {
-            writeSynchronousMachine(context.getNamingStrategy().getCgmesId(b), false,
-                    -b.getTargetP(), -b.getTargetQ(), ReferencePriority.get(b), obtainOperatingMode(b, b.getMinP(), b.getMaxP(), b.getTargetP()),
+            boolean controlEnabled = b.getVoltageRegulation() != null && b.getVoltageRegulation().isRegulating();
+            writeSynchronousMachine(context.getNamingStrategy().getCgmesId(b), controlEnabled,
+                    -b.getTargetP(), -b.getRegulatingTargetQ(), ReferencePriority.get(b), obtainOperatingMode(b, b.getMinP(), b.getMaxP(), b.getTargetP()),
                     cimNamespace, writer, context);
         }
     }
@@ -451,108 +466,32 @@ public final class SteadyStateHypothesisExport {
     private static boolean isOperatingAsACondenser(Injection<?> injection, IidmStateView state) {
         switch (injection) {
             case Generator generator -> {
-                boolean voltageRegulatorOn = state.getBoolean(generator,
-                        CgmesChangeTranslator.VOLTAGE_REGULATOR_ON, generator::isVoltageRegulatorOn);
-                double targetV = state.getDouble(generator, CgmesChangeTranslator.TARGET_V, generator::getTargetV);
-                double targetQ = state.getDouble(generator, CgmesChangeTranslator.TARGET_Q, generator::getTargetQ);
-                return voltageRegulatorOn && !Double.isNaN(targetV) || !Double.isNaN(targetQ) && targetQ != 0;
+                return generator.isRegulatingWithMode(RegulationMode.VOLTAGE) && !Double.isNaN(generator.getLocalTargetV())
+                    || !Double.isNaN(generator.getRegulatingTargetQ()) && generator.getRegulatingTargetQ() != 0;
             }
             case Battery battery -> {
-                VoltageRegulation voltageRegulation = battery.getExtension(VoltageRegulation.class);
-                return voltageRegulation != null && voltageRegulation.isVoltageRegulatorOn() && !Double.isNaN(voltageRegulation.getTargetV())
-                        || !Double.isNaN(battery.getTargetQ()) && battery.getTargetQ() != 0;
+                return battery.isRegulatingWithMode(RegulationMode.VOLTAGE) && !Double.isNaN(battery.getLocalTargetV())
+                    || !Double.isNaN(battery.getRegulatingTargetQ()) && battery.getRegulatingTargetQ() != 0;
             }
             default -> throw new IllegalStateException("Unexpected value: " + injection);
         }
     }
 
-    private static void addRegulatingControlView(Generator g, Map<String, List<RegulatingControlView>> regulatingControlViews, CgmesExportContext context) {
-        if (hasRegulatingControlCapability(g)) {
-            // PowSyBl has considered the control as continuous and with targetDeadband of size 0
-            // The target value is stored in kV by PowSyBl, so unit multiplier is "k"
-            String rcid = context.getNamingStrategy().getCgmesIdFromProperty(g, PROPERTY_REGULATING_CONTROL);
-
-            double targetDeadband = 0;
-            double target;
-            String targetValueUnitMultiplier;
-            boolean enabled;
-            RemoteReactivePowerControl rrpc = g.getExtension(RemoteReactivePowerControl.class);
-            String generatorMode = CgmesExportUtil.getGeneratorRegulatingControlMode(g, rrpc);
-            if (generatorMode.equals(RegulatingControlEq.REGULATING_CONTROL_REACTIVE_POWER)) {
-                // The import negates the target of a regulating terminal oriented the other way, so the export
-                // has to apply the same sign for the value to survive a round trip
-                target = CgmesExportUtil.terminalSign(g, "") * rrpc.getTargetQ();
-                targetValueUnitMultiplier = "M";
-                enabled = rrpc.isEnabled();
-            } else {
-                target = generatorTargetV(g, context);
-                targetValueUnitMultiplier = "k";
-                enabled = g.isVoltageRegulatorOn();
-            }
-
-            RegulatingControlView rcv = new RegulatingControlView(rcid, RegulatingControlType.REGULATING_CONTROL, false,
-                enabled, targetDeadband, target, targetValueUnitMultiplier);
-            regulatingControlViews.computeIfAbsent(rcid, k -> new ArrayList<>()).add(rcv);
-        }
-    }
-
-    /**
-     * The voltage target of a generator as the RegulatingControl carries it.
-     *
-     * <p>Package private so that the partial SSH export writes the same target as the full export.</p>
-     */
-    static double generatorTargetV(Generator g, CgmesExportContext context) {
-        return generatorTargetV(g, context, IidmStateView.LIVE);
-    }
-
-    /** As {@link #generatorTargetV(Generator, CgmesExportContext)}, read from the given state of the network. */
-    static double generatorTargetV(Generator g, CgmesExportContext context, IidmStateView state) {
-        double target = state.getDouble(g, CgmesChangeTranslator.TARGET_V, g::getTargetV);
-        if (context.isExportGeneratorsInLocalRegulationMode() && g.getRegulatingTerminal() != null) {
-            double remoteNominalV = g.getRegulatingTerminal().getVoltageLevel().getNominalV();
-            double localNominalV = g.getTerminal().getVoltageLevel().getNominalV();
-            if (localNominalV != remoteNominalV) {
-                // This check prevents potential rounding variations of target when both voltages are equals
-                target = localNominalV * target / remoteNominalV;
-            }
-        }
-        return target;
-    }
-
     private static void writeStaticVarCompensators(Network network, String cimNamespace, Map<String, List<RegulatingControlView>> regulatingControlViews,
                                                    XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
         for (StaticVarCompensator svc : network.getStaticVarCompensators()) {
+            boolean controlEnabled = svc.isRegulating();
+
             CgmesExportUtil.writeStartAbout("StaticVarCompensator", context.getNamingStrategy().getCgmesId(svc), cimNamespace, writer, context);
             writer.writeStartElement(cimNamespace, REGULATING_COND_EQ_CONTROL_ENABLED);
-            writer.writeCharacters(Boolean.toString(svc.isRegulating()));
+            writer.writeCharacters(Boolean.toString(controlEnabled));
             writer.writeEndElement();
             writer.writeStartElement(cimNamespace, "StaticVarCompensator.q");
-            writer.writeCharacters(CgmesExportUtil.format(svc.getTerminal().getQ()));
+            writer.writeCharacters(CgmesExportUtil.format(svc.getLocalTargetQ()));
             writer.writeEndElement();
             writer.writeEndElement();
-            addRegulatingControlView(svc, regulatingControlViews, context);
-        }
-    }
 
-    private static void addRegulatingControlView(StaticVarCompensator svc, Map<String, List<RegulatingControlView>> regulatingControlViews, CgmesExportContext context) {
-        addRegulatingControlView(regulatingControlView(svc, context), regulatingControlViews);
-    }
-
-    /**
-     * The RegulatingControl description of the given static var compensator, or {@code null} when it carries no
-     * regulation.
-     *
-     * <p>Package private so that the partial SSH export describes a RegulatingControl exactly as the full export
-     * would, which is what the receiving side of a partial file expects to read.</p>
-     */
-    static RegulatingControlView regulatingControlView(StaticVarCompensator svc, CgmesExportContext context) {
-        return regulatingControlView(svc, context, IidmStateView.LIVE);
-    }
-
-    /** As {@link #regulatingControlView(StaticVarCompensator, CgmesExportContext)}, read from the given state. */
-    static RegulatingControlView regulatingControlView(StaticVarCompensator svc, CgmesExportContext context, IidmStateView state) {
-        if (!hasRegulatingControlCapability(svc)) {
-            return null;
+            addRegulatingControlView(svc, getRegulatingControlId(svc, context), regulatingControlViews, context);
         }
         String rcid = context.getNamingStrategy().getCgmesIdFromProperty(svc, PROPERTY_REGULATING_CONTROL);
         double targetDeadband = 0;
@@ -594,91 +533,22 @@ public final class SteadyStateHypothesisExport {
         writer.writeEndElement();
     }
 
-    private static void addRegulatingControlView(Connectable<?> transformer, String end, TapChanger<?, ?, ?, ?> tc,
-                                                 String controlId, Map<String, List<RegulatingControlView>> regulatingControlViews) {
+    private static void addRegulatingControlView(PhaseTapChanger ptc, String controlId, Map<String, List<RegulatingControlView>> regulatingControlViews) {
         // Multiple tap changers can be stored at the same equipment
         // We use the tap changer id as part of the key for storing the tap changer control id
-        addRegulatingControlView(regulatingControlView(transformer, end, tc, controlId), regulatingControlViews);
-    }
-
-    /**
-     * The TapChangerControl description of the given tap changer, or {@code null} when it carries no regulation the
-     * SSH profile can express.
-     *
-     * <p>Package private so that the partial SSH export describes a TapChangerControl exactly as the full export
-     * would, which is what the receiving side of a partial file expects to read.</p>
-     *
-     * @param transformer the transformer the tap changer belongs to, which carries the sign of the regulating terminal
-     * @param end         the end the tap changer sits on, {@code ""} for a two windings transformer
-     */
-    static RegulatingControlView regulatingControlView(Connectable<?> transformer, String end,
-                                                       TapChanger<?, ?, ?, ?> tc, String controlId) {
-        return regulatingControlView(transformer, end, controlId,
-                new TapChangerRef(transformer, "", tc), IidmStateView.LIVE);
-    }
-
-    /**
-     * As {@link #regulatingControlView(Connectable, String, TapChanger, String)}, read from the given state.
-     *
-     * @param ref the tap changer and the name a recorded change of it carries
-     */
-    static RegulatingControlView regulatingControlView(Connectable<?> transformer, String end, String controlId,
-                                                       TapChangerRef ref, IidmStateView state) {
-        TapChanger<?, ?, ?, ?> tc = ref.tapChanger();
-        if (tc instanceof RatioTapChanger ratioTapChanger && tapChangerControlIsDefined(ratioTapChanger, ref, state)) {
-            String controlMode = CgmesExportUtil.getTcMode(ratioTapChanger, ref, state);
-            String unitMultiplier = switch (controlMode) {
-                case RegulatingControlEq.REGULATING_CONTROL_VOLTAGE -> "k";
-                case RegulatingControlEq.REGULATING_CONTROL_REACTIVE_POWER -> "M";
-                default -> "none";
+        if (hasTapChangerControlCapability(ptc)) {
+            RegulatingControlView rcv;
+            PhaseTapChanger.RegulationMode mode = ptc.getRegulationMode();
+            rcv = switch (mode) {
+                case PhaseTapChanger.RegulationMode.ACTIVE_POWER_CONTROL ->
+                    new RegulatingControlView(controlId, RegulatingControlType.TAP_CHANGER_CONTROL,
+                        true, ptc.isRegulating(), ptc.getTargetDeadband(), ptc.getRegulationValue(), "M");
+                case PhaseTapChanger.RegulationMode.CURRENT_LIMITER ->
+                    new RegulatingControlView(controlId, RegulatingControlType.TAP_CHANGER_CONTROL,
+                        true, false, 0.0, 0.0, "M");
             };
-            return new RegulatingControlView(controlId,
-                    RegulatingControlType.TAP_CHANGER_CONTROL,
-                    true,
-                    ref.getBoolean(state, CgmesChangeTranslator.REGULATING_SUFFIX, ratioTapChanger::isRegulating),
-                    ref.getDouble(state, CgmesChangeTranslator.TARGET_DEADBAND_SUFFIX, ratioTapChanger::getTargetDeadband),
-                    ref.getDouble(state, CgmesChangeTranslator.REGULATION_VALUE_SUFFIX, ratioTapChanger::getRegulationValue),
-                    unitMultiplier);
-        }
-        if (tc instanceof PhaseTapChanger phaseTapChanger && tapChangerControlIsDefined(phaseTapChanger, ref, state)) {
-            PhaseTapChanger.RegulationMode regulationMode = ref.getEnum(state,
-                    CgmesChangeTranslator.REGULATION_MODE_SUFFIX, PhaseTapChanger.RegulationMode.class,
-                    phaseTapChanger::getRegulationMode);
-            boolean valid;
-            String unitMultiplier = switch (regulationMode) {
-                case PhaseTapChanger.RegulationMode.CURRENT_LIMITER -> {
-                    // Unit multiplier is none (multiply by 1), regulation value is a current in Amperes
-                    valid = true;
-                    yield "none";
-                }
-                case PhaseTapChanger.RegulationMode.ACTIVE_POWER_CONTROL -> {
-                    // Unit multiplier is M, regulation value is an active power flow in MW
-                    valid = true;
-                    yield "M";
-                }
-                default -> {
-                    valid = false;
-                    yield "none";
-                }
-            };
-            if (valid) {
-                boolean isActivePowerControlMode = regulationMode == PhaseTapChanger.RegulationMode.ACTIVE_POWER_CONTROL;
-                // The import negates the target of a regulating terminal oriented the other way, so the export
-                // has to apply the same sign for the value to survive a round trip
-                double regulationValue = isActivePowerControlMode
-                        ? CgmesExportUtil.terminalSign(transformer, end) * ref.getDouble(state,
-                                CgmesChangeTranslator.REGULATION_VALUE_SUFFIX, phaseTapChanger::getRegulationValue)
-                        : 0.0;
-                return new RegulatingControlView(controlId,
-                        RegulatingControlType.TAP_CHANGER_CONTROL,
-                        true,
-                        isActivePowerControlMode && ref.getBoolean(state,
-                                CgmesChangeTranslator.REGULATING_SUFFIX, phaseTapChanger::isRegulating),
-                        isActivePowerControlMode ? ref.getDouble(state,
-                                CgmesChangeTranslator.TARGET_DEADBAND_SUFFIX, phaseTapChanger::getTargetDeadband) : 0.0,
-                        regulationValue,
-                        unitMultiplier);
-            }
+
+            regulatingControlViews.computeIfAbsent(controlId, k -> new ArrayList<>()).add(rcv);
         }
         return null;
     }
@@ -688,6 +558,58 @@ public final class SteadyStateHypothesisExport {
         writeTapChanger(Optional.ofNullable(cgmesTc.getType()).orElse(defaultType), cgmesTc.getId(), false,
                 cgmesTc.getStep().orElseThrow(() -> new PowsyblException("Non null step expected for tap changer " + cgmesTc.getId())),
                 cimNamespace, writer, context);
+    }
+
+    private static String getRegulatingControlId(Identifiable<?> identifiable, CgmesExportContext context) {
+        return context.getNamingStrategy().getCgmesIdFromProperty(identifiable, PROPERTY_REGULATING_CONTROL);
+    }
+
+    private static void addRegulatingControlView(VoltageRegulationHolder<?> regulationHolder, String regulatingControlId,
+                                                 Map<String, List<RegulatingControlView>> regulatingControlViews, CgmesExportContext context) {
+        VoltageRegulation voltageRegulation = regulationHolder.getVoltageRegulation();
+        if (voltageRegulation != null) {
+            boolean enabled = voltageRegulation.isRegulating();
+
+            // Only discrete regulation holders can have a non-zero deadband
+            boolean discrete = false;
+            double targetDeadband = 0.0;
+            if (regulationHolder instanceof ShuntCompensator || regulationHolder instanceof RatioTapChanger) {
+                discrete = true;
+                targetDeadband = voltageRegulation.getTargetDeadband();
+            }
+
+            // VoltageRegulation Terminal can be left null to force the use of local target instead of the remote one,
+            // thus targets should be determined with VoltageRegulationHolder.getRegulatingTargetQ/V
+            double targetValue;
+            String targetValueUnitMultiplier;
+            String mode = getRegulatingControlMode(voltageRegulation);
+            if (REGULATING_CONTROL_REACTIVE_POWER.equals(mode)) {
+                // Generator are in generator sign convention in IIDM and load sign convention in CGMES
+                targetValue = regulationHolder.getRegulatingTargetQ();
+                if (regulationHolder instanceof Generator) {
+                    targetValue = -targetValue;
+                }
+                targetValueUnitMultiplier = "M";
+            } else if (REGULATING_CONTROL_VOLTAGE.equals(mode)) {
+                targetValue = regulationHolder.getRegulatingTargetV();
+                if (regulationHolder instanceof Generator && context.isExportGeneratorsInLocalRegulationMode()) {
+                    targetValue = regulationHolder.getLocalTargetV();
+                }
+                targetValueUnitMultiplier = "k";
+            } else {
+                throw new IllegalStateException("Unexpected regulation mode: " + mode);
+            }
+
+            // RatioTapChanger VoltageRegulation is exported to a specialized class
+            RegulatingControlType regulatingControlType = RegulatingControlType.REGULATING_CONTROL;
+            if (regulationHolder instanceof RatioTapChanger) {
+                regulatingControlType = RegulatingControlType.TAP_CHANGER_CONTROL;
+            }
+
+            RegulatingControlView rcv = new RegulatingControlView(regulatingControlId, regulatingControlType,
+                discrete, enabled, targetDeadband, targetValue, targetValueUnitMultiplier);
+            regulatingControlViews.computeIfAbsent(regulatingControlId, k -> new ArrayList<>()).add(rcv);
+        }
     }
 
     private static void writeRegulatingControls(Map<String, List<RegulatingControlView>> regulatingControlViews, String cimNamespace,
@@ -838,25 +760,20 @@ public final class SteadyStateHypothesisExport {
         writer.writeStartElement(cimNamespace, ROTATING_MACHINE_Q);
         writer.writeCharacters(CgmesExportUtil.format(q));
         writer.writeEndElement();
-        // An AsynchronousMachine is a RegulatingCondEq and a RotatingMachine, so the steady state hypothesis of the
-        // profile expects the control flag and the machine kind next to the powers. IIDM has no regulation on a
-        // load, hence the fixed false. (https://github.com/powsybl/powsybl-core/issues/4029)
         writer.writeStartElement(cimNamespace, REGULATING_COND_EQ_CONTROL_ENABLED);
         writer.writeCharacters(Boolean.toString(false));
         writer.writeEndElement();
         writer.writeEmptyElement(cimNamespace, "AsynchronousMachine.asynchronousMachineType");
-        writer.writeAttribute(RDF_NAMESPACE, CgmesNames.RESOURCE, cimNamespace + "AsynchronousMachineKind." + asynchronousMachineKind(p));
+        writer.writeAttribute(RDF_NAMESPACE, CgmesNames.RESOURCE, cimNamespace + "AsynchronousMachineKind." + obtainAsynchronousMachineKind(p));
         writer.writeEndElement();
     }
 
-    /**
-     * The AsynchronousMachineKind an IIDM load with the given active power is: CGMES machines follow the load
-     * convention, so a positive power consumes and is a motor, a negative one injects and is a generator.
-     *
-     * <p>Package private so that the partial SSH export writes the same kind as the full export.</p>
-     */
-    static String asynchronousMachineKind(double p0) {
-        return p0 < 0 ? OPERATING_MODE_GENERATOR : OPERATING_MODE_MOTOR;
+    private static String obtainAsynchronousMachineKind(double p) {
+        if (p < 0) {
+            return OPERATING_MODE_GENERATOR;
+        } else {
+            return OPERATING_MODE_MOTOR;
+        }
     }
 
     private static void writeEnergySource(String id, double p, double q, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
@@ -981,8 +898,13 @@ public final class SteadyStateHypothesisExport {
                     lccConverterStation::getPowerFactor);
             return new ConverterState(targetPpcc, targetUdc, p, Math.abs(getQfromPowerFactor(p, powerFactor)));
         } else if (converterStation instanceof VscConverterStation vscConverterStation) {
-            return new ConverterState(targetPpcc, targetUdc,
-                    vscConverterStation.getRegulatingTerminal().getP(), vscConverterStation.getRegulatingTerminal().getQ());
+            p = vscConverterStation.getRegulatingTerminal().getP();
+            q = -vscConverterStation.getLocalTargetQ();
+            double targetQpcc = vscConverterStation.isWithMode(RegulationMode.REACTIVE_POWER) ? -vscConverterStation.getRegulatingTargetQ() : 0; // To be consistent with the import
+            double targetUpcc = vscConverterStation.isWithMode(RegulationMode.VOLTAGE) ? vscConverterStation.getRegulatingTargetV() : 0;
+            String pPccControl = CgmesExportUtil.isConverterStationRectifier(converterStation) ? "pPcc" : "udc";
+            String qPccControl = vscConverterStation.isRegulatingWithMode(RegulationMode.VOLTAGE) ? "voltagePcc" : "reactivePcc";
+            writeVsConverter(converterId, targetPpcc, targetUdc, targetQpcc, targetUpcc, p, q, pPccControl, qPccControl, cimNamespace, writer, context);
         }
         return new ConverterState(targetPpcc, targetUdc, p, Double.NaN);
     }
@@ -1199,11 +1121,16 @@ public final class SteadyStateHypothesisExport {
                 : state.getDouble(converter, CgmesChangeTranslator.TARGET_VDC, converter::getTargetVdc);
         double p = converter.getPccTerminal().getP();
         double q = converter.getPccTerminal().getQ();
-        if (converter instanceof VoltageSourceConverter vsc) {
-            boolean voltageRegulatorOn = state.getBoolean(vsc, CgmesChangeTranslator.VOLTAGE_REGULATOR_ON,
-                    vsc::isVoltageRegulatorOn);
-            return new AcDcConverterState(targetPpcc, targetUdc, p, q, activePowerControl ? "pPcc" : "udc",
-                    voltageRegulatorOn ? "voltagePcc" : "reactivePcc");
+        if (converter instanceof LineCommutatedConverter) {
+            String operatingMode = targetPpcc > 0.0 ? "rectifier" : "inverter";
+            String pPccControl = converter.getControlMode() == AcDcConverter.ControlMode.P_PCC ? "activePower" : "dcVoltage";
+            writeCsConverter(converterId, targetPpcc, targetUdc, p, q, operatingMode, pPccControl, cimNamespace, writer, context);
+        } else if (converter instanceof VoltageSourceConverter vsc) {
+            double targetQpcc = vsc.isWithMode(RegulationMode.REACTIVE_POWER) ? vsc.getRegulatingTargetQ() : 0;
+            double targetUpcc = vsc.isWithMode(RegulationMode.VOLTAGE) ? vsc.getRegulatingTargetV() : 0;
+            String pPccControl = vsc.getControlMode() == AcDcConverter.ControlMode.P_PCC ? "pPcc" : "udc";
+            String qPccControl = vsc.isWithMode(RegulationMode.VOLTAGE) ? "voltagePcc" : "reactivePcc";
+            writeVsConverter(converterId, targetPpcc, targetUdc, targetQpcc, targetUpcc, p, vsc.getLocalTargetQ(), pPccControl, qPccControl, cimNamespace, writer, context);
         }
         return new AcDcConverterState(targetPpcc, targetUdc, p, q, activePowerControl ? "activePower" : "dcVoltage",
                 targetPpcc > 0.0 ? "rectifier" : "inverter");

@@ -529,12 +529,12 @@ public abstract class AbstractConductingEquipmentConversion extends AbstractIden
     }
 
     private static void updateTerminal(PropertyBag cgmesTerminal, Terminal terminal, Context context) {
-        if (updateConnect(terminal, context)) {
-            // An update that says nothing about a terminal leaves it where it is when previous values are in use.
-            // Without that flag the historical default is "connected", which is what a full instance file means
-            // when it omits cim:ACDCTerminal.connected.
-            boolean connectedInUpdate = cgmesTerminal.asBoolean(CgmesNames.CONNECTED)
-                    .orElseGet(() -> context.config().usePreviousValuesDuringUpdate() ? terminal.isConnected() : true);
+        // An update that says nothing about a terminal leaves it where it is when previous values are in use.
+        // Without that flag the historical default is "connected", which is what a full instance file means
+        // when it omits cim:ACDCTerminal.connected.
+        boolean connectedInUpdate = cgmesTerminal.asBoolean(CgmesNames.CONNECTED)
+                .orElseGet(() -> context.config().usePreviousValuesDuringUpdate() ? terminal.isConnected() : true);
+        if (terminal.getVoltageLevel().getTopologyKind().equals(TopologyKind.BUS_BREAKER)) {
             if (!terminal.isConnected() && connectedInUpdate) {
                 terminal.connect();
             } else if (terminal.isConnected() && !connectedInUpdate) {
@@ -548,14 +548,6 @@ public abstract class AbstractConductingEquipmentConversion extends AbstractIden
             } else {
                 terminal.setP(Double.NaN).setQ(Double.NaN);
             }
-        }
-    }
-
-    private static boolean updateConnect(Terminal terminal, Context context) {
-        if (terminal.getVoltageLevel().getTopologyKind().equals(TopologyKind.NODE_BREAKER)) {
-            return context.config().updateTerminalConnectionInNodeBreakerVoltageLevel();
-        } else {
-            return true;
         }
     }
 

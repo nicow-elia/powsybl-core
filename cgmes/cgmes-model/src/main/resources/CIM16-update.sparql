@@ -186,7 +186,7 @@ SELECT *
         SELECT DISTINCT ?PhaseTapChanger
         WHERE {
             {
-                ?PhaseTapChanger a ?phaseTapChangerType ;
+                ?PhaseTapChanger a ?phaseTapChangerType .
                 VALUES ?phaseTapChangerType { cim:PhaseTapChangerLinear cim:PhaseTapChangerAsymmetrical cim:PhaseTapChangerSymmetrical cim:PhaseTapChangerNonLinear cim:PhaseTapChangerTabular } .
             }
             UNION

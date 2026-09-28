@@ -21,7 +21,8 @@ import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.PowsyblException;
 import com.powsybl.iidm.network.*;
 import com.powsybl.iidm.network.extensions.LoadDetail;
-import com.powsybl.iidm.network.extensions.RemoteReactivePowerControl;
+import com.powsybl.iidm.network.regulation.RegulationMode;
+import com.powsybl.iidm.network.regulation.VoltageRegulation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -395,18 +396,14 @@ public final class CgmesExportUtil {
     }
 
     public static <C extends Connectable<C>> String getPhaseTapChangerType(C transformer, String cgmesTapChangerId) {
-        return getCgmesTapChanger(transformer, cgmesTapChangerId).map(CgmesTapChanger::getType).orElse(CgmesNames.PHASE_TAP_CHANGER_TABULAR);
+        return getCgmesTapChanger(transformer, cgmesTapChangerId)
+            .map(CgmesTapChanger::getType)
+            .orElse(CgmesNames.PHASE_TAP_CHANGER_TABULAR);
     }
 
-    static boolean tapChangerControlIsDefined(RatioTapChanger rtc) {
-        return !Double.isNaN(rtc.getRegulationValue())
-                && rtc.getRegulationTerminal() != null;
-    }
-
-    static boolean tapChangerControlIsDefined(PhaseTapChanger ptc) {
-        return !Double.isNaN(ptc.getRegulationValue())
-                && !Double.isNaN(ptc.getTargetDeadband())
-                && ptc.getRegulationTerminal() != null;
+    static boolean hasTapChangerControlCapability(PhaseTapChanger ptc) {
+        return ptc.hasLoadTapChangingCapabilities()
+                && ptc.getRegulationMode() != null;
     }
 
     /** As {@link #tapChangerControlIsDefined(RatioTapChanger)}, read from the given state of the network. */
@@ -616,115 +613,17 @@ public final class CgmesExportUtil {
         return "generatorOrMotor";
     }
 
-    public static boolean isValidVoltageSetpoint(double v) {
-        return Double.isFinite(v) && v > 0;
-    }
-
-    public static boolean isValidReactivePowerSetpoint(double q) {
-        return Double.isFinite(q);
-    }
-
-    public static String getGeneratorRegulatingControlMode(Generator generator, RemoteReactivePowerControl rrpc) {
-        if (rrpc == null) {
-            return RegulatingControlEq.REGULATING_CONTROL_VOLTAGE;
-        }
-        boolean enabledVoltageControl = generator.isVoltageRegulatorOn();
-        boolean enabledReactivePowerControl = rrpc.isEnabled();
-
-        if (enabledVoltageControl) {
-            return RegulatingControlEq.REGULATING_CONTROL_VOLTAGE;
-        } else if (enabledReactivePowerControl) {
-            return RegulatingControlEq.REGULATING_CONTROL_REACTIVE_POWER;
-        } else {
-            boolean validVoltageSetpoint = isValidVoltageSetpoint(generator.getTargetV());
-            boolean validReactiveSetpoint = isValidReactivePowerSetpoint(rrpc.getTargetQ());
-            if (validReactiveSetpoint && !validVoltageSetpoint) {
-                return RegulatingControlEq.REGULATING_CONTROL_REACTIVE_POWER;
-            }
-            return RegulatingControlEq.REGULATING_CONTROL_VOLTAGE;
-        }
-    }
-
-    public static String getSvcMode(StaticVarCompensator svc) {
-        return getSvcMode(svc, IidmStateView.LIVE);
-    }
-
-    /** As {@link #getSvcMode(StaticVarCompensator)}, read from the given state of the network. */
-    static String getSvcMode(StaticVarCompensator svc, IidmStateView state) {
-        StaticVarCompensator.RegulationMode regulationMode = state.getEnum(svc,
-                CgmesChangeTranslator.REGULATION_MODE, StaticVarCompensator.RegulationMode.class, svc::getRegulationMode);
-        if (regulationMode.equals(StaticVarCompensator.RegulationMode.VOLTAGE)) {
-            return RegulatingControlEq.REGULATING_CONTROL_VOLTAGE;
-        } else if (regulationMode.equals(StaticVarCompensator.RegulationMode.REACTIVE_POWER)) {
-            return RegulatingControlEq.REGULATING_CONTROL_REACTIVE_POWER;
-        } else {
-            boolean validVoltageSetpoint = isValidVoltageSetpoint(
-                    state.getDouble(svc, CgmesChangeTranslator.VOLTAGE_SETPOINT, svc::getVoltageSetpoint));
-            boolean validReactiveSetpoint = isValidReactivePowerSetpoint(
-                    state.getDouble(svc, CgmesChangeTranslator.REACTIVE_POWER_SETPOINT, svc::getReactivePowerSetpoint));
-            if (validReactiveSetpoint && !validVoltageSetpoint) {
-                return RegulatingControlEq.REGULATING_CONTROL_REACTIVE_POWER;
-            }
-            return RegulatingControlEq.REGULATING_CONTROL_VOLTAGE;
-        }
-    }
-
-    public static String getTcMode(RatioTapChanger rtc) {
-        return getTcMode(rtc, null, IidmStateView.LIVE);
-    }
-
-    /**
-     * As {@link #getTcMode(RatioTapChanger)}, read from the given state of the network.
-     *
-     * @param ref the change log name of the tap changer, or {@code null} when the state is
-     *            {@link IidmStateView#LIVE} and no name is needed
-     */
-    static String getTcMode(RatioTapChanger rtc, TapChangerRef ref, IidmStateView state) {
-        RatioTapChanger.RegulationMode regulationMode = ref == null ? rtc.getRegulationMode()
-                : ref.getEnum(state, CgmesChangeTranslator.REGULATION_MODE_SUFFIX,
-                        RatioTapChanger.RegulationMode.class, rtc::getRegulationMode);
-        if (regulationMode == null) {
-            throw new PowsyblException("Regulation mode not defined for RTC.");
-        }
+    public static String getRegulatingControlMode(VoltageRegulation voltageRegulation) {
+        RegulationMode regulationMode = voltageRegulation.getMode();
         return switch (regulationMode) {
-            case VOLTAGE -> RegulatingControlEq.REGULATING_CONTROL_VOLTAGE;
+            case VOLTAGE, VOLTAGE_PER_REACTIVE_POWER -> RegulatingControlEq.REGULATING_CONTROL_VOLTAGE;
             case REACTIVE_POWER -> RegulatingControlEq.REGULATING_CONTROL_REACTIVE_POWER;
+            case null, default -> throw new IllegalStateException("Unexpected regulation mode: " + regulationMode);
         };
     }
 
     public static boolean isMinusOrMaxValue(double value) {
         return value == -Double.MAX_VALUE || value == Double.MAX_VALUE;
-    }
-
-    public static boolean hasRegulatingControlCapability(Connectable<?> connectable) {
-        if (connectable.hasProperty(PROPERTY_REGULATING_CONTROL)) {
-            return true;
-        } else if (connectable instanceof Generator generator) {
-            return generator.getExtension(RemoteReactivePowerControl.class) != null
-                || !Double.isNaN(generator.getTargetV()) && hasReactiveCapability(generator);
-        } else if (connectable instanceof ShuntCompensator shuntCompensator) {
-            return CgmesExportUtil.isValidVoltageSetpoint(shuntCompensator.getTargetV())
-                || !Objects.equals(shuntCompensator, shuntCompensator.getRegulatingTerminal().getConnectable());
-        } else if (connectable instanceof StaticVarCompensator staticVarCompensator) {
-            return CgmesExportUtil.isValidReactivePowerSetpoint(staticVarCompensator.getReactivePowerSetpoint())
-                || CgmesExportUtil.isValidVoltageSetpoint(staticVarCompensator.getVoltageSetpoint())
-                || !Objects.equals(staticVarCompensator, staticVarCompensator.getRegulatingTerminal().getConnectable());
-        }
-        return false;
-    }
-
-    private static boolean hasReactiveCapability(Generator generator) {
-        ReactiveLimits reactiveLimits = generator.getReactiveLimits();
-        if (reactiveLimits == null) {
-            return false;
-        } else if (reactiveLimits.getKind() == ReactiveLimitsKind.CURVE) {
-            ReactiveCapabilityCurve rcc = (ReactiveCapabilityCurve) reactiveLimits;
-            return rcc.getPoints().stream().anyMatch(p -> p.getMaxQ() != p.getMinQ());
-        } else if (reactiveLimits.getKind() == ReactiveLimitsKind.MIN_MAX) {
-            MinMaxReactiveLimits mmrl = (MinMaxReactiveLimits) reactiveLimits;
-            return mmrl.getMaxQ() != mmrl.getMinQ();
-        }
-        return false;
     }
 
     static String getEffectivePairingKey(BoundaryLine bl) {
