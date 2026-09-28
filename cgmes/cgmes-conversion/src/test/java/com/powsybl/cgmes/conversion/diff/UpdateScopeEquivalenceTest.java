@@ -7,19 +7,28 @@
  */
 package com.powsybl.cgmes.conversion.diff;
 
+import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
 import com.powsybl.cgmes.conversion.CgmesImport;
+import com.powsybl.cgmes.conversion.Conversion;
 import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
 import com.powsybl.cgmes.conversion.export.PartialSshExport;
 import com.powsybl.cgmes.conversion.test.RecordedChangeScenarios;
 import com.powsybl.cgmes.conversion.test.RecordedChangeScenarios.Scenario;
+import com.powsybl.cgmes.conversion.test.SteadyStateFingerprint;
+import com.powsybl.cgmes.extensions.CgmesMetadataModels;
+import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelParser;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
 import com.powsybl.cgmes.model.diff.DifferenceModelWriter;
 import com.powsybl.commons.report.ReportNode;
+import com.powsybl.iidm.network.Load;
 import com.powsybl.iidm.network.Network;
+import com.powsybl.iidm.network.Switch;
+import com.powsybl.iidm.network.TopologyKind;
 import com.powsybl.iidm.network.events.NetworkEvent;
 import com.powsybl.iidm.serde.NetworkSerDe;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -32,6 +41,9 @@ import java.util.Properties;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Restricting a difference model update to the equipment it touches must not change its result.
@@ -89,6 +101,63 @@ class UpdateScopeEquivalenceTest {
         assertEquals(xiidm(unscoped), xiidm(scoped),
                 () -> "the scoped update of " + scenario.name() + " (" + granularity
                         + ") gives another network than the full one");
+    }
+
+    /**
+     * Since powsybl-core #4085 an update that disconnects a terminal of a node/breaker voltage level creates the
+     * fictitious switch {@code <terminal>_SW_fict} of that terminal, closed in every variant and open in the working
+     * one. The scoped update does not list the switch in its scope (it did not exist when the scope was computed), so
+     * {@code updateSwitches} leaves it as the creation made it, which is the state the full update ends with too.
+     */
+    @Test
+    void disconnectingANodeBreakerTerminalCreatesTheFictitiousSwitch() {
+        Properties parameters = new Properties();
+        parameters.put(CgmesImport.USE_PREVIOUS_VALUES_DURING_UPDATE, "true");
+        Network scoped = Network.read(CgmesConformity1Catalog.miniNodeBreaker().dataSource(), parameters);
+        Network unscoped = Network.read(CgmesConformity1Catalog.miniNodeBreaker().dataSource(), parameters);
+
+        Load load = scoped.getLoadStream()
+                .filter(l -> l.getTerminal().getVoltageLevel().getTopologyKind() == TopologyKind.NODE_BREAKER)
+                .filter(l -> l.getTerminal().isConnected())
+                .findFirst().orElseThrow();
+        String terminalId = load.getAliasFromType(Conversion.ALIAS_TERMINAL1).orElseThrow();
+        assertNull(scoped.getSwitch(terminalId + "_SW_fict"), "the fixture is expected to have no such switch yet");
+        String supersedes = scoped.getExtension(CgmesMetadataModels.class)
+                .getModelForSubset(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow().getId();
+        String document = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:cim="http://iec.ch/TC57/2013/CIM-schema-cim16#" xmlns:md="http://iec.ch/TC57/61970-552/ModelDescription/1#" xmlns:dm="http://iec.ch/TC57/61970-552/DifferenceModel/1#">
+                  <dm:DifferenceModel rdf:about="urn:uuid:disconnect-a-node-breaker-terminal">
+                    <md:Model.Supersedes rdf:resource="%s"/>
+                    <dm:forwardDifferences rdf:parseType="Statements">
+                      <rdf:Description rdf:about="#_%s">
+                        <cim:ACDCTerminal.connected>false</cim:ACDCTerminal.connected>
+                      </rdf:Description>
+                    </dm:forwardDifferences>
+                    <dm:reverseDifferences rdf:parseType="Statements">
+                      <rdf:Description rdf:about="#_%s">
+                        <cim:ACDCTerminal.connected>true</cim:ACDCTerminal.connected>
+                      </rdf:Description>
+                    </dm:reverseDifferences>
+                  </dm:DifferenceModel>
+                </rdf:RDF>
+                """.formatted(supersedes, terminalId, terminalId);
+        DifferenceModelSet set = new DifferenceModelSet(List.of(DifferenceModelParser.parse(
+                new java.io.ByteArrayInputStream(document.getBytes(StandardCharsets.UTF_8)), "x_SSH_DIFF.xml")));
+
+        CgmesDiffImport.apply(scoped, set, config(parameters), new CgmesDiffImport.Options().setScopedUpdate(true),
+                ReportNode.NO_OP);
+        CgmesDiffImport.apply(unscoped, set, config(parameters), new CgmesDiffImport.Options().setScopedUpdate(false),
+                ReportNode.NO_OP);
+
+        for (Network network : List.of(scoped, unscoped)) {
+            Switch created = network.getSwitch(terminalId + "_SW_fict");
+            assertNotNull(created, "the update is expected to create the fictitious switch of the terminal");
+            assertTrue(created.isOpen());
+        }
+        // The steady state hypothesis, including the terminal connection of every connectable; the solved state is
+        // not compared: the full update clears it for the whole network, the scoped one only for what it touched
+        assertEquals(SteadyStateFingerprint.of(unscoped), SteadyStateFingerprint.of(scoped));
     }
 
     private static com.powsybl.cgmes.conversion.Conversion.Config config(Properties parameters) {
