@@ -292,7 +292,9 @@ public final class SteadyStateHypothesisExport {
             addRegulatingControlView(regulatingControlView(new RegulationRef(twt, "", rtc), tapChangerControlId, context,
                     IidmStateView.LIVE), regulatingControlViews);
         } else if (tc instanceof PhaseTapChanger ptc) {
-            addRegulatingControlView(regulatingControlView(ptc, tapChangerControlId, new TapChangerRef(twt, "", ptc),
+            String end = twt instanceof ThreeWindingsTransformer ? Integer.toString(endNumber) : "";
+            addRegulatingControlView(regulatingControlView(ptc, tapChangerControlId,
+                    new TapChangerRef(twt, CgmesChangeTranslator.PHASE_TAP_CHANGER_PREFIX + end, ptc),
                     IidmStateView.LIVE), regulatingControlViews);
         }
 
@@ -518,11 +520,15 @@ public final class SteadyStateHypothesisExport {
             return null;
         }
         return switch (mode) {
+            // The import multiplies the target by the sign of the regulating terminal it recorded
+            // (AbstractTransformerConversion#updatePhaseTapChanger), so the export applies it as well
             case PhaseTapChanger.RegulationMode.ACTIVE_POWER_CONTROL ->
                 new RegulatingControlView(controlId, RegulatingControlType.TAP_CHANGER_CONTROL, true,
                     ref.getBoolean(state, CgmesChangeTranslator.REGULATING_SUFFIX, ptc::isRegulating),
                     ref.getDouble(state, CgmesChangeTranslator.TARGET_DEADBAND_SUFFIX, ptc::getTargetDeadband),
-                    ref.getDouble(state, CgmesChangeTranslator.REGULATION_VALUE_SUFFIX, ptc::getRegulationValue), "M");
+                    CgmesExportUtil.terminalSign(ref.transformer(), ref.end())
+                            * ref.getDouble(state, CgmesChangeTranslator.REGULATION_VALUE_SUFFIX, ptc::getRegulationValue),
+                    "M");
             case PhaseTapChanger.RegulationMode.CURRENT_LIMITER ->
                 new RegulatingControlView(controlId, RegulatingControlType.TAP_CHANGER_CONTROL,
                     true, false, 0.0, 0.0, "M");
@@ -579,6 +585,12 @@ public final class SteadyStateHypothesisExport {
                 targetValue = regulation.regulatingTargetQ(state);
                 if (regulationHolder instanceof Generator) {
                     targetValue = -targetValue;
+                }
+                // The import multiplies the target by the sign of the regulating terminal it recorded
+                // (AbstractReactiveLimitsOwnerConversion#updateRegulatingControlReactivePower,
+                // StaticVarCompensatorConversion#updateRegulatingControl), so the export applies it as well
+                if (regulationHolder instanceof Generator || regulationHolder instanceof StaticVarCompensator) {
+                    targetValue *= CgmesExportUtil.terminalSign(regulation.owner(), "");
                 }
                 targetValueUnitMultiplier = "M";
             } else if (REGULATING_CONTROL_VOLTAGE.equals(mode)) {
@@ -831,8 +843,10 @@ public final class SteadyStateHypothesisExport {
      * <p>Package private so that the change export writes the same value as the full export.</p>
      */
     static double vscTargetQpcc(RegulationRef regulation, IidmStateView state) {
-        // To be consistent with the import
-        return regulation.isWithMode(RegulationMode.REACTIVE_POWER, state) ? -regulation.regulatingTargetQ(state) : 0;
+        // To be consistent with the import, which reads the target as -terminalSign * targetQpcc
+        // (HvdcConverterConversion#getValidTargetQ)
+        return regulation.isWithMode(RegulationMode.REACTIVE_POWER, state)
+                ? -CgmesExportUtil.terminalSign(regulation.owner(), "") * regulation.regulatingTargetQ(state) : 0;
     }
 
     /** The VsConverter.targetUpcc of a converter station: the voltage target when the station regulates voltage, zero otherwise. */

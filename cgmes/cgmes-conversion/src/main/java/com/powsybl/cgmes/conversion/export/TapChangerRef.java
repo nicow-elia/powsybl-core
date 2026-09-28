@@ -35,6 +35,13 @@ import java.util.function.Supplier;
  */
 record TapChangerRef(Identifiable<?> transformer, String attributePrefix, TapChanger<?, ?, ?, ?> tapChanger) {
 
+    /** The end the tap changer sits on, {@code ""} for a two windings transformer, taken from its attribute prefix. */
+    String end() {
+        int length = attributePrefix.length();
+        return length > 0 && Character.isDigit(attributePrefix.charAt(length - 1))
+                ? attributePrefix.substring(length - 1) : "";
+    }
+
     /** The name a change of the given property of this tap changer is recorded under. */
     String attribute(String suffix) {
         return attributePrefix + suffix;

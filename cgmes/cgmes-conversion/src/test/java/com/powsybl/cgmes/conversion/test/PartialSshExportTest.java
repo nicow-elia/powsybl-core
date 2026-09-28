@@ -640,6 +640,81 @@ class PartialSshExportTest extends AbstractSerDeTest {
     }
 
     /**
+     * A regulation target measured at a regulating terminal that CGMES orients the other way than IIDM: the import
+     * multiplies what it reads by the sign it recorded as {@code CGMES.terminalSign} (generators, static var
+     * compensators, VSC converter stations and phase tap changers alike), so the export has to apply the same sign
+     * for the value to survive a round trip (rule R-SIGN of plan 21; the fixtures of this repository all have a
+     * sign of +1, hence the property set by hand on both sides).
+     */
+    @Test
+    void generatorReactivePowerTargetSurvivesAReversedRegulatingTerminal() throws IOException {
+        RoundTripResult result = roundTrip(GENERATOR_DIR,
+                network -> {
+                    Generator generator = network.getGenerator("SynchronousMachine");
+                    generator.setProperty(Conversion.PROPERTY_MODE, "RegulatingControlModeKind.reactivePower");
+                    generator.setProperty(CgmesExportUtil.getTerminalSignPropertyName(""), "-1");
+                    generator.newVoltageRegulation()
+                            .withMode(RegulationMode.REACTIVE_POWER)
+                            .withTargetValue(25.0)
+                            .withTerminal(generator.getTerminal())
+                            .withRegulating(true)
+                            .build();
+                },
+                sender -> sender.getGenerator("SynchronousMachine").getVoltageRegulation().setTargetValue(30.0),
+                "generator_EQ.xml", "generator_SSH.xml");
+
+        assertEquals(30.0, result.receiver().getGenerator("SynchronousMachine").getRegulatingTargetQ(), TOLERANCE);
+    }
+
+    /** As {@link #generatorReactivePowerTargetSurvivesAReversedRegulatingTerminal}, for a static var compensator. */
+    @Test
+    void staticVarCompensatorReactivePowerTargetSurvivesAReversedRegulatingTerminal() throws IOException {
+        RoundTripResult result = roundTrip(STATIC_VAR_COMPENSATOR_DIR,
+                network -> network.getStaticVarCompensator("StaticVarCompensator-Q")
+                        .setProperty(CgmesExportUtil.getTerminalSignPropertyName(""), "-1"),
+                sender -> {
+                    StaticVarCompensator svc = sender.getStaticVarCompensator("StaticVarCompensator-Q");
+                    assertTrue(svc.hasRegulatingTerminal(), "the compensator is expected to regulate a terminal");
+                    svc.getVoltageRegulation().setTargetValue(220.0);
+                },
+                "staticVarCompensator_EQ.xml", "staticVarCompensator_SSH.xml");
+
+        assertEquals(220.0, result.receiver().getStaticVarCompensator("StaticVarCompensator-Q").getRegulatingTargetQ(), TOLERANCE);
+    }
+
+    /** As {@link #generatorReactivePowerTargetSurvivesAReversedRegulatingTerminal}, for a VSC converter station. */
+    @Test
+    void vscReactivePowerTargetSurvivesAReversedRegulatingTerminal() throws IOException {
+        RoundTripResult result = roundTrip(HVDC_DIR,
+                network -> {
+                    converter(network, 2).setProperty(CgmesExportUtil.getTerminalSignPropertyName(""), "-1");
+                    RecordedChangeScenarios.regulateOwnTerminal(converter(network, 2));
+                },
+                sender -> {
+                    converter(sender, 2).getVoltageRegulation().setMode(RegulationMode.REACTIVE_POWER);
+                    converter(sender, 2).getVoltageRegulation().setTargetValue(30.0);
+                }, "hvdc_EQ.xml", "hvdc_SSH.xml");
+
+        assertEquals(30.0, converter(result.receiver(), 2).getRegulatingTargetQ(), TOLERANCE);
+    }
+
+    /** As {@link #generatorReactivePowerTargetSurvivesAReversedRegulatingTerminal}, for a phase tap changer. */
+    @Test
+    void phaseTapChangerActivePowerTargetSurvivesAReversedRegulatingTerminal() throws IOException {
+        RoundTripResult result = roundTrip(TRANSFORMER_DIR,
+                network -> network.getTwoWindingsTransformer("T2W")
+                        .setProperty(CgmesExportUtil.getTerminalSignPropertyName(""), "-1"),
+                sender -> {
+                    PhaseTapChanger phaseTapChanger = sender.getTwoWindingsTransformer("T2W").getPhaseTapChanger();
+                    assertEquals(PhaseTapChanger.RegulationMode.ACTIVE_POWER_CONTROL, phaseTapChanger.getRegulationMode());
+                    phaseTapChanger.setRegulationValue(phaseTapChanger.getRegulationValue() + 5.0);
+                }, "transformer_EQ.xml", "transformer_SSH.xml");
+
+        assertEquals(result.sender().getTwoWindingsTransformer("T2W").getPhaseTapChanger().getRegulationValue(),
+                result.receiver().getTwoWindingsTransformer("T2W").getPhaseTapChanger().getRegulationValue(), TOLERANCE);
+    }
+
+    /**
      * Whether a tap changer regulates is only carried by its TapChangerControl: the CGMES update ignores
      * {@code TapChanger.controlEnabled}, so both directions of the switch have to travel on the control.
      */
@@ -884,9 +959,10 @@ class PartialSshExportTest extends AbstractSerDeTest {
 
         String sshXml = PartialSshExport.toString(sender, recorder.getEvents(), UnsupportedChangeBehavior.FAIL);
         assertEquals(1, countOccurrences(sshXml, "<cim:RegulatingControl rdf:about="));
-        // Negated: CGMES uses the load sign convention for the target of a generator (powsybl-core #4115)
-        assertTrue(sshXml.contains("<cim:RegulatingControl.targetValue>-30</cim:RegulatingControl.targetValue>"),
-                () -> "expected the target negated by the sign convention, was " + sshXml);
+        // Negated twice: CGMES uses the load sign convention for the target (powsybl-core #4115), and the regulating
+        // terminal is oriented the other way (rule R-SIGN of plan 21)
+        assertTrue(sshXml.contains("<cim:RegulatingControl.targetValue>30</cim:RegulatingControl.targetValue>"),
+                () -> "expected the target negated by the sign convention and by the terminal sign, was " + sshXml);
         assertTrue(sshXml.contains("UnitMultiplier.M\"/>"));
         assertTrue(sshXml.contains("<cim:RegulatingControl.enabled>true</cim:RegulatingControl.enabled>"));
     }
