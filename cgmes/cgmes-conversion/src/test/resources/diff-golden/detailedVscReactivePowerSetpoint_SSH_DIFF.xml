@@ -18,6 +18,7 @@
                 <cim:VsConverter.pPccControl rdf:resource="http://iec.ch/TC57/2013/CIM-schema-cim16#VsPpccControlKind.pPcc"/>
                 <cim:VsConverter.qPccControl rdf:resource="http://iec.ch/TC57/2013/CIM-schema-cim16#VsQpccControlKind.reactivePcc"/>
                 <cim:VsConverter.targetQpcc>20</cim:VsConverter.targetQpcc>
+                <cim:VsConverter.targetUpcc>0</cim:VsConverter.targetUpcc>
             </rdf:Description>
         </dm:reverseDifferences>
         <dm:forwardDifferences rdf:parseType="Statements">
@@ -29,6 +30,7 @@
                 <cim:VsConverter.pPccControl rdf:resource="http://iec.ch/TC57/2013/CIM-schema-cim16#VsPpccControlKind.pPcc"/>
                 <cim:VsConverter.qPccControl rdf:resource="http://iec.ch/TC57/2013/CIM-schema-cim16#VsQpccControlKind.reactivePcc"/>
                 <cim:VsConverter.targetQpcc>40</cim:VsConverter.targetQpcc>
+                <cim:VsConverter.targetUpcc>0</cim:VsConverter.targetUpcc>
             </rdf:Description>
         </dm:forwardDifferences>
     </dm:DifferenceModel>

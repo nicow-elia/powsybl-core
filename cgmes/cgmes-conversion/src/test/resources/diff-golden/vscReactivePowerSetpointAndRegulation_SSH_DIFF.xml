@@ -13,14 +13,14 @@
                 <cim:VsConverter.pPccControl rdf:resource="http://iec.ch/TC57/CIM100#VsPpccControlKind.pPcc"/>
                 <cim:VsConverter.qPccControl rdf:resource="http://iec.ch/TC57/CIM100#VsQpccControlKind.voltagePcc"/>
                 <cim:VsConverter.targetUpcc>392.54</cim:VsConverter.targetUpcc>
-                <cim:VsConverter.targetQpcc>-20</cim:VsConverter.targetQpcc>
+                <cim:VsConverter.targetQpcc>0</cim:VsConverter.targetQpcc>
             </rdf:Description>
         </dm:reverseDifferences>
         <dm:forwardDifferences rdf:parseType="Statements">
             <rdf:Description rdf:about="#_DCLineSegment-Vsc-VscConverter-2">
                 <cim:VsConverter.pPccControl rdf:resource="http://iec.ch/TC57/CIM100#VsPpccControlKind.pPcc"/>
                 <cim:VsConverter.qPccControl rdf:resource="http://iec.ch/TC57/CIM100#VsQpccControlKind.reactivePcc"/>
-                <cim:VsConverter.targetUpcc>392.54</cim:VsConverter.targetUpcc>
+                <cim:VsConverter.targetUpcc>0</cim:VsConverter.targetUpcc>
                 <cim:VsConverter.targetQpcc>-30</cim:VsConverter.targetQpcc>
             </rdf:Description>
         </dm:forwardDifferences>
