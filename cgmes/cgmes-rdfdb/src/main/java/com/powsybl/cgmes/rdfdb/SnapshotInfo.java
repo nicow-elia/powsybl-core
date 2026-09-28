@@ -44,7 +44,6 @@ import java.util.Objects;
  * @param parent      the IRI of the snapshot this one derives from, {@code null} for the root
  * @param edge        which kind of link {@link #parent()} is
  * @param depth       how many snapshots lie between this one and the root of the scenario
- * @param hasFull     whether a materialisation can start here without walking further up; see {@link #hasFull()}
  * @param fast        whether every difference member is fast-route capable; see {@link #fast()}
  * @param state       the effective model identifier per profile
  * @param members     the models this snapshot adds
@@ -57,7 +56,7 @@ import java.util.Objects;
  */
 public record SnapshotInfo(String scenario, String iri, String version, String timestep, String timestepLabel,
                            Kind kind,
-                           String parent, EdgeKind edge, int depth, boolean hasFull, boolean fast,
+                           String parent, EdgeKind edge, int depth, boolean fast,
                            Map<CgmesSubset, String> state, List<String> members,
                            Map<CgmesSubset, String> fullModels, String timestepRoot, ZonedDateTime created,
                            String description) {
@@ -80,25 +79,6 @@ public record SnapshotInfo(String scenario, String iri, String version, String t
         TIMESTEP
     }
 
-    /**
-     * @param scenario     see {@link #scenario()}
-     * @param iri          see {@link #iri()}
-     * @param version      see {@link #version()}
-     * @param timestep     see {@link #timestep()}
-     * @param timestepLabel see {@link #timestepLabel()}
-     * @param kind         see {@link #kind()}
-     * @param parent       see {@link #parent()}
-     * @param edge         see {@link #edge()}
-     * @param depth        see {@link #depth()}
-     * @param hasFull      see {@link #hasFull()}
-     * @param fast         see {@link #fast()}
-     * @param state        see {@link #state()}
-     * @param members      see {@link #members()}
-     * @param fullModels   see {@link #fullModels()}
-     * @param timestepRoot see {@link #timestepRoot()}
-     * @param created      see {@link #created()}
-     * @param description  see {@link #description()}
-     */
     public SnapshotInfo {
         Objects.requireNonNull(scenario);
         Objects.requireNonNull(iri);
@@ -140,9 +120,8 @@ public record SnapshotInfo(String scenario, String iri, String version, String t
      *
      * @return whether this snapshot names at least one full model
      */
-    @Override
     public boolean hasFull() {
-        return hasFull;
+        return !fullModels.isEmpty();
     }
 
     /**

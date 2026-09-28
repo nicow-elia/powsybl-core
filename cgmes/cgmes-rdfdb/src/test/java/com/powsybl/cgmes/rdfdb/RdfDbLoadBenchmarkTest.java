@@ -20,15 +20,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.function.Supplier;
 
+import static com.powsybl.cgmes.rdfdb.Backends.params;
+import static com.powsybl.cgmes.rdfdb.BenchMeters.add;
+import static com.powsybl.cgmes.rdfdb.BenchMeters.median;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -105,12 +106,6 @@ class RdfDbLoadBenchmarkTest {
                     () -> CgmesConformity1Catalog.smallNodeBreaker().dataSource(), true),
             new Fixture("microGridBaseCaseBE(CIM16,1.9MB)",
                     () -> CgmesConformity1Catalog.microGridBaseCaseBE().dataSource(), false));
-
-    private static Properties params() {
-        Properties p = new Properties();
-        p.put(CgmesImport.IMPORT_CGM_WITH_SUBNETWORKS, "false");
-        return p;
-    }
 
     @Test
     void benchmark(@org.junit.jupiter.api.io.TempDir Path tempDir) {
@@ -312,19 +307,6 @@ class RdfDbLoadBenchmarkTest {
             }
         }
         return new DbTimings(0, median(totals), 0, 0, 0, 0, 0, 0, 0);
-    }
-
-    private static void add(Map<String, List<Long>> phases, String name, Duration duration) {
-        phases.computeIfAbsent(name, k -> new ArrayList<>()).add(duration.toMillis());
-    }
-
-    private static long median(List<Long> values) {
-        if (values == null || values.isEmpty()) {
-            return 0L;
-        }
-        List<Long> sorted = new ArrayList<>(values);
-        sorted.sort(Comparator.naturalOrder());
-        return sorted.get(sorted.size() / 2);
     }
 
     private static final Logger LOGGER = LoggerFactory.getLogger(RdfDbLoadBenchmarkTest.class);

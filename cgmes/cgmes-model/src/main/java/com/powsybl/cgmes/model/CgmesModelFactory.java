@@ -101,7 +101,13 @@ public final class CgmesModelFactory {
         return new CgmesModelTripleStore(cimNamespace, tripleStore, tripleStoreOptions.queryCatalog());
     }
 
-    private static String obtainCimNamespace(ReadOnlyDataSource ds, ReadOnlyDataSource dsBoundary) {
+    /**
+     * The CIM namespace of the data, taken from the boundary when the main data source declares none: a data source
+     * that holds nothing but boundary files still has to be loadable.
+     *
+     * @throws CgmesModelException if neither data source declares a CIM namespace
+     */
+    public static String obtainCimNamespace(ReadOnlyDataSource ds, ReadOnlyDataSource dsBoundary) {
         try {
             return new CgmesOnDataSource(ds).cimNamespace();
         } catch (CgmesModelException e) {

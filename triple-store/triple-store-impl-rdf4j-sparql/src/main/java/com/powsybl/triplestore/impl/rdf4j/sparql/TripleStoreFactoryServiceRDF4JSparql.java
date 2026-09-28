@@ -106,12 +106,8 @@ public class TripleStoreFactoryServiceRDF4JSparql implements TripleStoreFactoryS
                 .map(Duration::parse).orElse(null);
         Duration readTimeout = config.getOptionalStringProperty("read-timeout")
                 .map(Duration::parse).orElse(null);
-        if (connectTimeout != null || readTimeout != null) {
-            endpoint = endpoint.withTimeouts(
-                    connectTimeout == null ? endpoint.connectTimeout() : connectTimeout,
-                    readTimeout == null ? endpoint.readTimeout() : readTimeout);
-        }
-        return endpoint;
+        // A missing timeout is the default, which is also what the guessed endpoint carries.
+        return endpoint.withTimeouts(connectTimeout, readTimeout);
     }
 
     @Override

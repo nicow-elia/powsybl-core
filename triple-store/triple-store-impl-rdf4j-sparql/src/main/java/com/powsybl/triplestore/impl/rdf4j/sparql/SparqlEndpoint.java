@@ -260,8 +260,7 @@ public record SparqlEndpoint(URI queryUrl, URI updateUrl, URI graphStoreUrl, Str
                 + ", graphStoreUrl=" + graphStoreUrl
                 + ", user=" + user
                 + ", password=" + (password == null ? "null" : "***")
-                + ", headers=" + headers.keySet().stream().collect(
-                        java.util.stream.Collectors.joining(", ", "{", headers.isEmpty() ? "}" : "=***}"))
+                + ", headers={" + String.join(", ", headers.keySet()) + (headers.isEmpty() ? "}" : "=***}")
                 + ", connectTimeout=" + connectTimeout
                 + ", readTimeout=" + readTimeout + "]";
     }

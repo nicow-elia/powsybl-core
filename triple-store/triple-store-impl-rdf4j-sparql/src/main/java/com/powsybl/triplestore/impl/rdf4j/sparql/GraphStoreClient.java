@@ -189,10 +189,6 @@ public final class GraphStoreClient implements AutoCloseable {
     }
 
     private void send(String method, String graphIri, InputStream nTriples, long byteCount) {
-        if (!supported()) {
-            throw new TripleStoreException("The endpoint " + endpoint.queryUrl()
-                    + " has no Graph Store Protocol URL, graphs cannot be transferred");
-        }
         HttpRequest request = request(graphIri)
                 .method(method, HttpRequest.BodyPublishers.fromPublisher(
                         HttpRequest.BodyPublishers.ofInputStream(() -> nTriples), byteCount))

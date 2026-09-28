@@ -58,7 +58,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The round trip of the equipment values of work package 5: operational limits of a CGMES 2.4.15 model, branch
+ * The round trip of the equipment values (limits and impedances): operational limits of a CGMES 2.4.15 model, branch
  * impedances and voltage level limits.
  *
  * <p>The steady state scenarios are covered by {@code CgmesDiffRoundTripTest}, which additionally compares every
@@ -78,10 +78,6 @@ class CgmesEqDiffRoundTripTest {
     private static final String[] LINE_FILES = {"line_EQ.xml", "line_SSH.xml"};
     private static final String LIMITS_DIR = "/issues/operational-limits/";
     private static final String AC_LINE_SEGMENT = "ACLineSegment";
-
-    static List<Scenario> equipmentScenarios() {
-        return RecordedChangeScenarios.equipmentChanges();
-    }
 
     static Stream<Arguments> scenarios() {
         List<Arguments> arguments = new ArrayList<>();
@@ -280,7 +276,7 @@ class CgmesEqDiffRoundTripTest {
      * never show.
      */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("equipmentScenarios")
+    @MethodSource("com.powsybl.cgmes.conversion.test.RecordedChangeScenarios#equipmentChanges")
     void applyEqualsSlowRouteReimport(Scenario scenario) {
         Network sender = scenario.load();
         List<NetworkEvent> events = RecordedChangeScenarios.record(sender, scenario.forwardChange());

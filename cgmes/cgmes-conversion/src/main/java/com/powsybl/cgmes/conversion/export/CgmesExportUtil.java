@@ -235,7 +235,7 @@ public final class CgmesExportUtil {
         return context.encode(id.startsWith("_") ? id : "_" + id);
     }
 
-    private static String toMasterResourceId(String id, CgmesExportContext context) {
+    static String toMasterResourceId(String id, CgmesExportContext context) {
         // Handling ids: if received id is prefixed by "_", remove it. Assuming it was added to comply with URN rules
         return context.encode(id.startsWith("_") ? id.substring(1) : id);
     }

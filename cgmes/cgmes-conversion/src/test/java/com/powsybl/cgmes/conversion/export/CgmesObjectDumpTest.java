@@ -81,7 +81,7 @@ class CgmesObjectDumpTest {
     }
 
     /**
-     * The equipment values of work package 5 go through the same probe: a difference model importer asks the mapping
+     * The equipment values (limits and impedances) go through the same probe: a difference model importer asks the mapping
      * what the receiving network currently says about an impedance, a voltage level limit or an operational limit.
      */
     @Test

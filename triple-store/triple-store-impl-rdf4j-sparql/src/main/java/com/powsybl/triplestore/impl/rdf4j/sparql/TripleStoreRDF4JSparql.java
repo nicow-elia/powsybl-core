@@ -102,7 +102,7 @@ public class TripleStoreRDF4JSparql extends TripleStoreRDF4J {
     private final String graphPrefix;
     private final GraphStoreClient graphStoreClient;
     private Map<String, String> namespaces;
-    private final boolean ownsClient;
+    private final boolean ownsResources;
 
     private volatile boolean remoteQueryDataset = true;
     private volatile List<IRI> cachedGraphs;
@@ -141,7 +141,7 @@ public class TripleStoreRDF4JSparql extends TripleStoreRDF4J {
         this.scenario = ScenarioGraphNames.requireValidScenario(scenario);
         this.graphPrefix = ScenarioGraphNames.prefix(this.scenario);
         this.graphStoreClient = Objects.requireNonNull(graphStoreClient);
-        this.ownsClient = ownsResources;
+        this.ownsResources = ownsResources;
     }
 
     /**
@@ -164,6 +164,7 @@ public class TripleStoreRDF4JSparql extends TripleStoreRDF4J {
     }
 
     private static Repository repositoryFor(SparqlEndpoint endpoint, String scenario) {
+        // Validated here as well as in the constructor so that a bad scenario fails before a repository is opened.
         ScenarioGraphNames.requireValidScenario(scenario);
         return newRepository(endpoint);
     }
@@ -470,7 +471,6 @@ public class TripleStoreRDF4JSparql extends TripleStoreRDF4J {
         }
         addNamespaceForBase(null, baseName);
         writeGraph(remoteGraph(contextName), collector.getStatements(), true);
-        invalidateGraphCache();
     }
 
     private static RDFFormat formatOf(String name) {
@@ -666,7 +666,8 @@ public class TripleStoreRDF4JSparql extends TripleStoreRDF4J {
 
     @Override
     public void close() {
-        if (ownsClient) {
+        // A shared repository and client are closed by their owner (the connection object that handed them in).
+        if (ownsResources) {
             graphStoreClient.close();
             super.close();
         }

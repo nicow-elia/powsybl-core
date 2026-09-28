@@ -316,7 +316,7 @@ public final class PartialSshExport {
         Objects.requireNonNull(events);
         Objects.requireNonNull(outputStream);
         Objects.requireNonNull(exportOptions);
-        checkSingleGridModel(network);
+        EventCompactor.checkSingleGridModel(network, "A partial SSH file");
 
         try (ExportVariantScope scope = ExportVariantScope.enter(network, exportOptions.getVariant())) {
             CgmesExportContext context = new CgmesExportContext(network);
@@ -329,20 +329,20 @@ public final class PartialSshExport {
             CgmesChangeTranslator translator =
                     new CgmesChangeTranslator(network, context, exportOptions.unsupportedChangeBehavior)
                             .setRejectSharedChanges(exportOptions.isRejectSharedChanges());
-            CgmesPropertyBuffer updates =
-                    translator.translateAll(compactEvents(ofSelectedVariant(events, exportOptions.getVariant())));
+            CgmesChangeTranslator.Translation translation = CgmesChangeTranslator.translateAll(
+                    compactEvents(EventCompactor.ofVariant(events, exportOptions.getVariant())), translator, null);
 
             try {
                 // Buffered UTF-8 under the StAX writer: over a bare OutputStream the JDK writer emits one byte per
                 // call. The same bytes; the flush pushes them through to the stream, which is not closed
                 Writer out = new BufferedWriter(new OutputStreamWriter(outputStream, StandardCharsets.UTF_8));
                 XMLStreamWriter writer = XmlUtil.initializeWriter(true, "    ", out);
-                write(updates, writer, context, model, network);
+                write(translation.after(), writer, context, model, network);
                 writer.flush();
             } catch (XMLStreamException e) {
                 throw new UncheckedXmlStreamException(e);
             }
-            return List.copyOf(translator.exportedEvents());
+            return List.copyOf(translation.exportedEvents());
         }
     }
 
@@ -360,33 +360,6 @@ public final class PartialSshExport {
      */
     public static List<NetworkEvent> compactEvents(Collection<NetworkEvent> events) {
         return EventCompactor.compact(events, null).events();
-    }
-
-    /**
-     * The changes that belong to the selected variant; naming a variant is a selection, not a rejection.
-     */
-    private static Collection<NetworkEvent> ofSelectedVariant(Collection<NetworkEvent> events, String variant) {
-        if (variant == null) {
-            return events;
-        }
-        return events.stream()
-                .filter(event -> {
-                    String eventVariant = CgmesChangeTranslator.variantIdOf(event);
-                    return eventVariant == null || eventVariant.equals(variant);
-                })
-                .toList();
-    }
-
-    /**
-     * A partial SSH describes a single individual grid model: its header has to reference the SSH it replaces and
-     * the equipment model it applies to, and a merged network has one of each per subnetwork.
-     */
-    private static void checkSingleGridModel(Network network) {
-        if (!network.getSubnetworks().isEmpty()) {
-            throw new PowsyblException("Network " + network.getId() + " is a merged model with "
-                    + network.getSubnetworks().size() + " subnetworks. A partial SSH file describes a single "
-                    + "individual grid model, so it has to be exported from each subnetwork separately.");
-        }
     }
 
     private static void write(CgmesPropertyBuffer updates, XMLStreamWriter writer, CgmesExportContext context,

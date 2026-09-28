@@ -8,24 +8,20 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
-import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
-import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.List;
-import java.util.Properties;
-import java.util.stream.Stream;
 
+import static com.powsybl.cgmes.rdfdb.Backends.microGridBe;
+import static com.powsybl.cgmes.rdfdb.Backends.params;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -49,34 +45,20 @@ class ModelCatalogTest {
     private static final String OTHER = "2016-01-02";
     private static final String CIM16 = "http://iec.ch/TC57/2013/CIM-schema-cim16#";
 
-    static Stream<Arguments> backends() {
-        return Backends.backends();
-    }
-
-    private static Properties params() {
-        Properties p = new Properties();
-        p.put(CgmesImport.IMPORT_CGM_WITH_SUBNETWORKS, "false");
-        return p;
-    }
-
-    private static ReadOnlyDataSource be() {
-        return CgmesConformity1Catalog.microGridBaseCaseBE().dataSource();
-    }
-
     /** A connection whose two scenarios both hold the MicroGrid BE fixture. */
     private static RdfDbConnection twoScenarios(String backend) {
         RdfDbConnection db = RdfDbConnection.open(Backends.database(backend, "catalog"));
         db.clear(S);
         db.clear(OTHER);
-        db.loadCgmes(S, be(), null, params(), ReportNode.NO_OP);
-        db.loadCgmes(OTHER, be(), null, params(), ReportNode.NO_OP);
+        db.loadCgmes(S, microGridBe(), null, params(), ReportNode.NO_OP);
+        db.loadCgmes(OTHER, microGridBe(), null, params(), ReportNode.NO_OP);
         return db;
     }
 
     // ------------------------------------------------------------------ registration
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void anEmptyScenarioHasAnEmptyCatalogue(String backend) {
         try (RdfDbConnection db = RdfDbConnection.open(Backends.database(backend, "catalog-empty"))) {
             String scenario = "nothing-here";
@@ -94,7 +76,7 @@ class ModelCatalogTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void anUploadRegistersEveryInstanceFileWithItsHeader(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             ModelCatalog catalog = db.catalog(S);
@@ -123,7 +105,7 @@ class ModelCatalogTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void modelsAreSortedByProfileThenByDepth(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             ModelCatalog catalog = db.catalog(S);
@@ -141,7 +123,7 @@ class ModelCatalogTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void reRegisteringAGraphReplacesItsNodeRatherThanMergingIntoIt(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             ModelCatalog catalog = db.catalog(S);
@@ -162,7 +144,7 @@ class ModelCatalogTest {
     // ------------------------------------------------------------------ chains
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void headAndChainDownFollowTheSupersedesChain(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             ModelCatalog catalog = db.catalog(S);
@@ -193,7 +175,7 @@ class ModelCatalogTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void anUnknownIdentifierHasNoChain(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             assertThat(db.catalog(S).chainDown("urn:uuid:never-stored")).isEmpty();
@@ -203,7 +185,7 @@ class ModelCatalogTest {
     // ------------------------------------------------------------------ one catalogue per scenario
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void cataloguesArePerScenario(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             ModelCatalog here = db.catalog(S);
@@ -231,7 +213,7 @@ class ModelCatalogTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aScenarioNameSurvivesTheIriRoundTrip(String backend) {
         try (RdfDbConnection db = RdfDbConnection.open(Backends.database(backend, "catalog-names"))) {
             // Whitespace and '/' are refused by the scenario name rules of the loading layer: one would make the
@@ -239,7 +221,7 @@ class ModelCatalogTest {
             // another's graphs. Everything else is free-form and has to survive the round trip through the IRI.
             String scenario = "DACF#2016?01:01+%";
             db.clear(scenario);
-            db.loadCgmes(scenario, be(), null, params(), ReportNode.NO_OP);
+            db.loadCgmes(scenario, microGridBe(), null, params(), ReportNode.NO_OP);
             String meta = db.catalog(scenario).metaGraph();
             assertThat(meta).startsWith(RdfDbNames.BASE).endsWith("/meta")
                     .doesNotContain("#").doesNotContain("?");
@@ -253,7 +235,7 @@ class ModelCatalogTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aScenarioThatOnlyOwnsAMetadataGraphIsListed(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             assertThat(db.scenarios()).contains(S, OTHER);

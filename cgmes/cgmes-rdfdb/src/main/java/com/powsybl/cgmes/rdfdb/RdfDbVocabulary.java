@@ -135,7 +135,7 @@ public final class RdfDbVocabulary {
     /** {@code md:Model.Supersedes}, which is the version chain of a profile inside a scenario. */
     public static final String MODEL_SUPERSEDES = MD_NS + "Model.Supersedes";
 
-    // ------------------------------------------------------------------ versioning (follow-up WP3, schema v2)
+    // ------------------------------------------------------------------ versioning
 
     /** {@code pdb:Snapshot}, the class of a consistent grid state addressed by (scenario, timestep, version). */
     public static final String SNAPSHOT_CLASS = NS + "Snapshot";

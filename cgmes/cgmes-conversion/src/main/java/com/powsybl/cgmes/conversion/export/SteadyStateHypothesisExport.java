@@ -931,7 +931,18 @@ public final class SteadyStateHypothesisExport {
                 * state.getDouble(vsc, CgmesChangeTranslator.REACTIVE_POWER_SETPOINT, vsc::getReactivePowerSetpoint);
     }
 
-    record ConverterState(double targetPpcc, double targetUdc, double p, double q) {
+    record ConverterState(double targetPpcc, double targetUdc, double p, double q) implements ConverterSetpoints {
+    }
+
+    /** The four quantities the CGMES import reads as a single block for any converter. */
+    interface ConverterSetpoints {
+        double targetPpcc();
+
+        double targetUdc();
+
+        double p();
+
+        double q();
     }
 
     /**
@@ -1166,7 +1177,7 @@ public final class SteadyStateHypothesisExport {
      *                                   of a voltage source one: the second enumeration each class carries
      */
     record AcDcConverterState(double targetPpcc, double targetUdc, double p, double q,
-                              String pPccControl, String operatingModeOrQpccControl) {
+                              String pPccControl, String operatingModeOrQpccControl) implements ConverterSetpoints {
     }
 
     /**

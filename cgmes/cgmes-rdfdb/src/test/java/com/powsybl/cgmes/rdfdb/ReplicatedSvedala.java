@@ -12,7 +12,6 @@ import com.powsybl.commons.datasource.DataSource;
 import com.powsybl.commons.datasource.MemDataSource;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -30,6 +29,8 @@ import java.util.Properties;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import static com.powsybl.cgmes.rdfdb.TimestepFixtures.read;
 
 /**
  * Svedala, copied {@code n} times into one model set: an IGM-sized grid built from the largest CGMES 3 model the
@@ -290,16 +291,6 @@ final class ReplicatedSvedala {
             }
             names.sort(String::compareTo);
             return names;
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
-    }
-
-    static String read(ReadOnlyDataSource source, String name) {
-        try (InputStream in = source.newInputStream(name)) {
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            in.transferTo(out);
-            return out.toString(StandardCharsets.UTF_8);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }

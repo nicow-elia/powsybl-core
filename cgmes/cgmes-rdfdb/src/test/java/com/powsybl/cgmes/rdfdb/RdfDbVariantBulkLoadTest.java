@@ -8,24 +8,17 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
-import com.powsybl.cgmes.conversion.CgmesImport;
-import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
-import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.VariantManagerConstants;
-import com.powsybl.iidm.network.events.NetworkEvent;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.List;
-import java.util.Properties;
 import java.util.Set;
-import java.util.function.Consumer;
-import java.util.stream.Stream;
 
+import static com.powsybl.cgmes.rdfdb.Backends.microGridBe;
+import static com.powsybl.cgmes.rdfdb.Backends.params;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -43,34 +36,15 @@ class RdfDbVariantBulkLoadTest {
     private static final String S = "2016-01-01";
     private static final Set<String> IDENTITY = Set.of("cgmesMetadataModels", "rdfDbProvenance");
 
-    static Stream<Arguments> backends() {
-        return Backends.backends();
-    }
-
-    private static Properties params() {
-        Properties p = new Properties();
-        p.put(CgmesImport.IMPORT_CGM_WITH_SUBNETWORKS, "false");
-        return p;
-    }
-
-    private static ReadOnlyDataSource be() {
-        return CgmesConformity1Catalog.microGridBaseCaseBE().dataSource();
-    }
-
     private static RdfDbConnection rootOnly(String backend) {
         RdfDbConnection db = RdfDbConnection.open(Backends.database(backend, "variant-bulk"));
         db.clear(S);
-        db.snapshots(S).putFull(be(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
+        db.snapshots(S).putFull(microGridBe(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
         return db;
     }
 
     private static Network load(RdfDbConnection db, String version, String timestep) {
         return RdfDbNetworkLoader.load(db, S, version, timestep, null, params(), ReportNode.NO_OP);
-    }
-
-    private static void record(Network network, RdfDbConnection db, SnapshotRef target, Consumer<Network> change) {
-        List<NetworkEvent> events = Changes.record(network, change);
-        RdfDbExport.export(network, events, db, target, new CgmesDiffExport.ExportOptions());
     }
 
     /** The base timestep plus three more, each one load step apart, all at version 1.0. */
@@ -92,7 +66,7 @@ class RdfDbVariantBulkLoadTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void everyTimestepVariantEqualsASeparateLoad(String backend) {
         try (RdfDbConnection db = day(backend)) {
             VariantLoadResult result = loadDay(db, DAY);
@@ -125,7 +99,7 @@ class RdfDbVariantBulkLoadTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void theNamingRuleUsesLabelsWhenTheyAreDistinct(String backend) {
         try (RdfDbConnection db = day(backend)) {
             VariantLoadResult result = loadDay(db, DAY);
@@ -138,11 +112,11 @@ class RdfDbVariantBulkLoadTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void theNamingRuleQualifiesWithTheVersionWhenLabelsRepeat(String backend) {
         try (RdfDbConnection db = rootOnly(backend)) {
             Network sender = load(db, "1.0", null);
-            record(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 11.0));
+            Changes.export(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 11.0));
 
             VariantLoadResult result = RdfDbNetworkLoader.loadVariants(db, S, List.of(
                     VariantRequest.of(SnapshotRef.of(S, "1.0")),
@@ -155,7 +129,7 @@ class RdfDbVariantBulkLoadTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void explicitIdentifiersAreUsedAsGiven(String backend) {
         try (RdfDbConnection db = day(backend)) {
             VariantLoadResult result = RdfDbNetworkLoader.loadVariants(db, S, List.of(
@@ -169,7 +143,7 @@ class RdfDbVariantBulkLoadTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void duplicateAndReservedIdentifiersAreRefused(String backend) {
         try (RdfDbConnection db = day(backend)) {
             assertThatThrownBy(() -> RdfDbNetworkLoader.loadVariants(db, S, List.of(
@@ -194,7 +168,7 @@ class RdfDbVariantBulkLoadTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aMissingSnapshotIsNamedBeforeAnythingIsLoaded(String backend) {
         try (RdfDbConnection db = day(backend)) {
             assertThatThrownBy(() -> RdfDbNetworkLoader.loadVariants(db, S, List.of(
@@ -210,11 +184,11 @@ class RdfDbVariantBulkLoadTest {
     /** Mixing versions and timesteps in one request list is an ordinary case, not a special one. */
     /** F5: a request with an open version binds to the version it really reached. */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aBindingCarriesTheResolvedVersion(String backend) {
         try (RdfDbConnection db = rootOnly(backend)) {
             Network sender = load(db, "1.0", null);
-            record(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 11.0));
+            Changes.export(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 11.0));
 
             VariantLoadResult result = RdfDbNetworkLoader.loadVariants(db, S, List.of(
                     new VariantRequest("head", SnapshotRef.latest(S))),
@@ -229,11 +203,11 @@ class RdfDbVariantBulkLoadTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void mixedVersionsAndTimesteps(String backend) {
         try (RdfDbConnection db = day(backend)) {
             Network sender = load(db, "1.0", DAY.get(1));
-            record(sender, db, new SnapshotRef(S, "1.1", DAY.get(1)), n -> Changes.moveLoad(n, 17.0));
+            Changes.export(sender, db, new SnapshotRef(S, "1.1", DAY.get(1)), n -> Changes.moveLoad(n, 17.0));
 
             VariantLoadResult result = RdfDbNetworkLoader.loadVariants(db, S, List.of(
                     new VariantRequest("base", new SnapshotRef(S, "1.0", DAY.get(0))),
@@ -252,7 +226,7 @@ class RdfDbVariantBulkLoadTest {
 
     /** One drifted timestep is refused; the others are loaded and usable. */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void oneRefusedTimestepDoesNotCostTheOthers(String backend) {
         try (RdfDbConnection db = rootOnly(backend)) {
             db.snapshots(S).putAsDiff(TimestepFixtures.ssh(1, DAY.get(1), "ok"), null,
@@ -274,7 +248,7 @@ class RdfDbVariantBulkLoadTest {
 
     /** Every requested snapshot gets a variant of its own, including the first one. */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void theFirstRequestIsTheNetworkAndAVariantOfItsOwn(String backend) {
         try (RdfDbConnection db = day(backend)) {
             VariantLoadResult result = loadDay(db, List.of(DAY.get(0), DAY.get(1)));
@@ -298,14 +272,14 @@ class RdfDbVariantBulkLoadTest {
      * re-planned against what is really there, which still runs into the same unsafe difference.
      */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aRefusedCloneSourceDoesNotFailTheLoad(String backend) {
         try (RdfDbConnection db = rootOnly(backend)) {
             Network sender = load(db, "1.0", null);
             String line = sender.getLineStream().map(l -> l.getId()).sorted().findFirst().orElseThrow();
-            record(sender, db, SnapshotRef.of(S, "1.1"),
+            Changes.export(sender, db, SnapshotRef.of(S, "1.1"),
                 n -> n.getLine(line).setR(n.getLine(line).getR() + 1.0));
-            record(sender, db, SnapshotRef.of(S, "1.2"), n -> Changes.moveLoad(n, 7.0));
+            Changes.export(sender, db, SnapshotRef.of(S, "1.2"), n -> Changes.moveLoad(n, 7.0));
             db.sparql(S).update(RdfDbVocabulary.PREFIXES + "DELETE { GRAPH <" + RdfDbNames.metaGraph(S)
                     + "> { ?m pdb:variantSafe ?v } } WHERE { GRAPH <" + RdfDbNames.metaGraph(S)
                     + "> { ?m pdb:variantSafe ?v } }");
@@ -326,7 +300,7 @@ class RdfDbVariantBulkLoadTest {
 
     /** The multi-thread flag is set before any variant exists, which is the only time it is safe. */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void multiThreadAccessCanBeAskedForUpFront(String backend) {
         try (RdfDbConnection db = day(backend)) {
             VariantLoadResult result = RdfDbNetworkLoader.loadVariants(db, S, "1.0", DAY,

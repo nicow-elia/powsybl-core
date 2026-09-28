@@ -10,18 +10,57 @@ package com.powsybl.cgmes.rdfdb;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import java.util.function.Function;
 
 /**
- * The two decisions a variant operation makes about a path, shared by the single update and the bulk load.
- *
- * <p>They were written twice and drifted apart once already (the bulk copy of the options lost the network
- * factory), which is reason enough for them to live in one place.</p>
+ * The decisions a variant operation makes about a path &mdash; which source is nearest, whether its path can be
+ * walked inside one variant, which options it runs with &mdash; shared by the single update and the bulk load.
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 final class VariantPlans {
 
     private VariantPlans() {
+    }
+
+    /**
+     * A variant that is at a snapshot, and the chain of that snapshot.
+     *
+     * @param variantId the variant
+     * @param chain     the chain of its snapshot, deepest first; {@code null} or empty when it reached nothing
+     */
+    record Source(String variantId, List<SnapshotInfo> chain) {
+    }
+
+    /**
+     * The source a target is reached from, and the path.
+     *
+     * @param sourceVariant the variant the path starts at
+     * @param plan          the path
+     */
+    record Chosen(String sourceVariant, UpdatePlan plan) {
+    }
+
+    /**
+     * The source with the best path to a target, see {@link #isBetter}; a tie goes to the earlier source.
+     *
+     * @param sources the sources to consider, in order of preference; one whose chain is missing is skipped
+     * @param pathTo  the path from a source's chain to the target
+     * @return the nearest source, or empty when none reached anything
+     */
+    static Optional<Chosen> nearest(List<Source> sources, Function<List<SnapshotInfo>, UpdatePlan> pathTo) {
+        Chosen chosen = null;
+        for (Source source : sources) {
+            if (source.chain() == null || source.chain().isEmpty()) {
+                continue;
+            }
+            UpdatePlan plan = pathTo.apply(source.chain());
+            if (chosen == null || isBetter(plan, chosen.plan())) {
+                chosen = new Chosen(source.variantId(), plan);
+            }
+        }
+        return Optional.ofNullable(chosen);
     }
 
     /**

@@ -9,7 +9,6 @@
 package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.model.CgmesSubset;
-import com.powsybl.commons.PowsyblException;
 import com.powsybl.commons.extensions.Extension;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.VariantManager;
@@ -187,9 +186,7 @@ public interface RdfDbProvenance extends Extension<Network> {
         }
         if (network.getExtension(RdfDbProvenance.class) instanceof RdfDbProvenanceImpl impl
                 && impl.variantBindings().containsKey(variantId)) {
-            try (VariantScope scope = VariantScope.enter(network, impl, variantId)) {
-                return body.get();
-            }
+            return VariantScope.call(network, impl, variantId, body);
         }
         return inWorkingVariant(network, variantId, body);
     }
@@ -197,13 +194,8 @@ public interface RdfDbProvenance extends Extension<Network> {
     /** The working-variant half on its own, for a variant that stands for no stored snapshot. */
     private static <T> T inWorkingVariant(Network network, String variantId, Supplier<T> body) {
         VariantManager variantManager = network.getVariantManager();
-        String previous;
-        try {
-            previous = variantManager.getWorkingVariantId();
-        } catch (PowsyblException e) {
-            // A thread that never selected a variant has none at all; there is nothing to restore
-            previous = null;
-        }
+        // A thread that never selected a variant has none at all; there is nothing to restore
+        String previous = VariantScope.workingVariantOrNull(network);
         if (variantId.equals(previous)) {
             return body.get();
         }

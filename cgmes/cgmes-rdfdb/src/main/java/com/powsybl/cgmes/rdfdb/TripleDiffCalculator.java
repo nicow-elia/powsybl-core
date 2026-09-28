@@ -136,13 +136,8 @@ final class TripleDiffCalculator {
 
         /** @return how many statements the index holds, the model header excluded */
         int size() {
-            int n = 0;
-            for (Map<String, List<CgmesStatement>> properties : bySubject.values()) {
-                for (List<CgmesStatement> statements : properties.values()) {
-                    n += statements.size();
-                }
-            }
-            return n;
+            return bySubject.values().stream().flatMap(properties -> properties.values().stream())
+                    .mapToInt(List::size).sum();
         }
     }
 

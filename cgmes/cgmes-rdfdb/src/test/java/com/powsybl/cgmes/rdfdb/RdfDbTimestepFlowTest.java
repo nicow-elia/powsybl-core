@@ -8,8 +8,6 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
-import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
@@ -17,15 +15,13 @@ import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.events.NetworkEvent;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.List;
-import java.util.Properties;
 import java.util.Set;
-import java.util.function.Consumer;
-import java.util.stream.Stream;
 
+import static com.powsybl.cgmes.rdfdb.Backends.microGridBe;
+import static com.powsybl.cgmes.rdfdb.Backends.params;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -54,26 +50,12 @@ class RdfDbTimestepFlowTest {
     private static final CgmesSubset EQ = CgmesSubset.EQUIPMENT;
     private static final Set<String> IDENTITY = Set.of("cgmesMetadataModels", "rdfDbProvenance");
 
-    static Stream<Arguments> backends() {
-        return Backends.backends();
-    }
-
-    private static Properties params() {
-        Properties p = new Properties();
-        p.put(CgmesImport.IMPORT_CGM_WITH_SUBNETWORKS, "false");
-        return p;
-    }
-
-    private static ReadOnlyDataSource be() {
-        return CgmesConformity1Catalog.microGridBaseCaseBE().dataSource();
-    }
-
     private static RdfDbConnection twoDays(String backend) {
         RdfDbConnection db = RdfDbConnection.open(Backends.database(backend, "timestep-flow"));
         db.clear(S);
         db.clear(OTHER);
-        db.snapshots(S).putFull(be(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
-        db.snapshots(OTHER).putFull(be(), null, SnapshotRef.of(OTHER, "1.0"), params(), ReportNode.NO_OP);
+        db.snapshots(S).putFull(microGridBe(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
+        db.snapshots(OTHER).putFull(microGridBe(), null, SnapshotRef.of(OTHER, "1.0"), params(), ReportNode.NO_OP);
         return db;
     }
 
@@ -81,22 +63,16 @@ class RdfDbTimestepFlowTest {
         return RdfDbNetworkLoader.load(db, scenario, version, timestep, null, params(), ReportNode.NO_OP);
     }
 
-    private static RdfDbExport.SnapshotResult record(Network network, RdfDbConnection db, SnapshotRef target,
-                                                     Consumer<Network> change) {
-        List<NetworkEvent> events = Changes.record(network, change);
-        return RdfDbExport.export(network, events, db, target, new CgmesDiffExport.ExportOptions());
-    }
-
     // ------------------------------------------------------------------ writing timesteps
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aNewTimestepHangsOffTheBaseHead(String backend) {
         try (RdfDbConnection db = twoDays(backend)) {
             Network sender = load(db, S, "1.0", null);
             SnapshotInfo base = db.snapshots(S).find(SnapshotRef.of(S, "1.0")).orElseThrow();
 
-            SnapshotInfo root = record(sender, db, SnapshotRef.of(S, "1.0", T1),
+            SnapshotInfo root = Changes.export(sender, db, SnapshotRef.of(S, "1.0", T1),
                     n -> Changes.moveLoad(n, 12.0)).snapshot();
 
             assertThat(root.timestep()).isEqualTo(T1);
@@ -119,13 +95,13 @@ class RdfDbTimestepFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void versionsChainInsideTheTimestep(String backend) {
         try (RdfDbConnection db = twoDays(backend)) {
             Network sender = load(db, S, "1.0", null);
-            SnapshotInfo root = record(sender, db, SnapshotRef.of(S, "1.0", T1),
+            SnapshotInfo root = Changes.export(sender, db, SnapshotRef.of(S, "1.0", T1),
                     n -> Changes.moveLoad(n, 12.0)).snapshot();
-            SnapshotInfo second = record(sender, db, SnapshotRef.of(S, "1.1", T1),
+            SnapshotInfo second = Changes.export(sender, db, SnapshotRef.of(S, "1.1", T1),
                     n -> Changes.moveLoad(n, 14.0)).snapshot();
 
             assertThat(second.edge()).isEqualTo(SnapshotInfo.EdgeKind.VERSION);
@@ -140,15 +116,15 @@ class RdfDbTimestepFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aSecondRootForOneTimestepIsRejected(String backend) {
         try (RdfDbConnection db = twoDays(backend)) {
             Network first = load(db, S, "1.0", null);
             Network second = load(db, S, "1.0", null);
-            record(first, db, SnapshotRef.of(S, "1.0", T1), n -> Changes.moveLoad(n, 12.0));
+            Changes.export(first, db, SnapshotRef.of(S, "1.0", T1), n -> Changes.moveLoad(n, 12.0));
 
             // The second writer still thinks 11:00 does not exist, and its diff supersedes the base state
-            assertThatThrownBy(() -> record(second, db, SnapshotRef.of(S, "2.0", T1),
+            assertThatThrownBy(() -> Changes.export(second, db, SnapshotRef.of(S, "2.0", T1),
                     n -> Changes.moveLoad(n, 15.0)))
                     .isInstanceOf(RdfDbConflictException.class);
             db.snapshots(S).verify();
@@ -156,13 +132,13 @@ class RdfDbTimestepFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aTimestepRootMustDeriveFromTheBaseChain(String backend) {
         try (RdfDbConnection db = twoDays(backend)) {
             Network sender = load(db, S, "1.0", null);
-            record(sender, db, SnapshotRef.of(S, "1.0", T1), n -> Changes.moveLoad(n, 12.0));
+            Changes.export(sender, db, SnapshotRef.of(S, "1.0", T1), n -> Changes.moveLoad(n, 12.0));
             // The sender now sits at 11:00; writing 11:15 from there would pin one timestep to another
-            assertThatThrownBy(() -> record(sender, db, SnapshotRef.of(S, "1.0", T2),
+            assertThatThrownBy(() -> Changes.export(sender, db, SnapshotRef.of(S, "1.0", T2),
                     n -> Changes.moveLoad(n, 16.0)))
                     .isInstanceOf(RdfDbConflictException.class)
                     .hasMessageContaining("timestep roots derive from the base timestep");
@@ -172,11 +148,11 @@ class RdfDbTimestepFlowTest {
     // ------------------------------------------------------------------ reading and walking
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void updateFromTheBaseToATimestepIsOneDifference(String backend) {
         try (RdfDbConnection db = twoDays(backend)) {
             Network sender = load(db, S, "1.0", null);
-            record(sender, db, SnapshotRef.of(S, "1.0", T1), n -> Changes.moveLoad(n, 12.0));
+            Changes.export(sender, db, SnapshotRef.of(S, "1.0", T1), n -> Changes.moveLoad(n, 12.0));
             Network client = load(db, S, "1.0", null);
 
             UpdateResult result = RdfDbNetworkLoader.update(client, db, S, "1.0", "11:00", params(),
@@ -190,15 +166,15 @@ class RdfDbTimestepFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void updateFromOneTimestepToAnotherGoesThroughTheBase(String backend) {
         try (RdfDbConnection db = twoDays(backend)) {
             Network sender = load(db, S, "1.0", null);
-            record(sender, db, SnapshotRef.of(S, "1.0", T1), n -> Changes.moveLoad(n, 12.0));
+            Changes.export(sender, db, SnapshotRef.of(S, "1.0", T1), n -> Changes.moveLoad(n, 12.0));
             // Back to the base head to write the next timestep, which is what the scheme asks of a writer
             RdfDbNetworkLoader.update(sender, db, SnapshotRef.of(S, "1.0"), new RdfDbUpdateOptions(), params(),
                     ReportNode.NO_OP);
-            record(sender, db, SnapshotRef.of(S, "1.0", T2), n -> Changes.moveLoad(n, 16.0));
+            Changes.export(sender, db, SnapshotRef.of(S, "1.0", T2), n -> Changes.moveLoad(n, 16.0));
 
             Network client = load(db, S, "1.0", "11:00");
             UpdateResult result = RdfDbNetworkLoader.update(client, db, S, "1.0", "11:15", params(),
@@ -214,12 +190,12 @@ class RdfDbTimestepFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void loadingATimestepEqualsWalkingToIt(String backend) {
         try (RdfDbConnection db = twoDays(backend)) {
             Network sender = load(db, S, "1.0", null);
-            record(sender, db, SnapshotRef.of(S, "1.0", T1), n -> Changes.moveLoad(n, 12.0));
-            record(sender, db, SnapshotRef.of(S, "1.1", T1), n -> Changes.moveLoad(n, 14.0));
+            Changes.export(sender, db, SnapshotRef.of(S, "1.0", T1), n -> Changes.moveLoad(n, 12.0));
+            Changes.export(sender, db, SnapshotRef.of(S, "1.1", T1), n -> Changes.moveLoad(n, 14.0));
 
             Network materialised = load(db, S, "1.1", "11:00");
 
@@ -231,12 +207,12 @@ class RdfDbTimestepFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void checkpointAtATimestepRoot(String backend) {
         try (RdfDbConnection db = twoDays(backend)) {
             Network sender = load(db, S, "1.0", null);
-            record(sender, db, SnapshotRef.of(S, "1.0", T1), n -> Changes.moveLoad(n, 12.0));
-            record(sender, db, SnapshotRef.of(S, "1.1", T1), n -> Changes.moveLoad(n, 14.0));
+            Changes.export(sender, db, SnapshotRef.of(S, "1.0", T1), n -> Changes.moveLoad(n, 12.0));
+            Changes.export(sender, db, SnapshotRef.of(S, "1.1", T1), n -> Changes.moveLoad(n, 14.0));
             Network before = load(db, S, "1.1", "11:00");
 
             Checkpoint.create(db, SnapshotRef.of(S, "1.1", T1));
@@ -250,11 +226,11 @@ class RdfDbTimestepFlowTest {
     // ------------------------------------------------------------------ labels belong to their scenario
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void everyTimestepFormAddressesTheSameSnapshot(String backend) {
         try (RdfDbConnection db = twoDays(backend)) {
             Network sender = load(db, S, "1.0", null);
-            record(sender, db, SnapshotRef.of(S, "1.0", T1), n -> Changes.moveLoad(n, 12.0));
+            Changes.export(sender, db, SnapshotRef.of(S, "1.0", T1), n -> Changes.moveLoad(n, 12.0));
             SnapshotCatalog catalog = db.snapshots(S);
 
             assertThat(catalog.resolve("1.0", "11:00").timestep()).isEqualTo(T1);
@@ -268,7 +244,7 @@ class RdfDbTimestepFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aLabelIsResolvedInsideItsOwnScenario(String backend) {
         try (RdfDbConnection db = twoDays(backend)) {
             // Both scenarios are the same day here, so the same label must still be resolved independently and
@@ -280,7 +256,7 @@ class RdfDbTimestepFlowTest {
                     .hasMessageContaining("cannot address scenario");
 
             Network sender = load(db, S, "1.0", null);
-            record(sender, db, SnapshotRef.of(S, "1.0", T1), n -> Changes.moveLoad(n, 12.0));
+            Changes.export(sender, db, SnapshotRef.of(S, "1.0", T1), n -> Changes.moveLoad(n, 12.0));
             // "11:00" exists in S and not in the other scenario, which is the whole point of per-scenario days
             assertThat(db.snapshots(S).versions("11:00")).hasSize(1);
             assertThat(db.snapshots(OTHER).versions("11:00")).isEmpty();
@@ -289,7 +265,7 @@ class RdfDbTimestepFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void anUnknownTimestepNamesTheOnesThatExist(String backend) {
         try (RdfDbConnection db = twoDays(backend)) {
             assertThatThrownBy(() -> load(db, S, "1.0", "9:00"))
@@ -304,16 +280,16 @@ class RdfDbTimestepFlowTest {
     // ------------------------------------------------------------------ the base chain keeps growing
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aBaseVersionAfterATimestepRootIsAccepted(String backend) {
         try (RdfDbConnection db = twoDays(backend)) {
             Network morning = load(db, S, "1.0", null);
-            record(morning, db, SnapshotRef.of(S, "1.0", T1), n -> Changes.moveLoad(n, 12.0));
+            Changes.export(morning, db, SnapshotRef.of(S, "1.0", T1), n -> Changes.moveLoad(n, 12.0));
 
             // The day goes on: a study run adds a version to the base chain, whose steady state model the 11:00
             // timestep already supersedes. Versions are the inner dimension; a timestep must not freeze them
             Network study = load(db, S, "1.0", null);
-            SnapshotInfo baseVersion = record(study, db, SnapshotRef.of(S, "1.1"),
+            SnapshotInfo baseVersion = Changes.export(study, db, SnapshotRef.of(S, "1.1"),
                     n -> Changes.moveLoad(n, 20.0)).snapshot();
 
             assertThat(baseVersion.timestep()).isEqualTo(BASE);
@@ -336,7 +312,7 @@ class RdfDbTimestepFlowTest {
     // ------------------------------------------------------------------ ingesting a timestep from files
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void putAsDiffSshOnly(String backend) {
         try (RdfDbConnection db = twoDays(backend)) {
             SnapshotCatalog catalog = db.snapshots(S);
@@ -362,7 +338,7 @@ class RdfDbTimestepFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void loadTimestepEqualsFileImport(String backend) {
         try (RdfDbConnection db = twoDays(backend)) {
             ReadOnlyDataSource files = TimestepFixtures.ssh(3, T1, "1100");
@@ -377,7 +353,7 @@ class RdfDbTimestepFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void eqDriftFallsBackToFullReload(String backend) {
         try (RdfDbConnection db = twoDays(backend)) {
             SnapshotInfo written = db.snapshots(S).putAsDiff(TimestepFixtures.eqDrift(2, T1, "drift"), null,
@@ -400,7 +376,7 @@ class RdfDbTimestepFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void putAsDiffRejectsChangedBoundary(String backend) {
         try (RdfDbConnection db = twoDays(backend)) {
             assertThatThrownBy(() -> db.snapshots(S).putAsDiff(TimestepFixtures.changedBoundary(T1, "bd"), null,
@@ -411,7 +387,7 @@ class RdfDbTimestepFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void putAsDiffOfAnUnchangedExportIsRefused(String backend) {
         try (RdfDbConnection db = twoDays(backend)) {
             // Zero loads moved: the files describe the state the database already holds
@@ -423,7 +399,7 @@ class RdfDbTimestepFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aMemberMustDescribeTheMomentItsSnapshotDoes(String backend) {
         try (RdfDbConnection db = twoDays(backend)) {
             Network sender = load(db, S, "1.0", null);
@@ -448,7 +424,7 @@ class RdfDbTimestepFlowTest {
      * timesteps after the first report no materialisation time worth speaking of.</p>
      */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aDayOfTimestepsDecodesItsParentStateOnce(String backend) {
         try (RdfDbConnection db = twoDays(backend)) {
             SnapshotCatalog catalog = db.snapshots(S);
@@ -479,7 +455,7 @@ class RdfDbTimestepFlowTest {
      * it did not, and which the network loaded afterwards proves it did.</p>
      */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aNewBaseVersionBetweenTwoTimestepsIsTheSecondOnesParent(String backend) {
         try (RdfDbConnection db = twoDays(backend)) {
             SnapshotCatalog catalog = db.snapshots(S);
@@ -488,7 +464,7 @@ class RdfDbTimestepFlowTest {
             long hits = catalog.parentIndexCacheHits();
 
             Network sender = load(db, S, "1.0", null);
-            SnapshotInfo baseVersion = record(sender, db, SnapshotRef.of(S, "1.1"),
+            SnapshotInfo baseVersion = Changes.export(sender, db, SnapshotRef.of(S, "1.1"),
                     n -> Changes.moveLoad(n, 12.0)).snapshot();
 
             SnapshotInfo written = catalog.putAsDiff(TimestepFixtures.ssh(3, T2, "after"), null,

@@ -464,7 +464,7 @@ public final class CgmesDiffExport {
         Objects.requireNonNull(network);
         Objects.requireNonNull(events);
         Objects.requireNonNull(exportOptions);
-        checkSingleGridModel(network);
+        EventCompactor.checkSingleGridModel(network, "A difference model");
 
         CgmesExportContext context = new CgmesExportContext(network);
         if (exportOptions.scenarioTime != null) {
@@ -472,7 +472,7 @@ public final class CgmesDiffExport {
         }
         context.setModelCreated(exportOptions.created);
         return new DifferenceModelBuilder(network, context,
-                EventCompactor.compact(ofSelectedVariant(events, exportOptions.getVariant()),
+                EventCompactor.compact(EventCompactor.ofVariant(events, exportOptions.getVariant()),
                         network.getVariantManager().getWorkingVariantId()), exportOptions);
     }
 
@@ -486,26 +486,7 @@ public final class CgmesDiffExport {
      * @return the variant identifier, or {@code null}
      */
     public static String variantOf(NetworkEvent event) {
-        return CgmesChangeTranslator.variantIdOf(event);
-    }
-
-    /**
-     * The changes that belong to the selected variant.
-     *
-     * <p>Naming a variant is a selection, so a change recorded on another one is simply not part of this export;
-     * it is dropped here rather than reported as unsupported. A change without a variant belongs to every variant
-     * and is kept &mdash; {@link ExportOptions#setRejectSharedChanges} decides what happens to it.</p>
-     */
-    private static Collection<NetworkEvent> ofSelectedVariant(Collection<NetworkEvent> events, String variant) {
-        if (variant == null) {
-            return events;
-        }
-        return events.stream()
-                .filter(event -> {
-                    String eventVariant = CgmesChangeTranslator.variantIdOf(event);
-                    return eventVariant == null || eventVariant.equals(variant);
-                })
-                .toList();
+        return EventCompactor.variantIdOf(event);
     }
 
     /**
@@ -525,15 +506,4 @@ public final class CgmesDiffExport {
         return builder.emptyModel(subset != null ? subset : CgmesSubset.STEADY_STATE_HYPOTHESIS);
     }
 
-    /**
-     * A difference model describes a single individual grid model: its header references the model it replaces and
-     * the equipment model it applies to, and a merged network has one of each per subnetwork.
-     */
-    private static void checkSingleGridModel(Network network) {
-        if (!network.getSubnetworks().isEmpty()) {
-            throw new PowsyblException("Network " + network.getId() + " is a merged model with "
-                    + network.getSubnetworks().size() + " subnetworks. A difference model describes a single "
-                    + "individual grid model, so it has to be exported from each subnetwork separately.");
-        }
-    }
 }

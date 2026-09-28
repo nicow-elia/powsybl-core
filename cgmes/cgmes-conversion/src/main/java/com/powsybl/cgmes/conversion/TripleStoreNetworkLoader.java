@@ -123,9 +123,7 @@ public final class TripleStoreNetworkLoader {
     public static Network load(TripleStore store, StoreContent content, NetworkFactory networkFactory, Properties params, ReportNode reportNode) {
         Objects.requireNonNull(store);
         Objects.requireNonNull(content);
-        CgmesImport cgmesImport = importer();
-        CgmesModel cgmes = model(store, content, params);
-        return cgmesImport.convert(cgmes, content.baseName(), networkFactory, params, reportNode);
+        return importer().convert(model(store, content, params), content.baseName(), networkFactory, params, reportNode);
     }
 
     /**
@@ -145,9 +143,7 @@ public final class TripleStoreNetworkLoader {
         Objects.requireNonNull(network);
         Objects.requireNonNull(store);
         StoreContent content = describe(store);
-        CgmesModel cgmes = new CgmesModelTripleStore(content.cimNamespace(), store, Conversion.QUERY_CATALOG_NAME_UPDATE);
-        cgmes.setBasename(content.baseName());
-        importer().update(network, cgmes, params, reportNode);
+        importer().update(network, storeModel(store, content, Conversion.QUERY_CATALOG_NAME_UPDATE), params, reportNode);
     }
 
     /**
@@ -164,7 +160,10 @@ public final class TripleStoreNetworkLoader {
     public static CgmesModel model(TripleStore store, StoreContent content, Properties params) {
         Objects.requireNonNull(store);
         Objects.requireNonNull(content);
-        String queryCatalog = store.getOptions() == null ? "" : store.getOptions().queryCatalog();
+        return storeModel(store, content, store.getOptions() == null ? "" : store.getOptions().queryCatalog());
+    }
+
+    private static CgmesModel storeModel(TripleStore store, StoreContent content, String queryCatalog) {
         CgmesModel cgmes = new CgmesModelTripleStore(content.cimNamespace(), store, queryCatalog);
         cgmes.setBasename(content.baseName());
         return cgmes;

@@ -29,6 +29,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Function;
 import java.util.function.Predicate;
 
 import static com.powsybl.cgmes.conversion.Conversion.ALIAS_PHASE_TAP_CHANGER1;
@@ -86,14 +87,15 @@ class CgmesChangeRegulatingControls {
         if (users.isEmpty()) {
             return failure("no equipment of the network regulates through CGMES regulating control " + regulatingControlId);
         }
-        Optional<String> conflict = tapChangerDisagreement(regulatingControlId, users, state);
-        if (conflict.isPresent()) {
-            return failure(conflict.get());
+        if (tapChangersDisagree(users, state)) {
+            return failure("tap changers sharing CGMES tap changer control " + regulatingControlId
+                    + " do not agree on whether they regulate, and the CGMES update gives them all the state of"
+                    + " the shared control");
         }
 
         List<RegulatingControlView> views = new ArrayList<>(users.size());
         for (User user : users) {
-            switch (user.view(state)) {
+            switch (user.view().apply(state)) {
                 case Result.Success(RegulatingControlView view) -> views.add(view);
                 // One user the control cannot describe makes the whole description wrong, not just its own part
                 case Result.Failure(String reason) -> {
@@ -109,17 +111,12 @@ class CgmesChangeRegulatingControls {
      * CGMES update derives the state of a tap changer from {@code RegulatingControl.enabled} alone and ignores
      * {@code TapChanger.controlEnabled}, so both would come back with the same state on the receiving side.
      */
-    private static Optional<String> tapChangerDisagreement(String regulatingControlId, List<User> users, IidmStateView state) {
-        boolean disagree = users.stream()
+    private static boolean tapChangersDisagree(List<User> users, IidmStateView state) {
+        return users.stream()
                 .filter(User::isTapChanger)
-                .map(user -> user.regulates(state))
+                .map(user -> user.regulatesIn().test(state))
                 .distinct()
                 .count() > 1;
-        return disagree
-                ? Optional.of("tap changers sharing CGMES tap changer control " + regulatingControlId
-                        + " do not agree on whether they regulate, and the CGMES update gives them all the state of"
-                        + " the shared control")
-                : Optional.empty();
     }
 
     private CgmesPropertyBuffer write(RegulatingControlView view) {
@@ -308,19 +305,9 @@ class CgmesChangeRegulatingControls {
      *                     one that {@code CgmesChangeTranslator#generatorControlEnabled} computes for the
      *                     {@code RegulatingCondEq.controlEnabled} of a generator
      * @param isTapChanger whether this user is a tap changer, whose state the CGMES update cannot hold separately
+     * @param view         the view of the control this user describes, in a given state of the network
      */
-    private record User(Predicate<IidmStateView> regulatesIn, boolean isTapChanger, ViewSupplier viewSupplier) {
-        Result<RegulatingControlView, String> view(IidmStateView state) {
-            return viewSupplier.get(state);
-        }
-
-        boolean regulates(IidmStateView state) {
-            return regulatesIn.test(state);
-        }
-    }
-
-    @FunctionalInterface
-    private interface ViewSupplier {
-        Result<RegulatingControlView, String> get(IidmStateView state);
+    private record User(Predicate<IidmStateView> regulatesIn, boolean isTapChanger,
+                        Function<IidmStateView, Result<RegulatingControlView, String>> view) {
     }
 }

@@ -11,6 +11,7 @@ package com.powsybl.cgmes.rdfdb;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Collection;
+import java.util.stream.Collectors;
 
 /**
  * Turning Java values into SPARQL terms, in one place.
@@ -39,14 +40,23 @@ final class SparqlText {
 
     /** The IRI unchanged, after checking that it can be written. */
     static String checkIri(String iri) {
+        int illegal = firstIllegal(iri);
+        if (illegal >= 0) {
+            throw new RdfDbException("The identifier \"" + iri + "\" cannot be written as an RDF resource: it"
+                    + " holds the character '" + iri.charAt(illegal) + "', which is illegal in an IRI");
+        }
+        return iri;
+    }
+
+    /** The index of the first character an IRI reference cannot hold, or -1. */
+    private static int firstIllegal(String iri) {
         for (int i = 0; i < iri.length(); i++) {
             char c = iri.charAt(i);
             if (ILLEGAL_IRI_CHARACTERS.indexOf(c) >= 0 || c < 0x21) {
-                throw new RdfDbException("The identifier \"" + iri + "\" cannot be written as an RDF resource: it"
-                        + " holds the character '" + c + "', which is illegal in an IRI");
+                return i;
             }
         }
-        return iri;
+        return -1;
     }
 
     /**
@@ -62,16 +72,7 @@ final class SparqlText {
      * @return whether it can be written as an IRI reference
      */
     static boolean isWritableIri(String iri) {
-        if (iri == null) {
-            return false;
-        }
-        for (int i = 0; i < iri.length(); i++) {
-            char c = iri.charAt(i);
-            if (ILLEGAL_IRI_CHARACTERS.indexOf(c) >= 0 || c < 0x21) {
-                return false;
-            }
-        }
-        return true;
+        return iri != null && firstIllegal(iri) < 0;
     }
 
     /**
@@ -93,16 +94,8 @@ final class SparqlText {
             graphIris.forEach(iri -> pattern.append(' ').append(iri(iri)));
             return pattern.append(" } ").toString();
         }
-        pattern.append("FILTER(STR(?").append(variable).append(") IN (");
-        boolean first = true;
-        for (String iri : graphIris) {
-            if (!first) {
-                pattern.append(", ");
-            }
-            first = false;
-            pattern.append(str(iri));
-        }
-        return pattern.append(")) ").toString();
+        return "FILTER(STR(?" + variable + ") IN ("
+                + graphIris.stream().map(SparqlText::str).collect(Collectors.joining(", ")) + ")) ";
     }
 
     /** A plain literal, escaped. */
@@ -126,7 +119,7 @@ final class SparqlText {
     }
 
     /** The escaping an N-Triples style literal needs. */
-    static String escape(String literal) {
+    private static String escape(String literal) {
         return literal.replace("\\", "\\\\")
                 .replace("\"", "\\\"")
                 .replace("\n", "\\n")

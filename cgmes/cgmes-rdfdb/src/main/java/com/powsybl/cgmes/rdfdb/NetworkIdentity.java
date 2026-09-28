@@ -56,12 +56,7 @@ final class NetworkIdentity {
      * @return the identifiers, profiles without a model absent
      */
     static Map<CgmesSubset, String> modelIds(Network network) {
-        Map<CgmesSubset, String> ids = new EnumMap<>(CgmesSubset.class);
-        CgmesMetadataModels models = network.getExtension(CgmesMetadataModels.class);
-        if (models != null) {
-            models.getModels().forEach(model -> ids.put(model.getSubset(), model.getId()));
-        }
-        return ids;
+        return modelIds(network, Set.of());
     }
 
     /**

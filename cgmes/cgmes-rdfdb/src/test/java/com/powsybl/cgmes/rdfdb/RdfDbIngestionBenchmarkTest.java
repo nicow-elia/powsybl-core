@@ -8,7 +8,6 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.rdfdb.SvedalaTimestepFixtures.Shape;
 import com.powsybl.cgmes.rdfdb.SvedalaTimestepFixtures.TimestepFiles;
@@ -16,7 +15,6 @@ import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Network;
 import org.eclipse.rdf4j.model.Value;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,8 +28,10 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 import java.util.function.Supplier;
-import java.util.stream.Stream;
 
+import static com.powsybl.cgmes.rdfdb.Backends.params;
+import static com.powsybl.cgmes.rdfdb.BenchMeters.max;
+import static com.powsybl.cgmes.rdfdb.BenchMeters.median;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -137,18 +137,8 @@ class RdfDbIngestionBenchmarkTest {
     /** Above this, a single {@code putAsDiff} on the in-process backend is worth a flight recording. */
     private static final long PROFILE_ABOVE_MS = 100;
 
-    static Stream<Arguments> backends() {
-        return Backends.backends();
-    }
-
-    private static Properties params() {
-        Properties p = new Properties();
-        p.put(CgmesImport.IMPORT_CGM_WITH_SUBNETWORKS, "false");
-        return p;
-    }
-
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void benchmark(String backend) {
         LOGGER.info("fixture: Svedala, {} equipment object(s), {} steady-state object(s), {} ACLineSegment(s),"
                         + " {} set points rewritten by a rich timestep",
@@ -449,7 +439,7 @@ class RdfDbIngestionBenchmarkTest {
     // ------------------------------------------------------------------ small helpers
 
     private static String instantOf(int quarterHour) {
-        return SnapshotRef.canonicalTimestep(Instant.parse(ANCHOR)
+        return Timesteps.canonical(Instant.parse(ANCHOR)
                 .plus(Duration.ofMinutes(15L * quarterHour)).atZone(ZoneOffset.UTC));
     }
 
@@ -467,21 +457,11 @@ class RdfDbIngestionBenchmarkTest {
         return (System.nanoTime() - start) / 1_000_000;
     }
 
-    private static long median(List<Long> values) {
-        List<Long> sorted = new ArrayList<>(values);
-        sorted.sort(Long::compare);
-        return sorted.isEmpty() ? 0L : sorted.get(sorted.size() / 2);
-    }
-
     private static long sum(List<Long> values) {
         return values.stream().mapToLong(Long::longValue).sum();
     }
 
     private static long min(List<Long> values) {
         return values.stream().mapToLong(Long::longValue).min().orElse(0L);
-    }
-
-    private static long max(List<Long> values) {
-        return values.stream().mapToLong(Long::longValue).max().orElse(0L);
     }
 }

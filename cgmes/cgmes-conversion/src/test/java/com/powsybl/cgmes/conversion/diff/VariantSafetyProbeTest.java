@@ -88,7 +88,7 @@ class VariantSafetyProbeTest {
      * power factor of a line commutated converter, or an extension that does not exist yet.</p>
      */
     private static final Set<String> REFUSED = Set.of(
-            // Equipment values: impedances and the limits of work package 5
+            // Equipment values: impedances and the limits
             "lineResistance", "lineAllImpedances", "seriesCompensatorReactance", "equivalentBranchImpedance",
             "boundaryLineImpedance", "voltageLevelLimitsWithoutVoltageLimitObjects", "cim16ThreeKindsOfLimits",
             "cim16EquipmentAttachedLimitBothSides", "cim16VoltageLimits", "mixedSshAndEq",

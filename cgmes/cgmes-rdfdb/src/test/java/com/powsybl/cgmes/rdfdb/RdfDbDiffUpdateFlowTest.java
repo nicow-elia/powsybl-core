@@ -9,28 +9,23 @@
 package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
-import com.powsybl.cgmes.conversion.CgmesImport;
-import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
-import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Line;
 import com.powsybl.iidm.network.Network;
-import com.powsybl.iidm.network.events.NetworkEvent;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Properties;
 import java.util.Set;
-import java.util.stream.Stream;
 
+import static com.powsybl.cgmes.rdfdb.Backends.microGridBe;
+import static com.powsybl.cgmes.rdfdb.Backends.params;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -61,20 +56,6 @@ class RdfDbDiffUpdateFlowTest {
     /** The identity of a network is its own assertion, so it is kept out of the network comparison. */
     private static final Set<String> IDENTITY = Set.of("cgmesMetadataModels");
 
-    static Stream<Arguments> backends() {
-        return Backends.backends();
-    }
-
-    private static Properties params() {
-        Properties p = new Properties();
-        p.put(CgmesImport.IMPORT_CGM_WITH_SUBNETWORKS, "false");
-        return p;
-    }
-
-    private static ReadOnlyDataSource be() {
-        return CgmesConformity1Catalog.microGridBaseCaseBE().dataSource();
-    }
-
     private static RdfDbConnection twoScenarios(String backend) {
         return twoScenarios(Backends.database(backend, "update-flow"));
     }
@@ -83,8 +64,8 @@ class RdfDbDiffUpdateFlowTest {
         RdfDbConnection db = RdfDbConnection.open(database);
         db.clear(S);
         db.clear(OTHER);
-        db.loadCgmes(S, be(), null, params(), ReportNode.NO_OP);
-        db.loadCgmes(OTHER, be(), null, params(), ReportNode.NO_OP);
+        db.loadCgmes(S, microGridBe(), null, params(), ReportNode.NO_OP);
+        db.loadCgmes(OTHER, microGridBe(), null, params(), ReportNode.NO_OP);
         return db;
     }
 
@@ -101,22 +82,15 @@ class RdfDbDiffUpdateFlowTest {
         return RdfDbNetworkLoader.update(network, db, scenario, target, options, params(), ReportNode.NO_OP);
     }
 
-    /** Record a change on a network and store it as a difference. */
-    private static RdfDbExport.Result record(Network network, RdfDbConnection db, String scenario,
-                                             java.util.function.Consumer<Network> change) {
-        List<NetworkEvent> events = Changes.record(network, change);
-        return RdfDbExport.export(network, events, db, scenario, new CgmesDiffExport.ExportOptions());
-    }
-
     // ------------------------------------------------------------------ the fast route
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aSingleDifferenceIsAppliedInPlace(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network sender = load(db, S);
             Network receiver = load(db, S);
-            StoredModel diff = record(sender, db, S, n -> Changes.moveLoad(n, 12.0)).get(SSH).orElseThrow();
+            StoredModel diff = Changes.export(sender, db, S, n -> Changes.moveLoad(n, 12.0)).get(SSH).orElseThrow();
 
             UpdateResult result = update(receiver, db, S);
 
@@ -135,14 +109,14 @@ class RdfDbDiffUpdateFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aNetworkAtTheHeadIsNotTouched(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network network = load(db, S);
             UpdateResult first = update(network, db, S);
             assertThat(first.route()).isEqualTo(UpdateResult.Route.NOOP);
 
-            record(network, db, S, n -> Changes.moveLoad(n, 4.0));
+            Changes.export(network, db, S, n -> Changes.moveLoad(n, 4.0));
             UpdateResult second = update(network, db, S);
             // The sender wrote the difference and was advanced by the export, so it is at the head already
             assertThat(second.route()).isEqualTo(UpdateResult.Route.NOOP);
@@ -151,14 +125,14 @@ class RdfDbDiffUpdateFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aChainOfThreeDifferencesIsComposedAndAppliedOnce(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network sender = load(db, S);
             Network receiver = load(db, S);
-            record(sender, db, S, n -> Changes.moveLoad(n, 3.0));
-            record(sender, db, S, n -> Changes.moveTap(n));
-            record(sender, db, S, n -> Changes.moveGenerator(n));
+            Changes.export(sender, db, S, n -> Changes.moveLoad(n, 3.0));
+            Changes.export(sender, db, S, n -> Changes.moveTap(n));
+            Changes.export(sender, db, S, n -> Changes.moveGenerator(n));
 
             UpdateResult result = update(receiver, db, S);
 
@@ -180,15 +154,15 @@ class RdfDbDiffUpdateFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void anOlderModelCanBeTargetedAndTheDifferencesAreUndone(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network sender = load(db, S);
             Network afterFirst = load(db, S);
-            StoredModel first = record(sender, db, S, n -> Changes.moveLoad(n, 3.0)).get(SSH).orElseThrow();
+            StoredModel first = Changes.export(sender, db, S, n -> Changes.moveLoad(n, 3.0)).get(SSH).orElseThrow();
             // A second network brought to the first difference is the state to compare against
             update(afterFirst, db, S);
-            record(sender, db, S, n -> Changes.moveGenerator(n));
+            Changes.export(sender, db, S, n -> Changes.moveGenerator(n));
 
             Network receiver = load(db, S, DiffTarget.head());
             UpdateResult back = update(receiver, db, S, DiffTarget.models(Map.of(SSH, first.id())),
@@ -203,13 +177,13 @@ class RdfDbDiffUpdateFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void whatTheDifferenceRouteReachesIsWhatTheDatabaseHolds(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network sender = load(db, S);
             Network receiver = load(db, S);
-            record(sender, db, S, n -> Changes.moveLoad(n, 6.0));
-            record(sender, db, S, n -> Changes.moveTap(n));
+            Changes.export(sender, db, S, n -> Changes.moveLoad(n, 6.0));
+            Changes.export(sender, db, S, n -> Changes.moveTap(n));
             update(receiver, db, S);
 
             Network materialised = load(db, S, DiffTarget.head());
@@ -226,11 +200,11 @@ class RdfDbDiffUpdateFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aPlainLoadOfAVersionedScenarioIsItsNewestState(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network sender = load(db, S);
-            record(sender, db, S, n -> Changes.moveLoad(n, 8.0));
+            Changes.export(sender, db, S, n -> Changes.moveLoad(n, 8.0));
             // load(db, scenario) without a target means the head once the scenario holds differences
             Network fresh = load(db, S);
             Networks.assertSameNetwork(sender, fresh, IDENTITY);
@@ -241,7 +215,7 @@ class RdfDbDiffUpdateFlowTest {
     // ------------------------------------------------------------------ the full route
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aDifferenceNoUpdateQueryCanApplyIsMaterialised(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network receiver = load(db, S);
@@ -277,7 +251,7 @@ class RdfDbDiffUpdateFlowTest {
      * reached, so a rebuild that quietly materialises the head instead would be invisible.</p>
      */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aFallbackKeepsTheRequestedTarget(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network sender = load(db, S);
@@ -287,8 +261,8 @@ class RdfDbDiffUpdateFlowTest {
             StoredModel sshFull = db.catalog(S).full(SSH).orElseThrow();
             StoredModel eqFull = db.catalog(S).full(EQ).orElseThrow();
 
-            StoredModel sshDiff = record(sender, db, S, n -> Changes.moveLoad(n, 9.0)).get(SSH).orElseThrow();
-            StoredModel eqDiff = record(sender, db, S, n -> n.getLine(line).setR(baseR + 0.25))
+            StoredModel sshDiff = Changes.export(sender, db, S, n -> Changes.moveLoad(n, 9.0)).get(SSH).orElseThrow();
+            StoredModel eqDiff = Changes.export(sender, db, S, n -> n.getLine(line).setR(baseR + 0.25))
                     .get(EQ).orElseThrow();
 
             // The receiver holds the newest steady state hypothesis and the original equipment model, so reaching
@@ -308,7 +282,7 @@ class RdfDbDiffUpdateFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aReloadThatIsNotAllowedIsReportedInstead(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network receiver = load(db, S);
@@ -329,7 +303,7 @@ class RdfDbDiffUpdateFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aNetworkOfAnotherGridFallsBackAndSaysWhy(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network stranger = Network.read(CgmesConformity1Catalog.miniBusBranch().dataSource(), params());
@@ -341,14 +315,14 @@ class RdfDbDiffUpdateFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aChainLongerThanAllowedIsMaterialisedInstead(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network sender = load(db, S);
             Network receiver = load(db, S);
-            record(sender, db, S, n -> Changes.moveLoad(n, 1.0));
-            record(sender, db, S, n -> Changes.moveLoad(n, 1.0));
-            record(sender, db, S, n -> Changes.moveLoad(n, 1.0));
+            Changes.export(sender, db, S, n -> Changes.moveLoad(n, 1.0));
+            Changes.export(sender, db, S, n -> Changes.moveLoad(n, 1.0));
+            Changes.export(sender, db, S, n -> Changes.moveLoad(n, 1.0));
 
             UpdateResult result = update(receiver, db, S, DiffTarget.head(),
                     new RdfDbUpdateOptions().setMaxDiffChain(2));
@@ -361,12 +335,12 @@ class RdfDbDiffUpdateFlowTest {
     // ------------------------------------------------------------------ scenarios
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void anUpdateTowardsAnotherScenarioIsAReload(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network here = load(db, S);
             Network there = load(db, OTHER);
-            record(there, db, OTHER, n -> Changes.moveLoad(n, 15.0));
+            Changes.export(there, db, OTHER, n -> Changes.moveLoad(n, 15.0));
 
             UpdateResult result = update(here, db, OTHER);
             assertThat(result.route()).isEqualTo(UpdateResult.Route.FULL_RELOAD);
@@ -384,13 +358,13 @@ class RdfDbDiffUpdateFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void differencesOfAnotherScenarioAreInvisible(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network there = load(db, OTHER);
             Network here = load(db, S);
-            record(there, db, OTHER, n -> Changes.moveLoad(n, 2.0));
-            record(there, db, OTHER, n -> Changes.moveTap(n));
+            Changes.export(there, db, OTHER, n -> Changes.moveLoad(n, 2.0));
+            Changes.export(there, db, OTHER, n -> Changes.moveTap(n));
 
             UpdateResult result = update(here, db, S);
             assertThat(result.route()).isEqualTo(UpdateResult.Route.NOOP);
@@ -399,7 +373,7 @@ class RdfDbDiffUpdateFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void blankScenarioRejected(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network network = load(db, S);
@@ -415,12 +389,12 @@ class RdfDbDiffUpdateFlowTest {
     // ------------------------------------------------------------------ what is not supported
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void theRemoteQueryModeCannotSeeDifferences(String backend) {
         RdfDatabase database = Backends.database(backend, "update-remote");
         try (RdfDbConnection db = twoScenarios(database)) {
             Network sender = load(db, S);
-            record(sender, db, S, n -> Changes.moveLoad(n, 5.0));
+            Changes.export(sender, db, S, n -> Changes.moveLoad(n, 5.0));
             // The very same data, addressed by a connection that wants to query the store rather than fetch it.
             // The first connection stays open on purpose: an in-process database lives as long as somebody holds it
             try (RdfDbConnection remote =
@@ -440,12 +414,12 @@ class RdfDbDiffUpdateFlowTest {
      * graph (a graph the server does not know) is part of the set, since the GET answers it with a 404.
      */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void bothFetchRoutesReadTheSameStatements(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network sender = load(db, S);
-            StoredModel first = record(sender, db, S, n -> Changes.moveLoad(n, 3.0)).get(SSH).orElseThrow();
-            StoredModel second = record(sender, db, S, Changes::moveTap).get(SSH).orElseThrow();
+            StoredModel first = Changes.export(sender, db, S, n -> Changes.moveLoad(n, 3.0)).get(SSH).orElseThrow();
+            StoredModel second = Changes.export(sender, db, S, Changes::moveTap).get(SSH).orElseThrow();
             DifferenceModelHeader header = DifferenceModelHeader.builder("urn:uuid:diff-no-reverse", SSH, CIM16)
                     .version(second.version() + 1).supersedes(List.of(second.id())).build();
             RdfDbDifferenceSink sink = new RdfDbDifferenceSink(db, S);

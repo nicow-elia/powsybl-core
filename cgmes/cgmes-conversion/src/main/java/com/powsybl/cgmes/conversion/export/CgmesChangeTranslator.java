@@ -165,8 +165,6 @@ class CgmesChangeTranslator {
     static final String RRPC_ENABLED = "enabled";
     // Operational limits, voltage limits and branch impedances (equipment profile)
     static final String LIMITS_PREFIX = CgmesLimitIndex.LIMITS_PREFIX;
-    static final String PERMANENT_LIMIT_SUFFIX = ".permanentLimit";
-    static final String TEMPORARY_LIMIT_VALUE_SUFFIX = ".temporaryLimit.value";
     static final String HIGH_VOLTAGE_LIMIT = "highVoltageLimit";
     static final String LOW_VOLTAGE_LIMIT = "lowVoltageLimit";
     static final String R = "r";
@@ -226,8 +224,6 @@ class CgmesChangeTranslator {
     /** Which state of the network the values are read from: the current one, or the one before the change set. */
     private final IidmStateView state;
 
-    private final CgmesPropertyBuffer updates = new CgmesPropertyBuffer();
-    private final List<NetworkEvent> exportedEvents = new ArrayList<>();
     private final CgmesChangeRegulatingControls regulatingControls;
     /** Built on first use, so that a change set without limits never pays for the walk it costs. */
     private CgmesLimitIndex limitIndex;
@@ -279,53 +275,67 @@ class CgmesChangeTranslator {
         return this;
     }
 
-    /** The regulating control index of this translator, so that a second one can share it. */
-    CgmesChangeRegulatingControls regulatingControls() {
-        return regulatingControls;
+    /**
+     * What the translation of a change log produced.
+     *
+     * @param after          the properties describing the network as it stands, buffered per CGMES object
+     * @param before         the properties describing the state before the change set, or {@code null} when no
+     *                       translator of that state was given
+     * @param exportedEvents the changes that were translated, in order; the others were rejected
+     */
+    record Translation(CgmesPropertyBuffer after, CgmesPropertyBuffer before, List<NetworkEvent> exportedEvents) {
     }
 
     /**
      * Translate every recorded change into the CGMES properties that describe it, buffered per object.
      *
-     * <p>The changes are expected to have been compacted by {@link PartialSshExport#compactEvents}
-     * already to avoid writing the same attribute twice.</p>
+     * <p>The changes are expected to have been compacted already ({@link EventCompactor#compact}) to avoid writing
+     * the same attribute twice.</p>
      *
-     * <p>The values buffered are read from the network as it currently stands, not taken from the changes
-     * themselves, so the result describes a state the network really was in.</p>
+     * <p>A change is exported only when every given translator translates it; otherwise it is rejected through
+     * {@code after}, whatever direction refused it, so the reject behaviour is the export's. The values are read
+     * through the state view of each translator, not taken from the changes themselves, so the result describes a
+     * state the network really was in.</p>
      *
      * @param events the compacted changes to translate, in the order in which they are to be written
-     * @return the properties to write, buffered per CGMES object
+     * @param after  the translator reading the network as it stands
+     * @param before the translator reading the state before the change set, or {@code null} for a forward-only
+     *               export such as the partial SSH one
      * @throws PowsyblException under {@link UnsupportedChangeBehavior#FAIL}, on the first change that cannot be
      *                          exported
      */
-    CgmesPropertyBuffer translateAll(Collection<NetworkEvent> events) {
+    static Translation translateAll(Collection<NetworkEvent> events, CgmesChangeTranslator after,
+                                    CgmesChangeTranslator before) {
+        CgmesPropertyBuffer afterUpdates = new CgmesPropertyBuffer();
+        CgmesPropertyBuffer beforeUpdates = before == null ? null : new CgmesPropertyBuffer();
+        List<NetworkEvent> exportedEvents = new ArrayList<>();
         for (NetworkEvent event : events) {
-            switch (translate(event)) {
-                case Result.Success(CgmesPropertyBuffer staged) -> {
-                    updates.mergeFrom(staged);
-                    exportedEvents.add(event);
+            // The before direction is only translated when the after direction succeeded
+            Result<CgmesPropertyBuffer, String> afterResult = after.translate(event);
+            Result<CgmesPropertyBuffer, String> beforeResult = before == null || afterResult instanceof Result.Failure
+                    ? afterResult : before.translate(event);
+            if (afterResult instanceof Result.Success(CgmesPropertyBuffer a)
+                    && beforeResult instanceof Result.Success(CgmesPropertyBuffer b)) {
+                afterUpdates.mergeFrom(a);
+                if (beforeUpdates != null) {
+                    beforeUpdates.mergeFrom(b);
                 }
-                case Result.Failure(String reason) -> reject(event, reason);
+                exportedEvents.add(event);
+            } else if (beforeResult instanceof Result.Failure(String reason)) {
+                after.reject(event, reason);
             }
         }
-        return updates;
+        return new Translation(afterUpdates, beforeUpdates, exportedEvents);
     }
 
     /**
-     * The changes that reached the file so IGNORE users can track what they exported.
-     */
-    List<NetworkEvent> exportedEvents() {
-        return exportedEvents;
-    }
-
-    /**
-     * Translate a single change into the CGMES properties describing it
+     * Translate a single change into the CGMES properties describing it.
      *
-     * Note that one change may map to multiple properties, they will be merged upstream in `translateAll`.
+     * <p>One change may map to several properties; {@link #translateAll} merges them per object.</p>
      */
     Result<CgmesPropertyBuffer, String> translate(NetworkEvent event) {
         String workingVariantId = network.getVariantManager().getWorkingVariantId();
-        String eventVariantId = variantIdOf(event);
+        String eventVariantId = EventCompactor.variantIdOf(event);
         if (eventVariantId != null && !eventVariantId.equals(workingVariantId)) {
             // Values are read from the network as it currently stands, so a change recorded on another variant
             // would be written with the values of the working one, describing a state that never existed.
@@ -370,14 +380,6 @@ class CgmesChangeTranslator {
         return success(staged);
     }
 
-    static String variantIdOf(NetworkEvent event) {
-        return switch (event) {
-            case UpdateNetworkEvent updateEvent -> updateEvent.variantId();
-            case ExtensionUpdateNetworkEvent extensionEvent -> extensionEvent.variantId();
-            default -> null;
-        };
-    }
-
     /**
      * Translate a change of an extension of the given identifiable.
      *
@@ -420,6 +422,11 @@ class CgmesChangeTranslator {
                     + " its remote reactive power control has no steady state property");
         }
         state.requireExtensionNotCreated(generator, RemoteReactivePowerControl.NAME);
+        return machineAndControlUpdates(generator);
+    }
+
+    /** The machine block together with its regulating control, which a change of the regulation itself needs. */
+    private Result<CgmesPropertyBuffer, String> machineAndControlUpdates(Generator generator) {
         return generatorMachineUpdates(generator).flatMap(machine ->
                 regulatingControlUpdates(generator).map(regulatingControl -> merge(machine, regulatingControl)));
     }
@@ -484,7 +491,7 @@ class CgmesChangeTranslator {
                     + " so its state cannot be referenced from a steady state hypothesis file");
         }
         String originalClass = sw.getProperty(PROPERTY_CGMES_ORIGINAL_CLASS);
-        if (isBranchModelledAsSwitch(originalClass)) {
+        if (isCgmesBranchClass(originalClass)) {
             // In CGMES this equipment is a branch and has no open state of its own:
             // the CGMES import derives the state of the IIDM switch from the connection status of its terminals.
             return success(switchTerminalUpdates(sw));
@@ -493,10 +500,6 @@ class CgmesChangeTranslator {
         return success(newUpdates(className, cgmesId(sw))
                 .value("Switch.open", state.getBoolean(sw, OPEN, sw::isOpen))
                 .updates());
-    }
-
-    private static boolean isBranchModelledAsSwitch(String originalClass) {
-        return isCgmesBranchClass(originalClass);
     }
 
     /**
@@ -604,15 +607,25 @@ class CgmesChangeTranslator {
                 && state.getBoolean(boundaryLine, VOLTAGE_REGULATION_ON, generation::isVoltageRegulationOn);
         double p = nonNaN(state.getDouble(boundaryLine, P0, boundaryLine::getP0)) - nonNaN(targetP);
         double q = nonNaN(state.getDouble(boundaryLine, Q0, boundaryLine::getQ0)) - nonNaN(targetQ);
-        CgmesPropertyBuffer.ObjectUpdate update = newUpdates(CgmesNames.EQUIVALENT_INJECTION,
-                context.getNamingStrategy().getCgmesIdFromProperty(boundaryLine, PROPERTY_EQUIVALENT_INJECTION))
+        return success(equivalentInjectionBlock(
+                context.getNamingStrategy().getCgmesIdFromProperty(boundaryLine, PROPERTY_EQUIVALENT_INJECTION),
+                p, q, regulationOn, targetV));
+    }
+
+    /**
+     * The EquivalentInjection block: powers in the load convention, the regulation status and, when it is a usable
+     * voltage, the regulation target.
+     */
+    private static CgmesPropertyBuffer equivalentInjectionBlock(String id, double p, double q, boolean regulationOn,
+                                                                double targetV) {
+        CgmesPropertyBuffer.ObjectUpdate update = newUpdates(CgmesNames.EQUIVALENT_INJECTION, id)
                 .value("EquivalentInjection.p", p)
                 .value("EquivalentInjection.q", q)
                 .value("EquivalentInjection.regulationStatus", regulationOn);
         if (targetV > 0) {
             update.value("EquivalentInjection.regulationTarget", targetV);
         }
-        return success(update.updates());
+        return update.updates();
     }
 
     /** Zero for an undefined value, which is what the CGMES import writes back for one. */
@@ -633,8 +646,7 @@ class CgmesChangeTranslator {
             case TARGET_V -> regulatingControlUpdates(generator);
             // The CGMES update reads the control flag of a machine only together with its powers, its reference
             // priority and its operating mode, so switching the regulation writes the whole machine block
-            case VOLTAGE_REGULATOR_ON -> generatorMachineUpdates(generator).flatMap(machine ->
-                    regulatingControlUpdates(generator).map(regulatingControl -> merge(machine, regulatingControl)));
+            case VOLTAGE_REGULATOR_ON -> machineAndControlUpdates(generator);
             default -> throw new IllegalStateException("Unhandled generator attribute " + attribute);
         };
     }
@@ -726,14 +738,9 @@ class CgmesChangeTranslator {
                     + " regulation off");
         }
         double targetV = state.getDouble(generator, TARGET_V, generator::getTargetV);
-        CgmesPropertyBuffer.ObjectUpdate update = newUpdates(CgmesNames.EQUIVALENT_INJECTION, cgmesId(generator))
-                .value("EquivalentInjection.p", -state.getDouble(generator, TARGET_P, generator::getTargetP))
-                .value("EquivalentInjection.q", -state.getDouble(generator, TARGET_Q, generator::getTargetQ))
-                .value("EquivalentInjection.regulationStatus", voltageRegulatorOn);
-        if (targetV > 0) {
-            update.value("EquivalentInjection.regulationTarget", targetV);
-        }
-        return success(update.updates());
+        return success(equivalentInjectionBlock(cgmesId(generator),
+                -state.getDouble(generator, TARGET_P, generator::getTargetP),
+                -state.getDouble(generator, TARGET_Q, generator::getTargetQ), voltageRegulatorOn, targetV));
     }
 
     private static boolean hasRegulationCapability(Identifiable<?> identifiable) {
@@ -815,11 +822,11 @@ class CgmesChangeTranslator {
             return noTapChangerMatching(transformer, attribute);
         }
         if (attribute.phase() && transformer.hasPhaseTapChanger()) {
-            return tapChangerUpdates(transformer, "", CgmesExportUtil.tapChangerAliasType(transformer, ALIAS_PHASE_TAP_CHANGER1, ALIAS_PHASE_TAP_CHANGER2),
+            return tapChangerUpdates(transformer, CgmesExportUtil.tapChangerAliasType(transformer, ALIAS_PHASE_TAP_CHANGER1, ALIAS_PHASE_TAP_CHANGER2),
                     CgmesNames.PHASE_TAP_CHANGER_TABULAR, tapChangerRef(transformer, attribute, transformer.getPhaseTapChanger()), attribute);
         }
         if (!attribute.phase() && transformer.hasRatioTapChanger()) {
-            return tapChangerUpdates(transformer, "", CgmesExportUtil.tapChangerAliasType(transformer, ALIAS_RATIO_TAP_CHANGER1, ALIAS_RATIO_TAP_CHANGER2),
+            return tapChangerUpdates(transformer, CgmesExportUtil.tapChangerAliasType(transformer, ALIAS_RATIO_TAP_CHANGER1, ALIAS_RATIO_TAP_CHANGER2),
                     CgmesNames.RATIO_TAP_CHANGER, tapChangerRef(transformer, attribute, transformer.getRatioTapChanger()), attribute);
         }
         return noTapChangerMatching(transformer, attribute);
@@ -832,9 +839,9 @@ class CgmesChangeTranslator {
             return noTapChangerMatching(transformer, attribute);
         }
         return attribute.phase()
-                ? tapChangerUpdates(transformer, attribute.end(), CgmesExportUtil.getPhaseTapChangerAliasType(attribute.end()),
+                ? tapChangerUpdates(transformer, CgmesExportUtil.getPhaseTapChangerAliasType(attribute.end()),
                         CgmesNames.PHASE_TAP_CHANGER_TABULAR, tapChangerRef(transformer, attribute, leg.getPhaseTapChanger()), attribute)
-                : tapChangerUpdates(transformer, attribute.end(), CgmesExportUtil.getRatioTapChangerAliasType(attribute.end()),
+                : tapChangerUpdates(transformer, CgmesExportUtil.getRatioTapChangerAliasType(attribute.end()),
                         CgmesNames.RATIO_TAP_CHANGER, tapChangerRef(transformer, attribute, leg.getRatioTapChanger()), attribute);
     }
 
@@ -852,10 +859,6 @@ class CgmesChangeTranslator {
         };
     }
 
-    /**
-     * The properties describing a change of the given tap changer: its own block, which the CGMES update reads as a
-     * whole, and the TapChangerControl carrying its regulation when the regulation is what changed.
-     */
     /** The name a recorded change gives the given tap changer, which is how its previous values are looked up. */
     private static TapChangerRef tapChangerRef(Identifiable<?> transformer, TapChangerAttribute attribute,
                                                TapChanger<?, ?, ?, ?> tapChanger) {
@@ -863,8 +866,12 @@ class CgmesChangeTranslator {
                 (attribute.phase() ? PHASE_TAP_CHANGER_PREFIX : RATIO_TAP_CHANGER_PREFIX) + attribute.end(), tapChanger);
     }
 
+    /**
+     * The properties describing a change of the given tap changer: its own block, which the CGMES update reads as a
+     * whole, and the TapChangerControl carrying its regulation when the regulation is what changed.
+     */
     private <C extends Connectable<C>> Result<CgmesPropertyBuffer, String> tapChangerUpdates(
-            C transformer, String end, String aliasType, String defaultClassName,
+            C transformer, String aliasType, String defaultClassName,
             TapChangerRef ref, TapChangerAttribute attribute) {
         TapChanger<?, ?, ?, ?> tapChanger = ref.tapChanger();
         CgmesPropertyBuffer tapChangerBlock = tapChangerBlock(transformer, aliasType, defaultClassName, ref);
@@ -993,13 +1000,11 @@ class CgmesChangeTranslator {
                 SteadyStateHypothesisExport.computeConverterState(converter, state);
         boolean rectifier = CgmesExportUtil.isConverterStationRectifier(converter, state);
         return switch (converter) {
-            case LccConverterStation lcc -> converterStateUpdate(CgmesNames.CS_CONVERTER, cgmesId(lcc),
-                    converterState.targetPpcc(), converterState.targetUdc(), converterState.p(), converterState.q())
+            case LccConverterStation lcc -> converterStateUpdate(CgmesNames.CS_CONVERTER, cgmesId(lcc), converterState)
                     .enumValue("CsConverter.operatingMode", "CsOperatingModeKind", rectifier ? "rectifier" : "inverter")
                     .enumValue("CsConverter.pPccControl", "CsPpccControlKind", rectifier ? "activePower" : "dcVoltage")
                     .updates();
-            case VscConverterStation vsc -> merge(converterStateUpdate(CgmesNames.VS_CONVERTER, cgmesId(vsc),
-                    converterState.targetPpcc(), converterState.targetUdc(), converterState.p(), converterState.q()).updates(),
+            case VscConverterStation vsc -> merge(converterStateUpdate(CgmesNames.VS_CONVERTER, cgmesId(vsc), converterState).updates(),
                     vscControlModeUpdates(vsc));
             default -> throw new IllegalStateException("Unhandled converter station " + converter.getClass().getSimpleName());
         };
@@ -1010,12 +1015,12 @@ class CgmesChangeTranslator {
      * well as of the detailed one.
      */
     private static CgmesPropertyBuffer.ObjectUpdate converterStateUpdate(String className, String masterResourceId,
-                                                                       double targetPpcc, double targetUdc, double p, double q) {
+                                                                       SteadyStateHypothesisExport.ConverterSetpoints setpoints) {
         return newUpdates(className, masterResourceId)
-                .value("ACDCConverter.targetPpcc", targetPpcc)
-                .value("ACDCConverter.targetUdc", targetUdc)
-                .value("ACDCConverter.p", p)
-                .value("ACDCConverter.q", q);
+                .value("ACDCConverter.targetPpcc", setpoints.targetPpcc())
+                .value("ACDCConverter.targetUdc", setpoints.targetUdc())
+                .value("ACDCConverter.p", setpoints.p())
+                .value("ACDCConverter.q", setpoints.q());
     }
 
     /**
@@ -1063,11 +1068,10 @@ class CgmesChangeTranslator {
 
     private Result<CgmesPropertyBuffer, String> lineCommutatedConverterUpdates(
             LineCommutatedConverter converter, SteadyStateHypothesisExport.AcDcConverterState converterState, String attribute) {
-        CgmesPropertyBuffer.ObjectUpdate update = converterStateUpdate(CgmesNames.CS_CONVERTER, cgmesId(converter),
-                converterState.targetPpcc(), converterState.targetUdc(), converterState.p(), converterState.q())
+        CgmesPropertyBuffer.ObjectUpdate update = converterStateUpdate(CgmesNames.CS_CONVERTER, cgmesId(converter), converterState)
                 .enumValue("CsConverter.operatingMode", "CsOperatingModeKind", converterState.operatingModeOrQpccControl())
                 .enumValue("CsConverter.pPccControl", "CsPpccControlKind", converterState.pPccControl());
-        double referenceP = lineCommutatedConverterReferenceP(converter, converterState);
+        double referenceP = lineCommutatedConverterReferenceP(converterState);
         double powerFactor = state.getDouble(converter, POWER_FACTOR, converter::getPowerFactor);
         if (referenceP != 0 && powerFactor > 0) {
             update.value("ACDCConverter.p", referenceP)
@@ -1081,8 +1085,7 @@ class CgmesChangeTranslator {
     }
 
     /** The active power the power factor of a line commutated converter is expressed against, or zero if it has none. */
-    private static double lineCommutatedConverterReferenceP(LineCommutatedConverter converter,
-                                                            SteadyStateHypothesisExport.AcDcConverterState converterState) {
+    private static double lineCommutatedConverterReferenceP(SteadyStateHypothesisExport.AcDcConverterState converterState) {
         if (converterState.targetPpcc() != 0 && Double.isFinite(converterState.targetPpcc())) {
             return converterState.targetPpcc();
         }
@@ -1091,8 +1094,7 @@ class CgmesChangeTranslator {
 
     private CgmesPropertyBuffer voltageSourceConverterUpdates(VoltageSourceConverter converter,
                                                             SteadyStateHypothesisExport.AcDcConverterState converterState) {
-        CgmesPropertyBuffer.ObjectUpdate update = converterStateUpdate(CgmesNames.VS_CONVERTER, cgmesId(converter),
-                converterState.targetPpcc(), converterState.targetUdc(), converterState.p(), converterState.q())
+        CgmesPropertyBuffer.ObjectUpdate update = converterStateUpdate(CgmesNames.VS_CONVERTER, cgmesId(converter), converterState)
                 .enumValue("VsConverter.pPccControl", "VsPpccControlKind", converterState.pPccControl())
                 .enumValue("VsConverter.qPccControl", "VsQpccControlKind", converterState.operatingModeOrQpccControl());
         double reactivePowerSetpoint = state.getDouble(converter, REACTIVE_POWER_SETPOINT, converter::getReactivePowerSetpoint);
@@ -1123,41 +1125,15 @@ class CgmesChangeTranslator {
     /**
      * Which loading limit an attribute key of a change log names.
      *
-     * @param owner    the branch, three windings transformer or boundary line the change was recorded on
-     * @param prefix   the attribute name prefix of the side, {@code limits1}, {@code limits2}, {@code limits3} or
-     *                 {@code limits} for a boundary line
-     * @param type     which of the three kinds of loading limits changed
-     * @param groupId  the operational limits group, taken from the payload of the event by the compactor
-     * @param group    that group, read live
-     * @param limits   the loading limits of that group and type, read live, {@code null} when there are none
-     * @param duration the acceptable duration of the temporary limit named by the key, {@code -1} for the permanent
-     *                 limit and for a key naming the whole object
-     * @param member   whether the key names a single limit rather than the whole {@code LoadingLimits} object
+     * @param slot   where the limit lands: owner, side prefix, type, group identifier (taken from the payload of the
+     *               event by the compactor) and the acceptable duration named by the key, {@code -1} for the
+     *               permanent limit and for a key naming the whole object
+     * @param group  that group, read live
+     * @param limits the loading limits of that group and type, read live, {@code null} when there are none
+     * @param member whether the key names a single limit rather than the whole {@code LoadingLimits} object
      */
-    private record LimitRef(Identifiable<?> owner, String prefix, LimitType type, String groupId,
-                            OperationalLimitsGroup group, LoadingLimits limits, int duration, boolean member) {
-
-        /** The attribute key of a replacement of the whole {@code LoadingLimits} object. */
-        String wholeKey() {
-            return prefix + "_" + type + EventCompactor.KEY_SEPARATOR + groupId;
-        }
-
-        /** The attribute key of the change of one limit value of that object. */
-        String memberKey(int acceptableDuration) {
-            return acceptableDuration < 0
-                    ? prefix + "_" + type + PERMANENT_LIMIT_SUFFIX + EventCompactor.KEY_SEPARATOR + groupId
-                    : prefix + "_" + type + TEMPORARY_LIMIT_VALUE_SUFFIX + EventCompactor.KEY_SEPARATOR + groupId
-                            + EventCompactor.KEY_SEPARATOR + acceptableDuration;
-        }
-
-        String className() {
-            return switch (type) {
-                case CURRENT -> CgmesNames.CURRENT_LIMIT;
-                case ACTIVE_POWER -> CgmesNames.ACTIVE_POWER_LIMIT;
-                case APPARENT_POWER -> CgmesNames.APPARENT_POWER_LIMIT;
-                default -> throw new IllegalStateException("Not a loading limit type: " + type);
-            };
-        }
+    private record LimitRef(CgmesLimitIndex.LimitSlot slot, OperationalLimitsGroup group, LoadingLimits limits,
+                            boolean member) {
     }
 
     /**
@@ -1189,7 +1165,7 @@ class CgmesChangeTranslator {
         String tail = matcher.group(4);
         String groupId = tail;
         int duration = -1;
-        if (TEMPORARY_LIMIT_VALUE_SUFFIX.equals(suffix)) {
+        if (CgmesLimitIndex.TEMPORARY_LIMIT_VALUE_SUFFIX.equals(suffix)) {
             int separator = tail.lastIndexOf(EventCompactor.KEY_SEPARATOR.charAt(0));
             if (separator < 0) {
                 return Optional.empty();
@@ -1205,8 +1181,8 @@ class CgmesChangeTranslator {
         if (group == null) {
             return Optional.empty();
         }
-        return Optional.of(new LimitRef(owner, prefix, type, groupId, group, loadingLimits(group, type), duration,
-                suffix != null));
+        return Optional.of(new LimitRef(new CgmesLimitIndex.LimitSlot(owner, prefix, type, groupId, duration), group,
+                loadingLimits(group, type), suffix != null));
     }
 
     private static OperationalLimitsGroup groupOf(Identifiable<?> owner, String prefix, String groupId) {
@@ -1237,13 +1213,13 @@ class CgmesChangeTranslator {
 
     /** The terminal of the side a limits group belongs to, which is what the CGMES limit set is attached to. */
     private static Terminal terminalOf(LimitRef ref) {
-        return switch (ref.owner()) {
+        return switch (ref.slot().owner()) {
             case ThreeWindingsTransformer transformer -> {
                 ThreeWindingsTransformer.Leg transformerLeg =
-                        leg(transformer, ref.prefix().substring(LIMITS_PREFIX.length()));
+                        leg(transformer, ref.slot().prefix().substring(LIMITS_PREFIX.length()));
                 yield transformerLeg == null ? null : transformerLeg.getTerminal();
             }
-            case Branch<?> branch -> (LIMITS_PREFIX + "1").equals(ref.prefix())
+            case Branch<?> branch -> (LIMITS_PREFIX + "1").equals(ref.slot().prefix())
                     ? branch.getTerminal1() : branch.getTerminal2();
             case BoundaryLine boundaryLine -> boundaryLine.getTerminal();
             default -> null;
@@ -1274,7 +1250,7 @@ class CgmesChangeTranslator {
         if (ref.limits() == null) {
             return failure(STRUCTURAL_LIMIT_CHANGE);
         }
-        String wholeKey = ref.wholeKey();
+        String wholeKey = ref.slot().wholeKey();
         LoadingLimits live = ref.limits();
         LoadingLimits replaced = replacedLoadingLimits(ref, replacedLimits);
         if (isStructuralChange(ref, replacedLimits, replaced, live)) {
@@ -1286,9 +1262,8 @@ class CgmesChangeTranslator {
         if (!durations.equals(durationsOf(live)) || hasPermanentLimit != !Double.isNaN(live.getPermanentLimit())) {
             return failure(STRUCTURAL_LIMIT_CHANGE);
         }
-        CgmesSubset subset = context.getCimVersion() == 16
-                ? CgmesSubset.EQUIPMENT : CgmesSubset.STEADY_STATE_HYPOTHESIS;
-        String className = ref.className();
+        CgmesSubset subset = equipmentValueSubset();
+        String className = ref.slot().className();
         String property = className + ".value";
         CgmesPropertyBuffer buffer = new CgmesPropertyBuffer();
         List<Integer> members = new ArrayList<>();
@@ -1297,24 +1272,26 @@ class CgmesChangeTranslator {
         }
         members.addAll(durations);
         for (int duration : members) {
-            Result<String, String> idResult = limitId(ref, className, duration);
-            String limitId = idResult.fold(id -> id, reason -> null);
-            if (limitId == null) {
-                if (mustTravel(ref, replaced, live, duration)) {
-                    return failure(idResult.fold(id -> "", reason -> reason));
+            String limitId;
+            switch (limitId(ref, className, duration)) {
+                case Result.Success(String id) -> limitId = id;
+                case Result.Failure(String reason) -> {
+                    if (mustTravel(ref, replaced, live, duration)) {
+                        return failure(reason);
+                    }
+                    // A limit the CGMES model does not hold, and that this change does not touch: the receiver keeps
+                    // the value its own import gave it, see mustTravel
+                    continue;
                 }
-                // A limit the CGMES model does not hold, and that this change does not touch: the receiver keeps the
-                // value its own import gave it, see mustTravel
-                continue;
             }
-            double value = state.getLimitValue(owner, wholeKey, ref.memberKey(duration), duration,
+            double value = state.getLimitValue(owner, wholeKey, ref.slot().memberKey(duration), duration,
                     () -> liveValue(live, duration));
             if (!Double.isFinite(value) || value < 0) {
                 return failure("limit values must be finite and >= 0, but " + limitId + " would be " + value);
             }
-            String shared = sharedLimitIdFailure(limitId, value);
-            if (shared != null) {
-                return failure(shared);
+            Optional<String> shared = sharedLimitIdFailure(limitId, value);
+            if (shared.isPresent()) {
+                return failure(shared.get());
             }
             buffer.object(subset, className, cgmesId(limitId)).value(property, value);
         }
@@ -1367,7 +1344,7 @@ class CgmesChangeTranslator {
      */
     private static boolean mustTravel(LimitRef ref, LoadingLimits replaced, LoadingLimits live, int duration) {
         if (ref.member()) {
-            return ref.duration() == duration;
+            return ref.slot().duration() == duration;
         }
         if (replaced == null) {
             // Not a whole-object replacement this translator can compare: keep the refusal
@@ -1407,13 +1384,13 @@ class CgmesChangeTranslator {
             return success(stored);
         }
         if (network.getExtension(CimCharacteristics.class) != null) {
-            return failure("limit " + ref.groupId() + "/" + className + "/"
-                    + (duration < 0 ? "patl" : "tatl " + duration) + " of " + ref.owner().getId()
+            return failure("limit " + ref.slot().groupId() + "/" + className + "/"
+                    + (duration < 0 ? "patl" : "tatl " + duration) + " of " + ref.slot().owner().getId()
                     + " has no CGMES OperationalLimit id");
         }
         Terminal terminal = terminalOf(ref);
         if (terminal == null) {
-            return failure("limit " + ref.groupId() + "/" + className + " of " + ref.owner().getId()
+            return failure("limit " + ref.slot().groupId() + "/" + className + " of " + ref.slot().owner().getId()
                     + " belongs to no terminal, so no CGMES OperationalLimit id can be derived");
         }
         String setId = EquipmentExport.operationalLimitSetId(ref.group(),
@@ -1429,10 +1406,10 @@ class CgmesChangeTranslator {
      * creates a group on each side storing the same OperationalLimit identifiers. One CGMES value cannot say two
      * things, so changing one side alone is not exportable.</p>
      */
-    private String sharedLimitIdFailure(String limitId, double value) {
+    private Optional<String> sharedLimitIdFailure(String limitId, double value) {
         List<CgmesLimitIndex.LimitSlot> slots = limitIndex().slots(limitId);
         if (slots.size() <= 1) {
-            return null;
+            return Optional.empty();
         }
         for (CgmesLimitIndex.LimitSlot slot : slots) {
             OperationalLimitsGroup group = groupOf(slot.owner(), slot.prefix(), slot.groupId());
@@ -1446,12 +1423,17 @@ class CgmesChangeTranslator {
                 return sharedLimitFailure(limitId);
             }
         }
-        return null;
+        return Optional.empty();
     }
 
-    private static String sharedLimitFailure(String limitId) {
-        return "OperationalLimit " + limitId + " applies to the whole equipment in CGMES; change both sides to the"
-                + " same value";
+    private static Optional<String> sharedLimitFailure(String limitId) {
+        return Optional.of("OperationalLimit " + limitId + " applies to the whole equipment in CGMES; change both"
+                + " sides to the same value");
+    }
+
+    /** The profile an equipment value that the steady state carries in CGMES 3 is written to. */
+    private CgmesSubset equipmentValueSubset() {
+        return context.getCimVersion() == 16 ? CgmesSubset.EQUIPMENT : CgmesSubset.STEADY_STATE_HYPOTHESIS;
     }
 
     /** The index of the CGMES limit identifiers of this network, built on first use and shared by both directions. */
@@ -1514,8 +1496,7 @@ class CgmesChangeTranslator {
             return failure("the receiver only accepts voltage limits strictly inside the VoltageLevel range ("
                     + rangeLow + ", " + rangeHigh + ")");
         }
-        CgmesSubset subset = context.getCimVersion() == 16
-                ? CgmesSubset.EQUIPMENT : CgmesSubset.STEADY_STATE_HYPOTHESIS;
+        CgmesSubset subset = equipmentValueSubset();
         CgmesPropertyBuffer buffer = new CgmesPropertyBuffer();
         for (String id : ids.split(";")) {
             if (!id.isEmpty()) {
@@ -1570,9 +1551,12 @@ class CgmesChangeTranslator {
         }
         double r = state.getDouble(line, R, line::getR);
         double x = state.getDouble(line, X, line::getX);
-        Result<CgmesPropertyBuffer, String> impedance = checkImpedance(line, r, x);
-        if (impedance != null) {
-            return impedance;
+        Optional<String> problem = seriesImpedanceProblem(r, x);
+        if (problem.isPresent()) {
+            return failure(problem.get());
+        }
+        if (r == 0 && x == 0 && line.getTerminal1().getVoltageLevel() == line.getTerminal2().getVoltageLevel()) {
+            return failure("a zero-impedance branch inside one voltage level becomes a switch on import");
         }
         if (R.equals(attribute) || X.equals(attribute)) {
             return success(seriesImpedanceUpdates(originalClass, cgmesId(line), attribute,
@@ -1609,8 +1593,9 @@ class CgmesChangeTranslator {
         }
         double r = state.getDouble(boundaryLine, R, boundaryLine::getR);
         double x = state.getDouble(boundaryLine, X, boundaryLine::getX);
-        if (!Double.isFinite(r) || !Double.isFinite(x) || r < 0 || x < 0) {
-            return failure("impedance values must be finite (r, x >= 0)");
+        Optional<String> problem = seriesImpedanceProblem(r, x);
+        if (problem.isPresent()) {
+            return failure(problem.get());
         }
         if (R.equals(attribute) || X.equals(attribute)) {
             return success(seriesImpedanceUpdates(originalClass, cgmesId(boundaryLine), attribute,
@@ -1649,15 +1634,10 @@ class CgmesChangeTranslator {
         return update.updates();
     }
 
-    /** A failure when the resistance and the reactance cannot be written as they stand, {@code null} otherwise. */
-    private static Result<CgmesPropertyBuffer, String> checkImpedance(Line line, double r, double x) {
-        if (!Double.isFinite(r) || !Double.isFinite(x) || r < 0 || x < 0) {
-            return failure("impedance values must be finite (r, x >= 0)");
-        }
-        if (r == 0 && x == 0 && line.getTerminal1().getVoltageLevel() == line.getTerminal2().getVoltageLevel()) {
-            return failure("a zero-impedance branch inside one voltage level becomes a switch on import");
-        }
-        return null;
+    /** Why a resistance and a reactance cannot be written as they stand, empty when they can. */
+    private static Optional<String> seriesImpedanceProblem(double r, double x) {
+        return !Double.isFinite(r) || !Double.isFinite(x) || r < 0 || x < 0
+                ? Optional.of("impedance values must be finite (r, x >= 0)") : Optional.empty();
     }
 
     /**

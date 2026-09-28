@@ -37,7 +37,7 @@ public final class ScenarioGraphNames {
     public static final String CONTEXTS = "contexts:";
 
     /** The longest a scenario name may be, in characters. */
-    public static final int MAX_SCENARIO_LENGTH = 128;
+    private static final int MAX_SCENARIO_LENGTH = 128;
 
     private ScenarioGraphNames() {
     }

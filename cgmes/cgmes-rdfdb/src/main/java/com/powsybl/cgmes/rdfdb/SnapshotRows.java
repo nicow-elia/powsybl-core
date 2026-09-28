@@ -20,6 +20,7 @@ import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Turning the rows of a snapshot query into {@link SnapshotInfo} objects.
@@ -143,6 +144,42 @@ final class SnapshotRows {
         return value instanceof Literal literal ? literal.booleanValue() : Boolean.parseBoolean(value.stringValue());
     }
 
+    static long longOf(Value value, long fallback) {
+        if (value == null) {
+            return fallback;
+        }
+        try {
+            return value instanceof Literal literal ? literal.longValue() : Long.parseLong(value.stringValue());
+        } catch (IllegalArgumentException e) {
+            return fallback;
+        }
+    }
+
+    static int intOf(Value value) {
+        try {
+            return value instanceof Literal literal ? literal.intValue() : Integer.parseInt(value.stringValue());
+        } catch (IllegalArgumentException e) {
+            return 0;
+        }
+    }
+
+    static ZonedDateTime dateOf(Value value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return ZonedDateTime.parse(value.stringValue());
+        } catch (DateTimeParseException e) {
+            return null;
+        }
+    }
+
+    /** The text of one binding of a row, {@code null} when unbound. */
+    static String text(Map<String, Value> row, String binding) {
+        Value value = row.get(binding);
+        return value == null ? null : value.stringValue();
+    }
+
     /** The predicate-object pairs of one snapshot node, before it becomes a {@link SnapshotInfo}. */
     private static final class Builder {
 
@@ -241,9 +278,9 @@ final class SnapshotRows {
             }
         }
 
-        java.util.Optional<SnapshotInfo> build(String scenario) {
+        Optional<SnapshotInfo> build(String scenario) {
             if (!isSnapshot || version == null || timestep == null) {
-                return java.util.Optional.empty();
+                return Optional.empty();
             }
             SnapshotInfo.Kind snapshotKind = RdfDbVocabulary.FULL.equals(kind)
                     ? SnapshotInfo.Kind.FULL : SnapshotInfo.Kind.DIFF;
@@ -255,26 +292,9 @@ final class SnapshotRows {
             } else {
                 edgeKind = SnapshotInfo.EdgeKind.VERSION;
             }
-            return java.util.Optional.of(new SnapshotInfo(scenario, iri, version, timestep,
-                    labelOrEmpty(), snapshotKind, parent, edgeKind, depth, !full.isEmpty(), fast,
+            return Optional.of(new SnapshotInfo(scenario, iri, version, timestep,
+                    labelOrEmpty(), snapshotKind, parent, edgeKind, depth, fast,
                     state, members, full, timestepRoot == null ? iri : timestepRoot, created, description));
-        }
-
-        private static int intOf(Value value) {
-            try {
-                return value instanceof Literal literal ? literal.intValue()
-                        : Integer.parseInt(value.stringValue());
-            } catch (IllegalArgumentException e) {
-                return 0;
-            }
-        }
-
-        private static ZonedDateTime dateOf(Value value) {
-            try {
-                return ZonedDateTime.parse(value.stringValue());
-            } catch (DateTimeParseException e) {
-                return null;
-            }
         }
     }
 }

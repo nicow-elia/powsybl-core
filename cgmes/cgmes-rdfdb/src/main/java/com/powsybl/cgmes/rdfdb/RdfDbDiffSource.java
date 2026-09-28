@@ -29,6 +29,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
@@ -88,6 +89,22 @@ public final class RdfDbDiffSource {
         return fetchAll(connection, diffs, GSP_MIN_STATEMENTS_PER_GRAPH);
     }
 
+    /**
+     * Fetch several stored differences, keyed by model identifier; the same requests as {@link #fetchAll}.
+     *
+     * @param connection the open connection
+     * @param diffs      the nodes of the differences, all of the same scenario
+     * @return the difference models by identifier, in the order of the given nodes
+     */
+    static Map<String, DifferenceModel> fetchById(RdfDbConnection connection, List<StoredModel> diffs) {
+        List<DifferenceModel> fetched = fetchAll(connection, diffs);
+        Map<String, DifferenceModel> byId = new LinkedHashMap<>();
+        for (int i = 0; i < diffs.size(); i++) {
+            byId.put(diffs.get(i).id(), fetched.get(i));
+        }
+        return byId;
+    }
+
     static List<DifferenceModel> fetchAll(RdfDbConnection connection, List<StoredModel> diffs,
                                           int minStatementsPerGraph) {
         Objects.requireNonNull(connection);
@@ -95,23 +112,20 @@ public final class RdfDbDiffSource {
         if (diffs.isEmpty()) {
             return List.of();
         }
-        String scenario = diffs.get(0).scenario();
-        StringBuilder values = new StringBuilder();
-        for (StoredModel diff : diffs) {
-            if (diff.kind() != StoredModel.Kind.DIFF) {
-                throw new RdfDbException("Model " + diff.id() + " of scenario '" + diff.scenario()
-                        + "' is a full model, not a difference: it has no forward and reverse graphs to fetch");
-            }
-            values.append(' ').append(SparqlText.iri(diff.forwardGraph()))
-                    .append(' ').append(SparqlText.iri(diff.reverseGraph()));
-        }
+        diffs.stream().filter(diff -> diff.kind() != StoredModel.Kind.DIFF).findFirst().ifPresent(diff -> {
+            throw new RdfDbException("Model " + diff.id() + " of scenario '" + diff.scenario()
+                    + "' is a full model, not a difference: it has no forward and reverse graphs to fetch");
+        });
         GraphStoreClient client = connection.graphStoreClient();
         long statements = diffs.stream().mapToLong(diff -> Math.max(0, diff.tripleCount())).sum();
         if (client != null && client.supported() && statements >= (long) minStatementsPerGraph * 2 * diffs.size()) {
             return toModels(diffs, fetchByGraph(connection, client, diffs));
         }
+        String values = diffs.stream()
+                .map(diff -> " " + SparqlText.iri(diff.forwardGraph()) + " " + SparqlText.iri(diff.reverseGraph()))
+                .collect(Collectors.joining());
         Map<String, List<Row>> byGraph = new LinkedHashMap<>();
-        List<Map<String, Value>> rows = connection.sparql(scenario)
+        List<Map<String, Value>> rows = connection.sparql(diffs.get(0).scenario())
                 .select("SELECT ?g ?s ?p ?o WHERE { VALUES ?g {" + values + " } GRAPH ?g { ?s ?p ?o } }");
         for (Map<String, Value> row : rows) {
             Value g = row.get("g");

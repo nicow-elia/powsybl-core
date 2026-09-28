@@ -8,15 +8,11 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
-import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
-import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.events.NetworkEvent;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,11 +21,12 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
-import java.util.Properties;
 import java.util.function.Supplier;
-import java.util.stream.Stream;
 
+import static com.powsybl.cgmes.rdfdb.Backends.microGridBe;
+import static com.powsybl.cgmes.rdfdb.Backends.params;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -86,20 +83,6 @@ class RdfDbVariantsBenchmarkTest {
     private static final boolean STRICT =
             Boolean.getBoolean("powsybl.rdfdb.benchmark.strict");
 
-    static Stream<Arguments> backends() {
-        return Backends.backends();
-    }
-
-    private static Properties params() {
-        Properties p = new Properties();
-        p.put(CgmesImport.IMPORT_CGM_WITH_SUBNETWORKS, "false");
-        return p;
-    }
-
-    private static ReadOnlyDataSource be() {
-        return CgmesConformity1Catalog.microGridBaseCaseBE().dataSource();
-    }
-
     /** The canonical instants of a day of quarter hours, starting at the base timestep of the fixture. */
     private static List<String> day() {
         List<String> timesteps = new ArrayList<>();
@@ -119,7 +102,7 @@ class RdfDbVariantsBenchmarkTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void benchmark(String backend) {
         for (Shape shape : Shape.values()) {
             measureDay(backend, shape);
@@ -151,7 +134,7 @@ class RdfDbVariantsBenchmarkTest {
 
             long[] applies = last.bound().stream().mapToLong(outcome -> outcome.apply().toNanos()).toArray();
             long applyMedian = median(applies.clone());
-            long applyMax = java.util.Arrays.stream(applies).max().orElse(0);
+            long applyMax = Arrays.stream(applies).max().orElse(0);
 
             // (sep) the naive alternative: one network per timestep
             long separate = measure(() -> {
@@ -221,27 +204,19 @@ class RdfDbVariantsBenchmarkTest {
         VariantLoadResult day = loadDay(db, timesteps);
         Network network = day.network();
         assertThat(network.getVariantManager().getVariantIds()).hasSize(TIMESTEPS + 1);
-        long withVariants = usedHeap();
+        long withVariants = BenchMeters.heapAfterGc();
         List<String> toRemove = new ArrayList<>(network.getVariantManager().getVariantIds());
         toRemove.remove(RdfDbProvenance.PRIMARY_VARIANT);
         toRemove.forEach(variant -> network.getVariantManager().removeVariant(variant));
-        long withoutVariants = usedHeap();
+        long withoutVariants = BenchMeters.heapAfterGc();
         assertThat(network.getVariantManager().getVariantIds()).hasSize(1);
         return Math.max(0, withVariants - withoutVariants);
-    }
-
-    private static long usedHeap() {
-        Runtime runtime = Runtime.getRuntime();
-        for (int i = 0; i < 3; i++) {
-            System.gc();
-        }
-        return runtime.totalMemory() - runtime.freeMemory();
     }
 
     /** Ninety-six steady-state snapshots, one per quarter hour, each one difference from the base. */
     private static void build(RdfDbConnection db, List<String> timesteps, Shape shape) {
         db.clear(S);
-        db.snapshots(S).putFull(be(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
+        db.snapshots(S).putFull(microGridBe(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
         Network sender = RdfDbNetworkLoader.load(db, S, "1.0", timesteps.get(0), null, params(),
                 ReportNode.NO_OP);
         for (int i = 1; i < timesteps.size(); i++) {
@@ -277,7 +252,7 @@ class RdfDbVariantsBenchmarkTest {
     }
 
     private static long median(long[] values) {
-        java.util.Arrays.sort(values);
+        Arrays.sort(values);
         return values[values.length / 2];
     }
 

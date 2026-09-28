@@ -227,7 +227,7 @@ class DiffSubjectResolverTest {
         assertEquals("urn:uuid:GU", unit.about());
     }
 
-    // Equipment values of work package 5
+    // Equipment values (limits and impedances)
 
     @Test
     void operationalLimitsResolveToTheirOwnerAndSide() {

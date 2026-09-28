@@ -75,29 +75,6 @@ public record StoredModel(String scenario, String id, CgmesSubset subset, Stored
         DIFF
     }
 
-    /**
-     * @param scenario             see {@link #scenario()}
-     * @param id                   see {@link #id()}
-     * @param subset               see {@link #subset()}
-     * @param kind                 see {@link #kind()}
-     * @param graph                see {@link #graph()}
-     * @param forwardGraph         see {@link #forwardGraph()}
-     * @param reverseGraph         see {@link #reverseGraph()}
-     * @param version              see {@link #version()}
-     * @param description          see {@link #description()}
-     * @param scenarioTime         see {@link #scenarioTime()}
-     * @param created              see {@link #created()}
-     * @param modelingAuthoritySet see {@link #modelingAuthoritySet()}
-     * @param profiles             see {@link #profiles()}
-     * @param dependentOn          see {@link #dependentOn()}
-     * @param supersedes           see {@link #supersedes()}
-     * @param fastPredicatesOnly   see {@link #fastPredicatesOnly()}
-     * @param tripleCount          see {@link #tripleCount()}
-     * @param subjectBase          see {@link #subjectBase()}
-     * @param cimNamespace         see {@link #cimNamespace()}
-     * @param chainDepth           see {@link #chainDepth()}
-     * @param variantSafe          see {@link #variantSafe()}
-     */
     public StoredModel {
         Objects.requireNonNull(scenario);
         Objects.requireNonNull(id);
@@ -107,42 +84,6 @@ public record StoredModel(String scenario, String id, CgmesSubset subset, Stored
         dependentOn = List.copyOf(dependentOn);
         supersedes = List.copyOf(supersedes);
         subjectBase = subjectBase == null ? "" : subjectBase;
-    }
-
-    /**
-     * A model of a store that does not carry the variant-safety flag, which is what every store written before it
-     * existed looks like.
-     *
-     * @param scenario             see {@link #scenario()}
-     * @param id                   see {@link #id()}
-     * @param subset               see {@link #subset()}
-     * @param kind                 see {@link #kind()}
-     * @param graph                see {@link #graph()}
-     * @param forwardGraph         see {@link #forwardGraph()}
-     * @param reverseGraph         see {@link #reverseGraph()}
-     * @param version              see {@link #version()}
-     * @param description          see {@link #description()}
-     * @param scenarioTime         see {@link #scenarioTime()}
-     * @param created              see {@link #created()}
-     * @param modelingAuthoritySet see {@link #modelingAuthoritySet()}
-     * @param profiles             see {@link #profiles()}
-     * @param dependentOn          see {@link #dependentOn()}
-     * @param supersedes           see {@link #supersedes()}
-     * @param fastPredicatesOnly   see {@link #fastPredicatesOnly()}
-     * @param tripleCount          see {@link #tripleCount()}
-     * @param subjectBase          see {@link #subjectBase()}
-     * @param cimNamespace         see {@link #cimNamespace()}
-     * @param chainDepth           see {@link #chainDepth()}
-     */
-    public StoredModel(String scenario, String id, CgmesSubset subset, StoredModel.Kind kind, String graph,
-                       String forwardGraph, String reverseGraph, int version, String description,
-                       ZonedDateTime scenarioTime, ZonedDateTime created, String modelingAuthoritySet,
-                       List<String> profiles, List<String> dependentOn, List<String> supersedes,
-                       boolean fastPredicatesOnly, long tripleCount, String subjectBase, String cimNamespace,
-                       int chainDepth) {
-        this(scenario, id, subset, kind, graph, forwardGraph, reverseGraph, version, description, scenarioTime,
-                created, modelingAuthoritySet, profiles, dependentOn, supersedes, fastPredicatesOnly, tripleCount,
-                subjectBase, cimNamespace, chainDepth, null);
     }
 
     /**

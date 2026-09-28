@@ -8,6 +8,7 @@
 
 package com.powsybl.cgmes.rdfdb;
 
+import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
 import com.powsybl.iidm.network.Generator;
 import com.powsybl.iidm.network.Load;
 import com.powsybl.iidm.network.Network;
@@ -48,6 +49,18 @@ final class Changes {
             network.removeListener(recorder);
         }
         return List.copyOf(recorder.getEvents());
+    }
+
+    /** Record a change on a network and store it as the given snapshot. */
+    static RdfDbExport.SnapshotResult export(Network network, RdfDbConnection db, SnapshotRef target,
+                                             Consumer<Network> change) {
+        return RdfDbExport.export(network, record(network, change), db, target, new CgmesDiffExport.ExportOptions());
+    }
+
+    /** Record a change on a network and append it to the difference chain of a scenario. */
+    static RdfDbExport.Result export(Network network, RdfDbConnection db, String scenario, Consumer<Network> change) {
+        return RdfDbExport.export(network, record(network, change), db, scenario,
+                new CgmesDiffExport.ExportOptions());
     }
 
     /** Move the active power of a load by the given amount and answer the value it ends up at. */

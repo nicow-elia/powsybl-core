@@ -53,10 +53,12 @@ public sealed interface Result<T, E> {
         }
     }
 
+    /** A result holding the given value, which must not be {@code null}. */
     static <T, E> Result<T, E> success(T value) {
         return new Success<>(value);
     }
 
+    /** A result holding no value, only the given reason, which must not be {@code null}. */
     static <T, E> Result<T, E> failure(E reason) {
         return new Failure<>(reason);
     }

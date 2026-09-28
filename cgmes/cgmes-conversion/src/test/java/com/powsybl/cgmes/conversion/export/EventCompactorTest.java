@@ -158,7 +158,7 @@ class EventCompactorTest {
     void selectionEventsKeepThePlainAttribute() {
         UpdateNetworkEvent selection = update("L", "limits1_CURRENT", "someLimitsObject", null);
         CompactedChanges changes = EventCompactor.compact(List.of(selection), VARIANT);
-        assertEquals("limits1_CURRENT", changes.attributeKey(selection));
+        assertEquals("limits1_CURRENT", EventCompactor.attributeKey(selection));
         assertTrue(changes.hasChange("L", "limits1_CURRENT"));
     }
 
@@ -167,7 +167,7 @@ class EventCompactorTest {
         UpdateNetworkEvent replacement = update("L", "limits1_CURRENT",
                 new OperationalLimitsInfo(null, "A", true), new OperationalLimitsInfo(null, "A", true));
         CompactedChanges changes = EventCompactor.compact(List.of(replacement), VARIANT);
-        assertEquals("limits1_CURRENT@A", changes.attributeKey(replacement));
+        assertEquals("limits1_CURRENT@A", EventCompactor.attributeKey(replacement));
         assertTrue(changes.hasChange("L", "limits1_CURRENT@A"));
     }
 

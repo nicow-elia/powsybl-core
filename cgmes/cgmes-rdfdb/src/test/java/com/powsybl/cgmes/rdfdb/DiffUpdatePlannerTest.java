@@ -197,11 +197,11 @@ class DiffUpdatePlannerTest {
                     "http://powsybl.org/rdfdb/s/graph/" + prefix + depth + "/reverse",
                     depth + 1, null, null, null, null, List.of(), List.of(),
                     List.of(depth == 1 ? prefix + "full" : prefix + (depth - 1)), fast, 10L,
-                    "http://x/#", "http://iec.ch/TC57/2013/CIM-schema-cim16#", depth));
+                    "http://x/#", "http://iec.ch/TC57/2013/CIM-schema-cim16#", depth, null));
         }
         chain.add(new StoredModel(S, prefix + "full", subset, StoredModel.Kind.FULL, "contexts:s/" + prefix + ".xml",
                 null, null, 1, null, null, null, null, List.of(), List.of(), List.of(), false, 1000L,
-                "http://x/#", "http://iec.ch/TC57/2013/CIM-schema-cim16#", 0));
+                "http://x/#", "http://iec.ch/TC57/2013/CIM-schema-cim16#", 0, null));
         return List.copyOf(chain);
     }
 
@@ -211,6 +211,6 @@ class DiffUpdatePlannerTest {
                 model.forwardGraph(), model.reverseGraph(), model.version(), model.description(),
                 model.scenarioTime(), model.created(), model.modelingAuthoritySet(), model.profiles(),
                 model.dependentOn(), model.supersedes(), false, model.tripleCount(), model.subjectBase(),
-                model.cimNamespace(), model.chainDepth());
+                model.cimNamespace(), model.chainDepth(), null);
     }
 }

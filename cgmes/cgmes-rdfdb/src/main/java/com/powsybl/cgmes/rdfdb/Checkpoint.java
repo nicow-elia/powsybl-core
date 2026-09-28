@@ -9,15 +9,11 @@
 package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.model.CgmesSubset;
-import org.eclipse.rdf4j.model.Statement;
-import org.eclipse.rdf4j.repository.Repository;
-import org.eclipse.rdf4j.repository.RepositoryConnection;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.EnumMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -62,21 +58,22 @@ public final class Checkpoint {
         Objects.requireNonNull(db);
         Objects.requireNonNull(ref);
         SnapshotCatalog catalog = db.snapshots(ref.scenario());
-        SnapshotInfo info = catalog.find(catalog.check(ref)).orElseThrow(() -> new RdfDbException("scenario '"
+        SnapshotInfo info = catalog.find(ref).orElseThrow(() -> new RdfDbException("scenario '"
                 + ref.scenario() + "' holds no snapshot " + ref));
         if (info.hasFull()) {
             return info;
         }
         MaterializationPlan plan = db.versionGraph(ref.scenario()).materialization(info.iri());
         Map<CgmesSubset, List<UpdatePlan.DiffStep>> steps = new EnumMap<>(CgmesSubset.class);
-        plan.steps().forEach(step -> steps.computeIfAbsent(step.model().subset(), k -> new ArrayList<>())
-                .add(step));
+        Map<CgmesSubset, String> nodes = new EnumMap<>(CgmesSubset.class);
+        plan.steps().forEach(step -> steps.computeIfAbsent(step.model().subset(), subset -> {
+            nodes.put(subset, RdfDbNames.materialized(ref.scenario(), info.timestep(), info.version(),
+                    subset.getIdentifier()));
+            return new ArrayList<>();
+        }).add(step));
         if (steps.isEmpty()) {
             return info;
         }
-        Map<CgmesSubset, String> nodes = new LinkedHashMap<>();
-        steps.forEach((subset, path) -> nodes.put(subset,
-                RdfDbNames.materialized(ref.scenario(), info.timestep(), info.version(), subset.getIdentifier())));
 
         // The data first, the metadata last: a graph no node refers to is invisible, so a failure half way leaves
         // the snapshot exactly as it was
@@ -84,11 +81,8 @@ public final class Checkpoint {
                 nodes.get(subset) + "/graph", path, plan.targetState().get(subset)));
         db.sparql(ref.scenario()).update(metadata(ref.scenario(), info, plan, nodes));
 
-        SnapshotInfo updated = catalog.info(info.iri()).orElseThrow(() -> new RdfDbException(
-                "the checkpoint of " + info + " was not written"));
-        if (!updated.hasFull()) {
-            throw new RdfDbException("the checkpoint of " + info + " was not written");
-        }
+        SnapshotInfo updated = catalog.info(info.iri()).filter(SnapshotInfo::hasFull)
+                .orElseThrow(() -> new RdfDbException("the checkpoint of " + info + " was not written"));
         LOGGER.info("Checkpointed snapshot {} of scenario '{}': {} profile(s) materialised", info,
                 ref.scenario(), nodes.size());
         return updated;
@@ -135,13 +129,7 @@ public final class Checkpoint {
                     + SparqlText.iri(source) + " TO " + SparqlText.iri(target));
             return;
         }
-        Repository repository = db.repository(scenario, true);
-        List<Statement> statements;
-        try (RepositoryConnection conn = repository.getConnection()) {
-            statements = new ArrayList<>(conn.getStatements(null, null, null,
-                    conn.getValueFactory().createIRI(source)).stream().toList());
-        }
-        db.writeGraph(scenario, target, statements);
+        db.writeGraph(scenario, target, SparqlAccess.statementsOf(db.repository(scenario, true), source));
     }
 
     /**

@@ -17,14 +17,18 @@ import com.powsybl.iidm.network.events.NetworkEvent;
 
 import java.time.Instant;
 import java.time.ZonedDateTime;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.EnumMap;
-import java.util.EnumSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.function.UnaryOperator;
 
 /**
  * Record a change on a network and store it as a difference in a scenario of an RDF database, in one call.
@@ -56,6 +60,10 @@ import java.util.Optional;
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 public final class RdfDbExport {
+
+    /** What a difference can describe; each of them has to be one model to be superseded. */
+    private static final Set<CgmesSubset> DIFF_SUBSETS =
+            Set.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS);
 
     /**
      * What an export produced.
@@ -125,15 +133,24 @@ public final class RdfDbExport {
         checkSameScenario(network, scenario);
         // In variant mode the whole export - the sender check included - describes the working variant and
         // supersedes the model that variant is at. Outside it, nothing changes
+        return inVariantOrClassic(network, options,
+                writeOptions -> writeModels(network, events, db, scenario, writeOptions, reportNode));
+    }
+
+    /**
+     * Run a write in the working variant's scope when the network is in variant mode, with that variant's options
+     * (its values, and a change IIDM does not store per variant refused rather than written into one variant's
+     * history); otherwise run it as it is and mark the classic operation done.
+     */
+    private static <T> T inVariantOrClassic(Network network, CgmesDiffExport.ExportOptions options,
+                                            Function<CgmesDiffExport.ExportOptions, T> write) {
         RdfDbProvenanceImpl impl = variantModeProvenance(network);
         if (impl != null) {
             String working = RdfDbNetworkLoader.workingVariantOf(network);
-            try (VariantScope scope = VariantScope.enter(network, impl, working)) {
-                return writeModels(network, events, db, scenario,
-                        variantOptions(network, options, working), reportNode);
-            }
+            return VariantScope.call(network, impl, working,
+                    () -> write.apply(variantOptions(network, options, working)));
         }
-        Result result = writeModels(network, events, db, scenario, options, reportNode);
+        T result = write.apply(options);
         RdfDbNetworkLoader.classicOperationDone(network);
         return result;
     }
@@ -143,8 +160,7 @@ public final class RdfDbExport {
                                       String scenario, CgmesDiffExport.ExportOptions options,
                                       ReportNode reportNode) {
         // A difference can only describe these two, and each of them has to be one model to be superseded
-        NetworkIdentity.modelIds(network,
-                EnumSet.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS));
+        NetworkIdentity.modelIds(network, DIFF_SUBSETS);
 
         CgmesDiffExport.Result exported = CgmesDiffExport.toDifferences(network, events,
                 options == null ? new CgmesDiffExport.ExportOptions() : options);
@@ -197,20 +213,9 @@ public final class RdfDbExport {
 
         // In variant mode every operation of this package is a variant operation: the difference describes the
         // working variant and supersedes the model that variant is at, not the primary's
-        RdfDbProvenanceImpl impl = variantModeProvenance(network);
-        if (impl != null) {
-            String working = RdfDbNetworkLoader.workingVariantOf(network);
-            // The same rules as exportVariant: the values of that variant, and a change IIDM does not store per
-            // variant is an unsupported change rather than something written into one variant's history
-            try (VariantScope scope = VariantScope.enter(network, impl, working)) {
-                return writeSnapshot(network, events, db, catalog, effective, timestep,
-                        variantOptions(network, options, working), reportNode);
-            }
-        }
-        SnapshotResult result =
-                writeSnapshot(network, events, db, catalog, effective, timestep, options, reportNode);
-        RdfDbNetworkLoader.classicOperationDone(network);
-        return result;
+        return inVariantOrClassic(network, options,
+                writeOptions -> writeSnapshot(network, events, db, catalog, effective, timestep, writeOptions,
+                        reportNode));
     }
 
     /** Translate the changes and store them as the given snapshot; the caller decides the variant context. */
@@ -219,8 +224,7 @@ public final class RdfDbExport {
                                                 String timestep, CgmesDiffExport.ExportOptions options,
                                                 ReportNode reportNode) {
         // The sender check reads the identity, so it belongs inside whatever variant context the caller set up
-        NetworkIdentity.modelIds(network,
-                EnumSet.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS));
+        NetworkIdentity.modelIds(network, DIFF_SUBSETS);
         CgmesDiffExport.Result exported = translate(network, events, timestep, options);
         return store(network, db, catalog, exported, effective, reportNode);
     }
@@ -365,15 +369,14 @@ public final class RdfDbExport {
         // operation of this module is a variant operation, so nothing can quietly write across the variants
         provenance.enableVariantMode();
         VariantBinding binding = binding(provenance, network, variantId);
-        SnapshotRef target = targetOf(db, binding, newVersion, options, variantId, new LinkedHashMap<>());
+        SnapshotRef target = targetOf(binding, newVersion, options, variantId,
+                db.snapshots(binding.scenario())::nextVersionLabel);
         SnapshotCatalog catalog = db.snapshots(target.scenario());
         catalog.check(target);
 
         CgmesDiffExport.ExportOptions variantOptions = variantOptions(network, options, variantId);
-        try (VariantScope scope = VariantScope.enter(network, provenance, variantId)) {
-            CgmesDiffExport.Result exported = translate(network, events, target.timestep(), variantOptions);
-            return store(network, db, catalog, exported, target, reportNode);
-        }
+        return VariantScope.call(network, provenance, variantId, () -> store(network, db, catalog,
+                translate(network, events, target.timestep(), variantOptions), target, reportNode));
     }
 
     /**
@@ -451,13 +454,13 @@ public final class RdfDbExport {
                 continue;
             }
             VariantBinding binding = impl.variantBinding(variantId).orElseThrow();
-            SnapshotRef target = targetOf(db, binding, newVersion, options, variantId, versionByTimestep);
+            SnapshotRef target = targetOf(binding, newVersion, options, variantId,
+                    ts -> versionByTimestep.computeIfAbsent(ts, db.snapshots(binding.scenario())::nextVersionLabel));
             CgmesDiffExport.ExportOptions variantOptions = variantOptions(network, options, variantId);
-            try (VariantScope scope = VariantScope.enter(network, impl, variantId)) {
+            translated.put(variantId, VariantScope.call(network, impl, variantId, () -> {
                 CgmesDiffExport.Result exported = translate(network, events, target.timestep(), variantOptions);
-                translated.put(variantId, new Translated(target, exported,
-                        rejectedOf(group.getValue(), exported.exportedEvents())));
-            }
+                return new Translated(target, exported, rejectedOf(group.getValue(), exported.exportedEvents()));
+            }));
         }
 
         checkDistinctTargets(translated);
@@ -473,8 +476,9 @@ public final class RdfDbExport {
                 continue;
             }
             SnapshotCatalog catalog = db.snapshots(one.target().scenario());
-            try (VariantScope scope = VariantScope.enter(network, impl, variantId)) {
-                SnapshotResult stored = store(network, db, catalog, one.exported(), one.target(), reportNode);
+            try {
+                SnapshotResult stored = VariantScope.call(network, impl, variantId,
+                        () -> store(network, db, catalog, one.exported(), one.target(), reportNode));
                 results.put(variantId, new VariantExport(variantId, stored, one.rejected()));
             } catch (RdfDbConflictException e) {
                 throw new RdfDbConflictException("writing the changes of variant '" + variantId + "' failed after"
@@ -522,31 +526,31 @@ public final class RdfDbExport {
     private static Map<String, List<NetworkEvent>> groupByVariant(Network network,
                                                                   Collection<NetworkEvent> events) {
         Map<String, List<NetworkEvent>> byVariant = new LinkedHashMap<>();
-        List<NetworkEvent> shared = new java.util.ArrayList<>();
+        List<NetworkEvent> shared = new ArrayList<>();
         for (NetworkEvent event : events) {
             String variantId = CgmesDiffExport.variantOf(event);
             if (variantId == null) {
                 shared.add(event);
             } else {
-                byVariant.computeIfAbsent(variantId, id -> new java.util.ArrayList<>()).add(event);
+                byVariant.computeIfAbsent(variantId, id -> new ArrayList<>()).add(event);
             }
         }
         if (byVariant.isEmpty() && !shared.isEmpty()) {
-            byVariant.put(RdfDbNetworkLoader.workingVariantOf(network), new java.util.ArrayList<>());
+            byVariant.put(RdfDbNetworkLoader.workingVariantOf(network), new ArrayList<>());
         }
         byVariant.values().forEach(group -> group.addAll(shared));
         return byVariant;
     }
 
     private static List<String> rejectedOf(List<NetworkEvent> group, List<NetworkEvent> exported) {
-        java.util.Set<NetworkEvent> written = new java.util.LinkedHashSet<>(exported);
+        Set<NetworkEvent> written = new LinkedHashSet<>(exported);
         return group.stream().filter(event -> !written.contains(event)).map(Object::toString).toList();
     }
 
     /** The snapshot a variant's changes become: the next version of that variant's own timestep. */
-    private static SnapshotRef targetOf(RdfDbConnection db, VariantBinding binding, String newVersion,
+    private static SnapshotRef targetOf(VariantBinding binding, String newVersion,
                                         CgmesDiffExport.ExportOptions options, String variantId,
-                                        Map<String, String> versionByTimestep) {
+                                        UnaryOperator<String> nextVersion) {
         String timestep = binding.timestep();
         if (timestep == null) {
             throw new RdfDbException("variant '" + variantId + "' is not at a snapshot of a versioned scenario,"
@@ -558,9 +562,7 @@ public final class RdfDbExport {
                     + ", but the export was given the scenario time " + options.getScenarioTime()
                     + ": a variant's changes are written into its own timestep");
         }
-        String version = newVersion != null ? newVersion
-                : versionByTimestep.computeIfAbsent(timestep,
-                    ts -> db.snapshots(binding.scenario()).nextVersionLabel(ts));
+        String version = newVersion != null ? newVersion : nextVersion.apply(timestep);
         return new SnapshotRef(binding.scenario(), version, timestep);
     }
 

@@ -37,8 +37,8 @@ import static com.powsybl.cgmes.model.CgmesNamespace.RDF_NAMESPACE;
  *
  * <p>A buffer is keyed by profile as well, because a single change may describe properties of several CGMES
  * profiles and a document holds one profile. Every method that does not name a profile means the steady state
- * hypothesis, which is the only one a partial SSH export writes and the only one the mappings of this release
- * produce.</p>
+ * hypothesis, which is the only one a partial SSH export writes; the difference model export also writes
+ * equipment values, which name their profile.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
@@ -222,8 +222,7 @@ class CgmesPropertyBuffer {
         }
 
         private void addStatements(List<CgmesStatement> statements, CgmesExportContext context) {
-            String subjectId = context.encode(masterResourceId.startsWith("_")
-                    ? masterResourceId.substring(1) : masterResourceId);
+            String subjectId = CgmesExportUtil.toMasterResourceId(masterResourceId, context);
             properties.forEach((property, value) -> statements.add(value.enumeration()
                     ? CgmesStatement.enumeration(subjectId, className, property, value.value())
                     : CgmesStatement.literal(subjectId, className, property, value.value())));

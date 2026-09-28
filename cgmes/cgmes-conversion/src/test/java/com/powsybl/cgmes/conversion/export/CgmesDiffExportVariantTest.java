@@ -9,6 +9,7 @@ package com.powsybl.cgmes.conversion.export;
 
 import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
 import com.powsybl.cgmes.conversion.export.PartialSshExport.UnsupportedChangeBehavior;
+import com.powsybl.cgmes.conversion.test.RecordedChangeScenarios;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
@@ -16,13 +17,11 @@ import com.powsybl.commons.PowsyblException;
 import com.powsybl.iidm.network.Line;
 import com.powsybl.iidm.network.Load;
 import com.powsybl.iidm.network.Network;
-import com.powsybl.iidm.network.NetworkEventRecorder;
 import com.powsybl.iidm.network.VariantManagerConstants;
 import com.powsybl.iidm.network.events.NetworkEvent;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
-import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -52,17 +51,6 @@ class CgmesDiffExportVariantTest {
         return network;
     }
 
-    private static List<NetworkEvent> record(Network network, Consumer<Network> change) {
-        NetworkEventRecorder recorder = new NetworkEventRecorder();
-        network.addListener(recorder);
-        try {
-            change.accept(network);
-        } finally {
-            network.removeListener(recorder);
-        }
-        return List.copyOf(recorder.getEvents());
-    }
-
     /**
      * A change of the other variant is not part of this export, and the working variant is restored.
      */
@@ -72,9 +60,9 @@ class CgmesDiffExportVariantTest {
         List<NetworkEvent> events = new java.util.ArrayList<>();
 
         network.getVariantManager().setWorkingVariant(OTHER);
-        events.addAll(record(network, n -> n.getLoad(LOAD).setP0(111.0)));
+        events.addAll(RecordedChangeScenarios.record(network, n -> n.getLoad(LOAD).setP0(111.0)));
         network.getVariantManager().setWorkingVariant(VariantManagerConstants.INITIAL_VARIANT_ID);
-        events.addAll(record(network, n -> n.getLoad(LOAD).setP0(222.0)));
+        events.addAll(RecordedChangeScenarios.record(network, n -> n.getLoad(LOAD).setP0(222.0)));
 
         CgmesDiffExport.Result result = CgmesDiffExport.toDifferences(network, events,
                 new CgmesDiffExport.ExportOptions().setVariant(OTHER));
@@ -93,7 +81,7 @@ class CgmesDiffExportVariantTest {
     void withoutAVariantTheWorkingOneIsExported() {
         Network network = twoVariants();
         network.getVariantManager().setWorkingVariant(OTHER);
-        List<NetworkEvent> events = record(network, n -> n.getLoad(LOAD).setP0(111.0));
+        List<NetworkEvent> events = RecordedChangeScenarios.record(network, n -> n.getLoad(LOAD).setP0(111.0));
 
         DifferenceModel ssh = CgmesDiffExport
                 .toDifferences(network, events, new CgmesDiffExport.ExportOptions())
@@ -110,7 +98,7 @@ class CgmesDiffExportVariantTest {
         Network network = twoVariants();
         network.getVariantManager().setWorkingVariant(OTHER);
         String line = network.getLineStream().map(Line::getId).sorted().findFirst().orElseThrow();
-        List<NetworkEvent> events = record(network, n -> {
+        List<NetworkEvent> events = RecordedChangeScenarios.record(network, n -> {
             n.getLoad(LOAD).setP0(111.0);
             n.getLine(line).setR(n.getLine(line).getR() + 1.0);
         });
@@ -126,7 +114,7 @@ class CgmesDiffExportVariantTest {
         Network network = twoVariants();
         network.getVariantManager().setWorkingVariant(OTHER);
         String lineId = network.getLineStream().map(Line::getId).sorted().findFirst().orElseThrow();
-        List<NetworkEvent> events = record(network, n -> {
+        List<NetworkEvent> events = RecordedChangeScenarios.record(network, n -> {
             n.getLoad(LOAD).setP0(111.0);
             n.getLine(lineId).setR(n.getLine(lineId).getR() + 1.0);
         });
@@ -146,7 +134,7 @@ class CgmesDiffExportVariantTest {
     void aSharedChangeIsExportedByDefault() {
         Network network = twoVariants();
         String lineId = network.getLineStream().map(Line::getId).sorted().findFirst().orElseThrow();
-        List<NetworkEvent> events = record(network, n -> n.getLine(lineId).setR(n.getLine(lineId).getR() + 1.0));
+        List<NetworkEvent> events = RecordedChangeScenarios.record(network, n -> n.getLine(lineId).setR(n.getLine(lineId).getR() + 1.0));
 
         CgmesDiffExport.Result result = CgmesDiffExport.toDifferences(network, events,
                 new CgmesDiffExport.ExportOptions());
@@ -172,9 +160,9 @@ class CgmesDiffExportVariantTest {
         Network network = twoVariants();
         List<NetworkEvent> events = new java.util.ArrayList<>();
         network.getVariantManager().setWorkingVariant(OTHER);
-        events.addAll(record(network, n -> n.getLoad(LOAD).setP0(111.0)));
+        events.addAll(RecordedChangeScenarios.record(network, n -> n.getLoad(LOAD).setP0(111.0)));
         network.getVariantManager().setWorkingVariant(VariantManagerConstants.INITIAL_VARIANT_ID);
-        events.addAll(record(network, n -> n.getLoad(LOAD).setP0(222.0)));
+        events.addAll(RecordedChangeScenarios.record(network, n -> n.getLoad(LOAD).setP0(222.0)));
 
         java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
         List<NetworkEvent> exported = PartialSshExport.write(network, events, out,
@@ -199,7 +187,7 @@ class CgmesDiffExportVariantTest {
     void aLoadOfTheOtherVariantIsDroppedNotRefused() {
         Network network = twoVariants();
         network.getVariantManager().setWorkingVariant(OTHER);
-        List<NetworkEvent> events = record(network, n -> n.getLoad(LOAD).setP0(111.0));
+        List<NetworkEvent> events = RecordedChangeScenarios.record(network, n -> n.getLoad(LOAD).setP0(111.0));
         network.getVariantManager().setWorkingVariant(VariantManagerConstants.INITIAL_VARIANT_ID);
 
         CgmesDiffExport.Result result = CgmesDiffExport.toDifferences(network, events,

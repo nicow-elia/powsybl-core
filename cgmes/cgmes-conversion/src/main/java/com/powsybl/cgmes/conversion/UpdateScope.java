@@ -9,6 +9,7 @@ package com.powsybl.cgmes.conversion;
 
 import com.powsybl.iidm.network.Identifiable;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
@@ -26,7 +27,7 @@ import java.util.stream.Stream;
  * identifier up, asks the triple store cache for a property bag and, finding none, still runs the "no data" branch
  * that re-applies the previous values.</p>
  *
- * <p>{@link #ALL} is the ordinary update and behaves exactly as before this class existed. A restricted scope visits
+ * <p>{@link #ALL} is the ordinary update and selects everything. A restricted scope visits
  * only the named identifiables, in a deterministic order, and additionally lets the caller skip the two passes that
  * are meaningless for a partial change: the voltage and angle completion (a difference model carries no state
  * variables, so untouched buses keep the values they have) and the final validation check (legal only when every
@@ -61,16 +62,6 @@ public final class UpdateScope {
         return ids == null;
     }
 
-    /** Whether this scope holds the given identifier. */
-    public boolean contains(String id) {
-        return ids == null || ids.contains(id);
-    }
-
-    /** The identifiers of a restricted scope, empty for {@link #ALL}. */
-    public Set<String> ids() {
-        return ids == null ? Set.of() : ids;
-    }
-
     /**
      * The elements of {@code all} this scope selects.
      *
@@ -85,7 +76,7 @@ public final class UpdateScope {
         if (ids == null) {
             return all;
         }
-        List<T> selected = new java.util.ArrayList<>();
+        List<T> selected = new ArrayList<>();
         for (String id : ids) {
             T element = byId.apply(id);
             if (element != null) {

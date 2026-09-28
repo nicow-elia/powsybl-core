@@ -24,6 +24,7 @@ import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.NetworkFactory;
 import com.powsybl.iidm.network.events.NetworkEvent;
 import org.assertj.core.api.SoftAssertions;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -44,6 +45,7 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.stream.Stream;
 
+import static com.powsybl.cgmes.rdfdb.BenchMeters.add;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -117,6 +119,11 @@ class ScaleLoadBenchmarkTest {
     /** Gates are collected, so that one failing grid does not hide the measurements of the next ones. */
     private final SoftAssertions softly = new SoftAssertions();
 
+    @AfterAll
+    static void uninstallMeter() {
+        BenchMeters.FusekiMeter.uninstall();
+    }
+
     static Stream<Arguments> backends() {
         return BenchMeters.backends();
     }
@@ -178,7 +185,7 @@ class ScaleLoadBenchmarkTest {
     // ------------------------------------------------------------------ B
 
     private Measured measureGrid(String backend, BenchMeters.Grid grid, List<String> table) {
-        Properties p = BenchMeters.params();
+        Properties p = Backends.params();
         ReadOnlyDataSource ds = grid.dataSource();
         int warmups = BenchMeters.warmups(grid);
         int runs = BenchMeters.runs(grid);
@@ -227,7 +234,7 @@ class ScaleLoadBenchmarkTest {
     private Measured measureDatabase(String backend, BenchMeters.Grid grid, List<String> table, RdfDatabase database,
                                      String scenario, long a, long aRead, long aConvert, String loadId,
                                      String loadClass) {
-        Properties p = BenchMeters.params();
+        Properties p = Backends.params();
         ReadOnlyDataSource ds = grid.dataSource();
         int warmups = BenchMeters.warmups(grid);
         int runs = BenchMeters.runs(grid);
@@ -371,7 +378,7 @@ class ScaleLoadBenchmarkTest {
 
     private Versioned measureVersioned(String backend, BenchMeters.Grid grid, RdfDatabase database, String loadId,
                                        String loadClass) {
-        Properties p = BenchMeters.params();
+        Properties p = Backends.params();
         String scenario = "scale-load-v-" + grid.key() + "-" + backend;
         boolean cim16 = !grid.svedala();
         try (RdfDbConnection db = RdfDbConnection.open(database.withCache(
@@ -434,11 +441,11 @@ class ScaleLoadBenchmarkTest {
     // ------------------------------------------------------------------ F
 
     private long measureVariants(String backend, String key, int n, List<String> table) {
-        Properties p = BenchMeters.params();
+        Properties p = Backends.params();
         String scenario = "scale-var-" + key + "-" + backend;
         List<String> timesteps = new ArrayList<>();
         for (int i = 0; i < TIMESTEPS; i++) {
-            timesteps.add(SnapshotRef.canonicalTimestep(Instant.parse(ANCHOR).plus(Duration.ofMinutes(15L * i))
+            timesteps.add(Timesteps.canonical(Instant.parse(ANCHOR).plus(Duration.ofMinutes(15L * i))
                     .atZone(ZoneOffset.UTC)));
         }
         int runs = Integer.getInteger("powsybl.bench.runs", n >= 20 ? 1 : 3);
@@ -506,12 +513,12 @@ class ScaleLoadBenchmarkTest {
 
     private static VariantLoadResult loadDay(RdfDbConnection db, String scenario, List<String> timesteps) {
         return RdfDbNetworkLoader.loadVariants(db, scenario, "1.0", timesteps, new RdfDbVariantLoadOptions(), null,
-                BenchMeters.params(), ReportNode.NO_OP);
+                Backends.params(), ReportNode.NO_OP);
     }
 
     /** 95 rich timesteps, each one difference from the base, exported from a network brought back to the base. */
     private static void buildDay(RdfDbConnection db, String scenario, int n, List<String> timesteps) {
-        Properties p = BenchMeters.params();
+        Properties p = Backends.params();
         db.snapshots(scenario).putFull(ReplicatedSvedala.anchor(n, ANCHOR), null, SnapshotRef.of(scenario, "1.0"),
                 p, ReportNode.NO_OP);
         Network sender = RdfDbNetworkLoader.load(db, scenario, "1.0", timesteps.get(0), null, p, ReportNode.NO_OP);
@@ -547,10 +554,6 @@ class ScaleLoadBenchmarkTest {
     }
 
     // ------------------------------------------------------------------ helpers
-
-    private static void add(Map<String, List<Long>> phases, String name, Duration duration) {
-        phases.computeIfAbsent(name, k -> new ArrayList<>()).add(duration.toMillis());
-    }
 
     private static long med(Map<String, List<Long>> phases, String name) {
         return BenchMeters.median(phases.get(name));

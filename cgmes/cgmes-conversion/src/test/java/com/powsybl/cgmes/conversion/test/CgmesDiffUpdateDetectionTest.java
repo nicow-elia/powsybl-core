@@ -21,6 +21,7 @@ import com.powsybl.iidm.network.events.NetworkEvent;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
@@ -160,5 +161,68 @@ class CgmesDiffUpdateDetectionTest {
 
         CgmesModelException e = assertThrows(CgmesModelException.class, () -> receiver.update(dataSource));
         assertTrue(e.getMessage().contains("Supersedes order"), e.getMessage());
+        // The files are named, not only the model identifiers, which are the same here
+        assertTrue(e.getMessage().contains("x_SSH_DIFF.xml") && e.getMessage().contains("x_SSH_DIFF_2.xml"),
+                e.getMessage());
+        assertTrue(e.getMessage().contains("the same model twice"), e.getMessage());
+        assertEquals(10.0, receiver.getLoad(LOAD).getP0(), 1e-9);
+    }
+
+    /** The difference of one more load change, as the successor of {@code supersedes} when that is given. */
+    private static byte[] chainLink(Network sender, double p0, String modelId, String supersedes) {
+        List<NetworkEvent> events = change(sender, n -> n.getLoad(LOAD).setP0(p0));
+        CgmesDiffExport.ExportOptions options = new CgmesDiffExport.ExportOptions()
+                .setUnsupportedChangeBehavior(PartialSshExport.UnsupportedChangeBehavior.FAIL);
+        CgmesDiffExport.HeaderOptions header = options.header(CgmesSubset.STEADY_STATE_HYPOTHESIS).setModelId(modelId);
+        if (supersedes != null) {
+            header.setSupersedePreviousModel(false).addSupersedes(supersedes);
+        }
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        CgmesDiffExport.write(sender, events, bytes, CgmesSubset.STEADY_STATE_HYPOTHESIS, options);
+        return bytes.toByteArray();
+    }
+
+    private static void zip(Path archive, String name1, byte[] document1, String name2, byte[] document2)
+            throws IOException {
+        ZipArchiveDataSource dataSource = new ZipArchiveDataSource(archive);
+        try (OutputStream out = dataSource.newOutputStream(name1, false)) {
+            out.write(document1);
+        }
+        try (OutputStream out = dataSource.newOutputStream(name2, false)) {
+            out.write(document2);
+        }
+    }
+
+    @Test
+    void aSupersedesChainOfOneProfileIsAppliedInChainOrder(@TempDir Path tempDir) throws IOException {
+        Network sender = load();
+        byte[] first = chainLink(sender, 12.5, "urn:uuid:chain-1", null);
+        byte[] second = chainLink(sender, 15.0, "urn:uuid:chain-2", "urn:uuid:chain-1");
+        // The file names sort against the chain, so only the Supersedes links can give the order
+        Path archive = tempDir.resolve("chain.zip");
+        zip(archive, "a_SSH_DIFF.xml", second, "b_SSH_DIFF.xml", first);
+
+        Network receiver = load();
+        receiver.update(new ZipArchiveDataSource(archive));
+
+        // The Supersedes check is on by default, so each link was checked against the one applied before it
+        assertEquals(15.0, receiver.getLoad(LOAD).getP0(), 1e-9);
+    }
+
+    @Test
+    void twoModelsOfOneProfileThatDoNotChainAreRejectedBeforeAnythingIsApplied(@TempDir Path tempDir)
+            throws IOException {
+        Network sender = load();
+        byte[] first = chainLink(sender, 12.5, "urn:uuid:fork-1", null);
+        byte[] second = chainLink(sender, 15.0, "urn:uuid:fork-2", "urn:uuid:unrelated");
+        Path archive = tempDir.resolve("fork.zip");
+        zip(archive, "a_SSH_DIFF.xml", first, "b_SSH_DIFF.xml", second);
+
+        Network receiver = load();
+        ZipArchiveDataSource dataSource = new ZipArchiveDataSource(archive);
+        CgmesModelException e = assertThrows(CgmesModelException.class, () -> receiver.update(dataSource));
+        assertTrue(e.getMessage().contains("[a_SSH_DIFF.xml, b_SSH_DIFF.xml]"), e.getMessage());
+        assertTrue(e.getMessage().contains("do not form a Supersedes chain"), e.getMessage());
+        assertEquals(10.0, receiver.getLoad(LOAD).getP0(), 1e-9);
     }
 }

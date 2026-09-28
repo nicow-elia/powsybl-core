@@ -10,7 +10,6 @@ package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conformity.Cgmes3Catalog;
 import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
-import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
@@ -27,10 +26,11 @@ import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Properties;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
+import static com.powsybl.cgmes.rdfdb.Backends.params;
+import static com.powsybl.cgmes.rdfdb.BenchMeters.median;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -130,12 +130,6 @@ class RdfDbDiffBenchmarkTest {
             new Fixture("svedala(CGMES3,14MB)", () -> Cgmes3Catalog.svedala().dataSource(), true),
             new Fixture("microGridBaseCaseBE(CIM16,1.9MB)",
                     () -> CgmesConformity1Catalog.microGridBaseCaseBE().dataSource(), false));
-
-    private static Properties params() {
-        Properties p = new Properties();
-        p.put(CgmesImport.IMPORT_CGM_WITH_SUBNETWORKS, "false");
-        return p;
-    }
 
     @Test
     void benchmark() {
@@ -400,14 +394,5 @@ class RdfDbDiffBenchmarkTest {
             }
         }
         return median(totals);
-    }
-
-    private static long median(List<Long> values) {
-        if (values.isEmpty()) {
-            return -1;
-        }
-        List<Long> sorted = new ArrayList<>(values);
-        sorted.sort(Long::compareTo);
-        return sorted.get(sorted.size() / 2);
     }
 }

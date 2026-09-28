@@ -22,7 +22,6 @@ import org.slf4j.LoggerFactory;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.time.ZonedDateTime;
-import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -32,6 +31,10 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.TreeSet;
+
+import static com.powsybl.cgmes.rdfdb.SnapshotRows.dateOf;
+import static com.powsybl.cgmes.rdfdb.SnapshotRows.longOf;
+import static com.powsybl.cgmes.rdfdb.SnapshotRows.subsetOf;
 
 /**
  * The stored models of one scenario: reading the metadata graph, and writing full model nodes into it.
@@ -118,9 +121,7 @@ public final class ModelCatalog {
      * @return the stored models
      */
     public List<StoredModel> models() {
-        List<Map<String, Value>> rows = sparql().select(RdfDbVocabulary.PREFIXES
-                + "SELECT ?m ?p ?o WHERE {" + graphClause() + "{ ?m pdb:kind ?k ; ?p ?o " + NOT_MATERIALIZED + "} }");
-        return sorted(build(rows, "m", "p", "o").values());
+        return snapshot().models();
     }
 
     /**
@@ -145,7 +146,7 @@ public final class ModelCatalog {
             return p != null && o != null && RdfDbVocabulary.RDF_TYPE.equals(p.stringValue())
                     && RdfDbVocabulary.SNAPSHOT_CLASS.equals(o.stringValue());
         });
-        return new CatalogSnapshot(scenario, sorted(build(rows, "m", "p", "o").values()), versioned);
+        return new CatalogSnapshot(scenario, sorted(build(rows).values()), versioned);
     }
 
     /**
@@ -217,7 +218,7 @@ public final class ModelCatalog {
                 + "SELECT ?m ?p ?o WHERE {" + graphClause() + "{ VALUES ?m {" + values(ids)
                 + " } ?m pdb:kind ?k ; ?p ?o " + NOT_MATERIALIZED + "} }");
         Map<String, StoredModel> models = new LinkedHashMap<>();
-        build(rows, "m", "p", "o").forEach((id, node) -> node.build(scenario)
+        build(rows).forEach((id, node) -> node.build(scenario)
                 .ifPresent(model -> models.put(id, model)));
         return models;
     }
@@ -606,15 +607,15 @@ public final class ModelCatalog {
 
     // ------------------------------------------------------------------ node building
 
-    private static Map<String, Node> build(List<Map<String, Value>> rows, String subject, String predicate,
-                                           String object) {
+    /** The nodes of rows binding {@code ?m ?p ?o}, in the order the rows first name them. */
+    private static Map<String, Node> build(List<Map<String, Value>> rows) {
         Map<String, Node> nodes = new LinkedHashMap<>();
         for (Map<String, Value> row : rows) {
-            Value s = row.get(subject);
+            Value s = row.get("m");
             if (s == null) {
                 continue;
             }
-            nodes.computeIfAbsent(s.stringValue(), Node::new).add(row.get(predicate), row.get(object));
+            nodes.computeIfAbsent(s.stringValue(), Node::new).add(row.get("p"), row.get("o"));
         }
         return nodes;
     }
@@ -626,39 +627,6 @@ public final class ModelCatalog {
                 .thenComparingInt(StoredModel::chainDepth)
                 .thenComparing(StoredModel::id));
         return List.copyOf(models);
-    }
-
-    private static CgmesSubset subsetOf(Value value) {
-        if (value == null) {
-            return null;
-        }
-        String identifier = value.stringValue();
-        for (CgmesSubset subset : CgmesSubset.values()) {
-            if (subset.getIdentifier().equals(identifier)) {
-                return subset;
-            }
-        }
-        return null;
-    }
-
-    private static long longOf(Value value, long fallback) {
-        try {
-            return value instanceof Literal literal ? literal.longValue() : Long.parseLong(value.stringValue());
-        } catch (IllegalArgumentException e) {
-            return fallback;
-        }
-    }
-
-    private static ZonedDateTime dateOf(Value value) {
-        if (value == null) {
-            return null;
-        }
-        try {
-            return ZonedDateTime.parse(value.stringValue());
-        } catch (DateTimeParseException e) {
-            LOGGER.debug("Not a date: {}", value.stringValue());
-            return null;
-        }
     }
 
     /** The predicate-object pairs of one node of the metadata graph, before it becomes a {@link StoredModel}. */

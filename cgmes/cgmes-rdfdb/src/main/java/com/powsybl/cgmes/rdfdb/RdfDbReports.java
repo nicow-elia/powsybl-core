@@ -29,6 +29,7 @@ import java.util.List;
  */
 public final class RdfDbReports {
 
+    private static final String CGMES_SUBSET = "cgmesSubset";
     private static final String SCENARIO = "scenario";
     private static final String MODEL_ID = "modelId";
 
@@ -79,7 +80,7 @@ public final class RdfDbReports {
         reportNode.newReportNode()
                 .withMessageTemplate("core.cgmes.rdfdb.storedDifference")
                 .withUntypedValue(MODEL_ID, modelId)
-                .withUntypedValue("cgmesSubset", subset.getIdentifier())
+                .withUntypedValue(CGMES_SUBSET, subset.getIdentifier())
                 .withUntypedValue(SCENARIO, scenario)
                 .withSeverity(TypedValue.INFO_SEVERITY)
                 .add();
@@ -127,17 +128,9 @@ public final class RdfDbReports {
         }
         reportNode.newReportNode()
                 .withMessageTemplate("core.cgmes.rdfdb.ingestedProfileIgnored")
-                .withUntypedValue(CgmesSubsetKeys.SUBSET, subset)
+                .withUntypedValue(CGMES_SUBSET, subset)
                 .withUntypedValue(SCENARIO, scenario)
                 .withSeverity(TypedValue.WARN_SEVERITY)
                 .add();
-    }
-
-    /** The binding name the reports bundle uses for a CGMES profile. */
-    private static final class CgmesSubsetKeys {
-        private static final String SUBSET = "cgmesSubset";
-
-        private CgmesSubsetKeys() {
-        }
     }
 }

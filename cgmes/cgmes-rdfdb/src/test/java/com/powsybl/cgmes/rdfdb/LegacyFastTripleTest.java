@@ -8,26 +8,21 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
-import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
-import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
-import org.eclipse.rdf4j.model.Value;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Properties;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
+import static com.powsybl.cgmes.rdfdb.Backends.microGridBe;
+import static com.powsybl.cgmes.rdfdb.Backends.params;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
@@ -62,20 +57,6 @@ class LegacyFastTripleTest {
     private static final CgmesSubset SSH = CgmesSubset.STEADY_STATE_HYPOTHESIS;
     private static final CgmesSubset EQ = CgmesSubset.EQUIPMENT;
     private static final String LINE_ID = "b58bf21a-096a-4dae-9a01-3f03b60c24c7";
-
-    static Stream<Arguments> backends() {
-        return Backends.backends();
-    }
-
-    private static Properties params() {
-        Properties p = new Properties();
-        p.put(CgmesImport.IMPORT_CGM_WITH_SUBNETWORKS, "false");
-        return p;
-    }
-
-    private static ReadOnlyDataSource be() {
-        return CgmesConformity1Catalog.microGridBaseCaseBE().dataSource();
-    }
 
     private static RdfDbConnection open(String backend) {
         RdfDbConnection db = RdfDbConnection.open(Backends.database(backend, "legacy-fast"));
@@ -123,18 +104,15 @@ class LegacyFastTripleTest {
 
     /** How many {@code pdb:fast} triples sit on a node this scenario really holds as a snapshot. */
     private static long storedFastTriples(RdfDbConnection db) {
-        List<Map<String, Value>> rows = db.sparql(S).select(RdfDbVocabulary.PREFIXES
-                + "SELECT (COUNT(*) AS ?n) WHERE { GRAPH <" + RdfDbNames.metaGraph(S)
-                + "> { ?s a pdb:Snapshot ; <" + LEGACY_FAST + "> ?o } }");
-        return Long.parseLong(rows.get(0).get("n").stringValue());
+        return Backends.count(db, S, RdfDbNames.metaGraph(S), "?s a pdb:Snapshot ; <" + LEGACY_FAST + "> ?o");
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aStoredFastFlagIsIgnoredAndTheModelFlagsDecide(String backend) {
         try (RdfDbConnection db = open(backend)) {
             SnapshotCatalog catalog = db.snapshots(S);
-            SnapshotInfo root = catalog.putFull(be(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
+            SnapshotInfo root = catalog.putFull(microGridBe(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
             SnapshotInfo v11 = catalog.putDiff(fastChange(root, "urn:uuid:ssh-d2"), SnapshotRef.of(S, "1.1"));
             SnapshotInfo v12 = catalog.putDiff(slowChange(v11, "urn:uuid:eq-d3"), SnapshotRef.of(S, "1.2"));
 
@@ -189,11 +167,11 @@ class LegacyFastTripleTest {
      * which is not something a test of single-member snapshots can catch.</p>
      */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aSnapshotIsOnlyFastWhenEveryOneOfItsMembersIs(String backend) {
         try (RdfDbConnection db = open(backend)) {
             SnapshotCatalog catalog = db.snapshots(S);
-            SnapshotInfo root = catalog.putFull(be(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
+            SnapshotInfo root = catalog.putFull(microGridBe(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
             SnapshotInfo mixed = catalog.putDiff(new DifferenceModelSet(List.of(
                     slow(root, "urn:uuid:eq-m1", "renamed"), fast(root, "urn:uuid:ssh-m1", "12.0"))),
                     SnapshotRef.of(S, "1.1"));
@@ -226,11 +204,11 @@ class LegacyFastTripleTest {
      * deleted here by SPARQL and the deletion is counted, so the case cannot pass by not happening.</p>
      */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aDifferenceMemberWithoutTheFlagIsNotFast(String backend) {
         try (RdfDbConnection db = open(backend)) {
             SnapshotCatalog catalog = db.snapshots(S);
-            SnapshotInfo root = catalog.putFull(be(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
+            SnapshotInfo root = catalog.putFull(microGridBe(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
             SnapshotInfo v11 = catalog.putDiff(fastChange(root, "urn:uuid:ssh-d2"), SnapshotRef.of(S, "1.1"));
             assertThat(v11.fast()).isTrue();
             assertThat(flagsOf(db, "urn:uuid:ssh-d2")).isEqualTo(1);
@@ -252,9 +230,6 @@ class LegacyFastTripleTest {
 
     /** How many {@code pdb:fastPredicatesOnly} triples the given model node carries. */
     private static long flagsOf(RdfDbConnection db, String modelId) {
-        List<Map<String, Value>> rows = db.sparql(S).select(RdfDbVocabulary.PREFIXES
-                + "SELECT (COUNT(*) AS ?n) WHERE { GRAPH <" + RdfDbNames.metaGraph(S) + "> { <" + modelId
-                + "> pdb:fastPredicatesOnly ?o } }");
-        return Long.parseLong(rows.get(0).get("n").stringValue());
+        return Backends.count(db, S, RdfDbNames.metaGraph(S), "<" + modelId + "> pdb:fastPredicatesOnly ?o");
     }
 }

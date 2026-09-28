@@ -1100,11 +1100,6 @@ public class Conversion {
         }
 
         /**
-         * Whether the values a previous update left in the network are preferred over the equipment defaults for
-         * everything the current update does not carry. Always on for a difference model update, which is partial
-         * by definition.
-         */
-        /**
          * A configuration holding the same values as this one.
          *
          * <p>What it is for: a caller that keeps one configuration object and hands it to several conversions
@@ -1141,6 +1136,11 @@ public class Conversion {
             return other;
         }
 
+        /**
+         * Whether the values a previous update left in the network are preferred over the equipment defaults for
+         * everything the current update does not carry. Always on for a difference model update, which is partial
+         * by definition.
+         */
         public boolean usePreviousValuesDuringUpdate() {
             return usePreviousValuesDuringUpdate;
         }

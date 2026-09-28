@@ -8,13 +8,10 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
-import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
 import com.powsybl.cgmes.conversion.export.PartialSshExport;
 import com.powsybl.cgmes.conversion.export.PartialSshExport.UnsupportedChangeBehavior;
 import com.powsybl.commons.PowsyblException;
-import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Line;
 import com.powsybl.iidm.network.Network;
@@ -22,16 +19,15 @@ import com.powsybl.iidm.network.NetworkEventRecorder;
 import com.powsybl.iidm.network.VariantManagerConstants;
 import com.powsybl.iidm.network.events.NetworkEvent;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Properties;
 import java.util.function.Consumer;
-import java.util.stream.Stream;
 
+import static com.powsybl.cgmes.rdfdb.Backends.microGridBe;
+import static com.powsybl.cgmes.rdfdb.Backends.params;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -51,25 +47,11 @@ class RdfDbVariantExportTest {
     private static final String T0 = "2014-06-01T10:30:00Z";
     private static final String T1 = "2014-06-01T11:00:00Z";
 
-    static Stream<Arguments> backends() {
-        return Backends.backends();
-    }
-
-    private static Properties params() {
-        Properties p = new Properties();
-        p.put(CgmesImport.IMPORT_CGM_WITH_SUBNETWORKS, "false");
-        return p;
-    }
-
-    private static ReadOnlyDataSource be() {
-        return CgmesConformity1Catalog.microGridBaseCaseBE().dataSource();
-    }
-
     /** A scenario with the base timestep and one more, and a network whose variants are both. */
     private static RdfDbConnection twoTimesteps(String backend) {
         RdfDbConnection db = RdfDbConnection.open(Backends.database(backend, "variant-export"));
         db.clear(S);
-        db.snapshots(S).putFull(be(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
+        db.snapshots(S).putFull(microGridBe(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
         db.snapshots(S).putAsDiff(TimestepFixtures.ssh(2, T1, "t1"), null, new SnapshotRef(S, "1.0", T1),
                 params(), ReportNode.NO_OP);
         return db;
@@ -105,7 +87,7 @@ class RdfDbVariantExportTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void recordOnTwoVariantsGivesTwoDifferences(String backend) {
         try (RdfDbConnection db = twoTimesteps(backend)) {
             Network sender = day(db).network();
@@ -139,7 +121,7 @@ class RdfDbVariantExportTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void exportVariantWritesTheSuccessorOfThatVariantsSnapshot(String backend) {
         try (RdfDbConnection db = twoTimesteps(backend)) {
             Network sender = day(db).network();
@@ -162,7 +144,7 @@ class RdfDbVariantExportTest {
 
     /** A change IIDM does not store per variant belongs to every variant, so it cannot go into one history. */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aSharedChangeIsUnsupportedUnderFail(String backend) {
         try (RdfDbConnection db = twoTimesteps(backend)) {
             Network sender = day(db).network();
@@ -180,7 +162,7 @@ class RdfDbVariantExportTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aSharedChangeIsReportedUnderIgnore(String backend) {
         try (RdfDbConnection db = twoTimesteps(backend)) {
             Network sender = day(db).network();
@@ -206,7 +188,7 @@ class RdfDbVariantExportTest {
 
     /** Under FAIL an unbound variant stops the whole export, with nothing written. */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void eventsOnAnUnboundVariantFailBeforeAnythingIsWritten(String backend) {
         try (RdfDbConnection db = twoTimesteps(backend)) {
             Network sender = day(db).network();
@@ -239,7 +221,7 @@ class RdfDbVariantExportTest {
 
     /** A variant's changes go into its own timestep; asking for another one is an error, not a silent move. */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aForeignTimestepIsRefused(String backend) {
         try (RdfDbConnection db = twoTimesteps(backend)) {
             Network sender = day(db).network();
@@ -256,7 +238,7 @@ class RdfDbVariantExportTest {
 
     /** An explicit version label is used for every group. */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void anExplicitVersionLabelIsUsed(String backend) {
         try (RdfDbConnection db = twoTimesteps(backend)) {
             Network sender = day(db).network();
@@ -277,7 +259,7 @@ class RdfDbVariantExportTest {
      * variant</em>, not the primary's, or the next update of either plans from a state that never existed.
      */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void theModelLevelExportAdvancesTheWorkingVariant(String backend) {
         try (RdfDbConnection db = twoTimesteps(backend)) {
             Network sender = day(db).network();
@@ -312,7 +294,7 @@ class RdfDbVariantExportTest {
      * next classic update would still write across every variant of the network.</p>
      */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void exportVariantOptsIn(String backend) {
         try (RdfDbConnection db = twoTimesteps(backend)) {
             // A network that never opted in: loaded at one snapshot, with a clone the user made
@@ -345,7 +327,7 @@ class RdfDbVariantExportTest {
      * R3: in variant mode the classic exports refuse a shared change exactly as {@code exportVariant} does.
      */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void theClassicExportRefusesASharedChangeInVariantMode(String backend) {
         try (RdfDbConnection db = twoTimesteps(backend)) {
             Network sender = day(db).network();
@@ -377,7 +359,7 @@ class RdfDbVariantExportTest {
 
     /** F11: two variants standing for the same snapshot are refused before anything is written. */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void twoVariantsOnOneSnapshotAreRefusedBeforeAnythingIsWritten(String backend) {
         try (RdfDbConnection db = twoTimesteps(backend)) {
             Network sender = day(db).network();
@@ -399,7 +381,7 @@ class RdfDbVariantExportTest {
 
     /** A file export of one variant carries that variant's Supersedes and that variant's values. */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aFileExportWithAVariantCarriesThatVariantsIdentity(String backend) {
         try (RdfDbConnection db = twoTimesteps(backend)) {
             Network sender = day(db).network();

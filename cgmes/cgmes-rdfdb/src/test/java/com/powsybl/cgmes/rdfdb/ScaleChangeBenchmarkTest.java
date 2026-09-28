@@ -113,7 +113,7 @@ class ScaleChangeBenchmarkTest {
     }
 
     private static Properties updateParameters() {
-        Properties p = BenchMeters.params();
+        Properties p = Backends.params();
         p.put(CgmesImport.USE_PREVIOUS_VALUES_DURING_UPDATE, "true");
         return p;
     }
@@ -163,7 +163,7 @@ class ScaleChangeBenchmarkTest {
     private void measureGrid(BenchMeters.Grid grid, List<String> cTable, List<String> dTable,
                              Map<String, Double> richPartial, Map<String, Double> richApply) {
         ReadOnlyDataSource ds = grid.dataSource();
-        Properties params = BenchMeters.params();
+        Properties params = Backends.params();
         Network sender = Network.read(ds, params);
         int warmups = warmupRuns(grid);
         int runs = measuredRuns(grid);

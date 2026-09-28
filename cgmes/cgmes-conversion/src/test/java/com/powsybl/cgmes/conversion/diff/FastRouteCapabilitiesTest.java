@@ -234,7 +234,7 @@ class FastRouteCapabilitiesTest {
                 FastRouteCapabilities.check(set(List.of(), List.of())).route());
     }
 
-    /** The equipment profile carries the impedances and the limits of work package 5, and nothing else. */
+    /** The equipment profile carries the impedances and the limits, and nothing else. */
     @Test
     void theEquipmentProfileIsAccepted() {
         DifferenceModel model = new DifferenceModel(header(CgmesSubset.EQUIPMENT),

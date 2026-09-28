@@ -14,7 +14,6 @@ import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
-import com.powsybl.commons.util.Result;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.events.NetworkEvent;
 import org.slf4j.Logger;
@@ -67,17 +66,25 @@ final class DifferenceModelBuilder {
 
     /** The difference models of the change log, and the changes that reached them. */
     CgmesDiffExport.Result build() {
-        CgmesPropertyBuffer after = new CgmesPropertyBuffer();
-        CgmesPropertyBuffer before = new CgmesPropertyBuffer();
-        List<NetworkEvent> exportedEvents = translate(after, before);
-        return buildFrom(after, before, exportedEvents);
+        CgmesChangeRegulatingControls regulatingControls = new CgmesChangeRegulatingControls(network, context);
+        // The regulating control index is structure only, so both directions share the single walk over the network
+        CgmesChangeTranslator.Translation translation = CgmesChangeTranslator.translateAll(changes.events(),
+                translator(IidmStateView.LIVE, regulatingControls), translator(previousState, regulatingControls));
+        return buildFrom(translation.after(), translation.before(), translation.exportedEvents());
+    }
+
+    private CgmesChangeTranslator translator(IidmStateView state, CgmesChangeRegulatingControls regulatingControls) {
+        return new CgmesChangeTranslator(network, context, options.getUnsupportedChangeBehavior(),
+                CgmesDiffExport.DIFFERENCE_MODEL_TARGET, options.getSubsets(), state, regulatingControls)
+                .setRejectSharedChanges(options.isRejectSharedChanges());
     }
 
     /**
      * The difference models of two already translated buffers.
      *
      * <p>Separate from {@link #build()} so that the assembly of the models &mdash; the no-op compaction, the
-     * granularity and the headers &mdash; can be exercised on buffers that no mapping produces yet.</p>
+     * granularity and the headers &mdash; can be exercised on buffers that no mapping produces yet (a test seam,
+     * as is {@link #previousState()}).</p>
      */
     CgmesDiffExport.Result buildFrom(CgmesPropertyBuffer after, CgmesPropertyBuffer before,
                                      List<NetworkEvent> exportedEvents) {
@@ -107,7 +114,7 @@ final class DifferenceModelBuilder {
         return new CgmesDiffExport.Result(new DifferenceModelSet(models), List.copyOf(exportedEvents));
     }
 
-    /** The state before the change set, exposed so that tests can check that every change was really read. */
+    /** The state before the change set; a test seam, so that tests can check that every change was really read. */
     IidmStateView previousState() {
         return previousState;
     }
@@ -119,45 +126,6 @@ final class DifferenceModelBuilder {
     DifferenceModel emptyModel(CgmesSubset subset) {
         CgmesMetadataModel model = options.header(subset).settings().initialize(network, subset, context, true);
         return new DifferenceModel(header(model, subset), List.of(), List.of(), List.of());
-    }
-
-    private List<NetworkEvent> translate(CgmesPropertyBuffer after, CgmesPropertyBuffer before) {
-        CgmesChangeRegulatingControls regulatingControls = new CgmesChangeRegulatingControls(network, context);
-        CgmesChangeTranslator afterTranslator = new CgmesChangeTranslator(network, context,
-                options.getUnsupportedChangeBehavior(), CgmesDiffExport.DIFFERENCE_MODEL_TARGET,
-                options.getSubsets(), IidmStateView.LIVE, regulatingControls)
-                .setRejectSharedChanges(options.isRejectSharedChanges());
-        // The index is structure only, so both directions share the single walk over the network it costs
-        CgmesChangeTranslator beforeTranslator = new CgmesChangeTranslator(network, context,
-                options.getUnsupportedChangeBehavior(), CgmesDiffExport.DIFFERENCE_MODEL_TARGET,
-                options.getSubsets(), previousState, regulatingControls)
-                .setRejectSharedChanges(options.isRejectSharedChanges());
-
-        List<NetworkEvent> exportedEvents = new ArrayList<>();
-        for (NetworkEvent event : changes.events()) {
-            String reason = null;
-            CgmesPropertyBuffer stagedAfter = null;
-            CgmesPropertyBuffer stagedBefore = null;
-            switch (afterTranslator.translate(event)) {
-                case Result.Success(CgmesPropertyBuffer staged) -> stagedAfter = staged;
-                case Result.Failure(String failure) -> reason = failure;
-            }
-            if (reason == null) {
-                switch (beforeTranslator.translate(event)) {
-                    case Result.Success(CgmesPropertyBuffer staged) -> stagedBefore = staged;
-                    case Result.Failure(String failure) -> reason = failure;
-                }
-            }
-            if (reason != null) {
-                // The reject behaviour of the export is the same whichever direction refused the change
-                afterTranslator.reject(event, reason);
-            } else {
-                after.mergeFrom(stagedAfter);
-                before.mergeFrom(stagedBefore);
-                exportedEvents.add(event);
-            }
-        }
-        return exportedEvents;
     }
 
     /**

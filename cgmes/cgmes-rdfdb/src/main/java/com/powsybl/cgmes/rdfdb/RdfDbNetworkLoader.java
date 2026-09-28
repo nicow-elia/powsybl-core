@@ -17,7 +17,6 @@ import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
-import com.powsybl.commons.PowsyblException;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.computation.ComputationManager;
 import com.powsybl.computation.local.LocalComputationManager;
@@ -42,6 +41,7 @@ import java.util.Collections;
 import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -154,29 +154,21 @@ public final class RdfDbNetworkLoader {
         // graphs of a version live under IRIs of this layer, not among the instance file contexts the unversioned
         // path lists. The catalogue read above already knows, so this costs no request
         if (snapshot.isVersioned()) {
-            if (options.getSubsets() != null) {
-                throw new RdfDbException("Scenario '" + scenario + "' is versioned, and a partial load of a"
-                        + " versioned scenario is not supported: a difference states properties of the profile it"
-                        + " belongs to, and leaving a profile out would build a network from a state that never"
-                        + " existed. Load the whole scenario, or a snapshot of it");
-            }
+            refusePartialLoad(scenario, options, "is versioned", "a snapshot of it");
             LoadResult versioned = loadWithStatistics(db, SnapshotRef.latest(scenario), factory, params, rn);
             applyPostProcessors(versioned.network(), options, rn);
             return versioned;
         }
         if (snapshot.hasDifferences()) {
-            // The scenario is versioned: its instance file graphs are the oldest state it holds, and "the
-            // scenario" means its newest one. Materialising it is the only way to see the differences.
-            if (options.getSubsets() != null) {
-                throw new RdfDbException("Scenario '" + scenario + "' holds difference models, and a partial load"
-                        + " of a versioned scenario is not supported: a difference states properties of the profile"
-                        + " it belongs to, and leaving a profile out would build a network from a state that never"
-                        + " existed. Load the whole scenario, or a target of it");
-            }
-            RdfDbMaterializer.Materialised materialised = RdfDbMaterializer.materialize(db, scenario, snapshot,
+            // The scenario holds a model-level difference chain (no snapshots): its instance file graphs are the
+            // oldest state it holds, and "the scenario" means its newest one. Materialising it is the only way to
+            // see the differences.
+            refusePartialLoad(scenario, options, "holds difference models", "a target of it");
+            LoadResult materialised = RdfDbMaterializer.materialize(db, scenario, snapshot,
                     targetsOf(snapshot, DiffTarget.head()), factory, params, rn);
             applyPostProcessors(materialised.network(), options, rn);
-            LoadStatistics statistics = withCatalogTime(materialised.statistics(), readCatalog);
+            // The time spent reading the metadata graph is the listing a versioned load does instead of listing graphs
+            LoadStatistics statistics = materialised.statistics().withListGraphs(readCatalog);
             LOGGER.info("Loaded network {} from scenario '{}' of {} at its newest stored state: {}",
                     materialised.network().getId(), scenario, db.database(), statistics.summary());
             return new LoadResult(materialised.network(), statistics);
@@ -232,10 +224,8 @@ public final class RdfDbNetworkLoader {
             handedOver = true;
             Duration convert = Duration.ofNanos(System.nanoTime() - convertStart);
 
-            LoadStatistics statistics = new LoadStatistics(listGraphs, fetched.fetch(), fetched.parse(),
-                    fetched.store(), describe, convert, fetched.statements(), fetched.graphs(),
-                    fetched.cacheHits(), fetched.perGraph());
-            return new LoadResult(network, statistics);
+            return new LoadResult(network,
+                    LoadStatistics.of(listGraphs, fetched.fetch(), fetched, Duration.ZERO, describe, convert));
         } finally {
             if (!handedOver) {
                 local.close();
@@ -354,18 +344,22 @@ public final class RdfDbNetworkLoader {
                 rn).network();
     }
 
-    /** The time spent reading the metadata graph is the listing a versioned load does instead of listing graphs. */
-    private static LoadStatistics withCatalogTime(LoadStatistics statistics, Duration readCatalog) {
-        return new LoadStatistics(readCatalog, statistics.fetch(), statistics.parse(), statistics.store(),
-                statistics.describe(), statistics.convert(), statistics.statements(), statistics.graphs(),
-                statistics.cacheHits(), statistics.perGraph());
+    /** A difference states properties of its profile: a partial load would build a state that never existed. */
+    private static void refusePartialLoad(String scenario, RdfDbLoadOptions options, String what, String instead) {
+        if (options.getSubsets() != null) {
+            throw new RdfDbException("Scenario '" + scenario + "' " + what + ", and a partial load of a versioned"
+                    + " scenario is not supported: a difference states properties of the profile it belongs to,"
+                    + " and leaving a profile out would build a network from a state that never existed. Load the"
+                    + " whole scenario, or " + instead);
+        }
     }
 
     /**
      * Bring a network to a stored state of a scenario.
      *
      * <p>The decision is made before anything is read: if the network is already there, nothing happens; if the
-     * stored state is reachable by applying differences the network has not seen, they are fetched in one request,
+     * stored state is reachable by applying differences the network has not seen, they are fetched (one SELECT, or
+     * one GET per graph on the Graph Store route),
      * folded into one difference per profile and applied <em>in place</em>; and if neither holds, the network is
      * rebuilt from the database and the result carries a <strong>new instance</strong> the caller has to swap its
      * references to.</p>
@@ -418,9 +412,8 @@ public final class RdfDbNetworkLoader {
 
         return switch (plan.route()) {
             case NOOP -> {
-                RdfDbReports.updateRouteReport(rn, scenario, UpdateResult.Route.NOOP, 0, List.of());
-                yield new UpdateResult(UpdateResult.Route.NOOP, network, Map.of(), List.of(),
-                        new UpdateStatistics(planning, Duration.ZERO, Duration.ZERO, Duration.ZERO, 0, 0));
+                yield terminal(rn, scenario, UpdateResult.Route.NOOP, network, List.of(), planning,
+                        Duration.ZERO);
             }
             case DIFF -> applyDifferences(network, db, scenario, snapshot, target, plan, effective, params, rn,
                     planning);
@@ -434,11 +427,8 @@ public final class RdfDbNetworkLoader {
         Map<CgmesSubset, String> identity = provenance != null && !provenance.modelIds().isEmpty()
                 ? provenance.modelIds() : NetworkIdentity.modelIds(network, options.getSubsets());
         Map<CgmesSubset, String> currentIds = new EnumMap<>(CgmesSubset.class);
-        identity.forEach((subset, id) -> {
-            if (options.getSubsets().contains(subset)) {
-                currentIds.put(subset, id);
-            }
-        });
+        currentIds.putAll(identity);
+        currentIds.keySet().retainAll(options.getSubsets());
         if (currentIds.isEmpty()) {
             throw new RdfDbException("The network carries no CGMES model identity for the profiles "
                     + options.getSubsets() + ", so there is nothing to bring forward from");
@@ -466,10 +456,10 @@ public final class RdfDbNetworkLoader {
 
     /** Every profile the scenario holds, at the state the target names. */
     private static Map<CgmesSubset, StoredModel> targetsOf(CatalogSnapshot snapshot, DiffTarget target) {
-        Map<CgmesSubset, StoredModel> targets = new EnumMap<>(CgmesSubset.class);
         if (target.isHead()) {
             return snapshot.heads();
         }
+        Map<CgmesSubset, StoredModel> targets = new EnumMap<>(CgmesSubset.class);
         target.modelIds().forEach((subset, id) -> {
             StoredModel model = snapshot.model(id).orElseThrow(() -> new RdfDbException("Scenario '"
                     + snapshot.scenario() + "' holds no model " + id));
@@ -498,12 +488,8 @@ public final class RdfDbNetworkLoader {
         plan.paths().values().forEach(all::addAll);
 
         long fetchStart = System.nanoTime();
-        List<DifferenceModel> fetched = RdfDbDiffSource.fetchAll(db, all);
+        Map<String, DifferenceModel> byId = RdfDbDiffSource.fetchById(db, all);
         Duration fetch = Duration.ofNanos(System.nanoTime() - fetchStart);
-        Map<String, DifferenceModel> byId = new LinkedHashMap<>();
-        for (int i = 0; i < all.size(); i++) {
-            byId.put(all.get(i).id(), fetched.get(i));
-        }
 
         long composeStart = System.nanoTime();
         Map<CgmesSubset, List<DifferenceModel>> chains = new EnumMap<>(CgmesSubset.class);
@@ -588,19 +574,17 @@ public final class RdfDbNetworkLoader {
                                           DiffUpdatePlanner.Plan plan, RdfDbUpdateOptions options,
                                           Properties params, ReportNode rn, Duration planning) {
         if (!options.isAllowFullReload()) {
-            RdfDbReports.updateRouteReport(rn, scenario, UpdateResult.Route.FULL_REQUIRED, 0, plan.reasons());
-            return new UpdateResult(UpdateResult.Route.FULL_REQUIRED, network, Map.of(), plan.reasons(),
-                    new UpdateStatistics(planning, Duration.ZERO, Duration.ZERO, Duration.ZERO, 0, 0));
+            return terminal(rn, scenario, UpdateResult.Route.FULL_REQUIRED, network, plan.reasons(), planning,
+                    Duration.ZERO);
         }
         long applyStart = System.nanoTime();
         // Null only when the network belongs to another scenario: nothing has been read of the target scenario yet
         CatalogSnapshot of = snapshot != null ? snapshot : db.catalog(scenario).snapshot();
-        RdfDbMaterializer.Materialised replacement = RdfDbMaterializer.materialize(db, scenario, of,
+        LoadResult replacement = RdfDbMaterializer.materialize(db, scenario, of,
                 targetsOf(of, target), options.getNetworkFactory(), params, rn);
         Duration apply = Duration.ofNanos(System.nanoTime() - applyStart);
-        RdfDbReports.updateRouteReport(rn, scenario, UpdateResult.Route.FULL_RELOAD, 0, plan.reasons());
-        return new UpdateResult(UpdateResult.Route.FULL_RELOAD, replacement.network(), Map.of(), plan.reasons(),
-                new UpdateStatistics(planning, Duration.ZERO, Duration.ZERO, apply, 0, 0));
+        return terminal(rn, scenario, UpdateResult.Route.FULL_RELOAD, replacement.network(), plan.reasons(), planning,
+                apply);
     }
 
     /**
@@ -622,15 +606,21 @@ public final class RdfDbNetworkLoader {
     private static void recordIdentity(Network network, RdfDbConnection db, String scenario,
                                        Map<CgmesSubset, StoredModel> targets) {
         NetworkIdentity.advance(network, targets);
+        provenanceAt(network, db, scenario);
+        classicOperationDone(network);
+    }
+
+    /** The provenance of a network that was just advanced, now stating the models it holds. */
+    private static RdfDbProvenanceImpl provenanceAt(Network network, RdfDbConnection db, String scenario) {
         Map<CgmesSubset, String> ids = NetworkIdentity.modelIds(network);
         RdfDbProvenance provenance = network.getExtension(RdfDbProvenance.class);
         if (provenance instanceof RdfDbProvenanceImpl impl && provenance.scenario().equals(scenario)) {
             impl.setModelIds(ids);
-        } else {
-            network.addExtension(RdfDbProvenance.class,
-                    new RdfDbProvenanceImpl(db.database(), scenario, List.of(), Instant.now(), ids));
+            return impl;
         }
-        classicOperationDone(network);
+        RdfDbProvenanceImpl created = new RdfDbProvenanceImpl(db.database(), scenario, List.of(), Instant.now(), ids);
+        network.addExtension(RdfDbProvenance.class, created);
+        return created;
     }
 
     // ------------------------------------------------------------------ snapshots
@@ -690,17 +680,17 @@ public final class RdfDbNetworkLoader {
         NetworkFactory factory = networkFactory == null ? NetworkFactory.findDefault() : networkFactory;
         ReportNode rn = reportNode == null ? ReportNode.NO_OP : reportNode;
         long t0 = System.nanoTime();
-        RdfDbMaterializer.Materialised materialised = materialize(db, ref, factory, params, rn);
+        LoadResult materialised = materialize(db, ref, factory, params, rn);
         Duration readCatalog = Duration.ofNanos(System.nanoTime() - t0)
                 .minus(materialised.statistics().total());
-        LoadStatistics statistics = withCatalogTime(materialised.statistics(),
-                readCatalog.isNegative() ? Duration.ZERO : readCatalog);
+        LoadStatistics statistics = materialised.statistics()
+                .withListGraphs(readCatalog.isNegative() ? Duration.ZERO : readCatalog);
         LOGGER.info("Loaded network {} from snapshot {} of {}: {}", materialised.network().getId(), ref,
                 db.database(), statistics.summary());
         return new LoadResult(materialised.network(), statistics);
     }
 
-    private static RdfDbMaterializer.Materialised materialize(RdfDbConnection db, SnapshotRef ref,
+    private static LoadResult materialize(RdfDbConnection db, SnapshotRef ref,
                                                               NetworkFactory factory, Properties params,
                                                               ReportNode rn) {
         SnapshotCatalog catalog = db.snapshots(ref.scenario());
@@ -710,13 +700,21 @@ public final class RdfDbNetworkLoader {
         return materialize(db, info, factory, params, rn);
     }
 
-    private static RdfDbMaterializer.Materialised materialize(RdfDbConnection db, SnapshotInfo info,
+    private static LoadResult materialize(RdfDbConnection db, SnapshotInfo info,
                                                               NetworkFactory factory, Properties params,
                                                               ReportNode rn) {
         MaterializationPlan plan = db.versionGraph(info.scenario()).materialization(info.iri());
         Map<String, StoredModel> stateModels =
                 db.catalog(info.scenario()).models(plan.targetState().values());
         return RdfDbMaterializer.materialize(db, info.scenario(), info, plan, stateModels, factory, params, rn);
+    }
+
+    /** Report the route of an update that applied no difference, and answer it. */
+    private static UpdateResult terminal(ReportNode rn, String scenario, UpdateResult.Route route, Network network,
+                                         List<String> reasons, Duration planning, Duration apply) {
+        RdfDbReports.updateRouteReport(rn, scenario, route, 0, reasons);
+        return new UpdateResult(route, network, Map.of(), reasons,
+                new UpdateStatistics(planning, Duration.ZERO, Duration.ZERO, apply, 0, 0));
     }
 
     /**
@@ -760,9 +758,8 @@ public final class RdfDbNetworkLoader {
 
         return switch (plan.kind()) {
             case NOOP -> {
-                RdfDbReports.updateRouteReport(rn, scenario, UpdateResult.Route.NOOP, 0, List.of());
-                yield new UpdateResult(UpdateResult.Route.NOOP, network, Map.of(), List.of(),
-                        new UpdateStatistics(planning, Duration.ZERO, Duration.ZERO, Duration.ZERO, 0, 0));
+                yield terminal(rn, scenario, UpdateResult.Route.NOOP, network, List.of(), planning,
+                        Duration.ZERO);
             }
             case DIFF -> applySnapshotDifferences(network, db, target, plan, effective, params, rn, planning);
             case FULL -> snapshotFullRoute(network, db, target, plan, effective, params, rn, planning);
@@ -934,11 +931,7 @@ public final class RdfDbNetworkLoader {
      * @return the variant identifier, never {@code null}
      */
     static String workingVariantOf(Network network) {
-        try {
-            return network.getVariantManager().getWorkingVariantId();
-        } catch (PowsyblException e) {
-            return RdfDbProvenance.PRIMARY_VARIANT;
-        }
+        return Objects.requireNonNullElse(VariantScope.workingVariantOrNull(network), RdfDbProvenance.PRIMARY_VARIANT);
     }
 
     /**
@@ -965,17 +958,7 @@ public final class RdfDbNetworkLoader {
      * @return what came back
      */
     static FetchedDiffs fetchSteps(RdfDbConnection db, String scenario, UpdatePlan plan) {
-        List<StoredModel> all = plan.steps().stream().map(UpdatePlan.DiffStep::model).toList();
-        long fetchStart = System.nanoTime();
-        List<DifferenceModel> fetched = RdfDbDiffSource.fetchAll(db, all);
-        Map<String, StoredModel> stateModels = endModels(db, scenario, plan);
-        Duration fetch = Duration.ofNanos(System.nanoTime() - fetchStart);
-        Map<String, DifferenceModel> byId = new LinkedHashMap<>();
-        for (int i = 0; i < all.size(); i++) {
-            byId.put(all.get(i).id(), fetched.get(i));
-        }
-        return new FetchedDiffs(byId, stateModels, fetch,
-                all.stream().mapToInt(model -> (int) Math.max(0, model.tripleCount())).sum());
+        return fetchSteps(db, scenario, List.of(plan));
     }
 
     /**
@@ -1165,11 +1148,6 @@ public final class RdfDbNetworkLoader {
      * <p>Walking forward, the model a profile ends at is the last step of that profile; walking backwards it is an
      * ancestor. Both the composed header and the identity record need it, so it is read once and shared.</p>
      */
-    private static Map<String, StoredModel> endModels(RdfDbConnection db, String scenario, UpdatePlan plan) {
-        Set<String> needed = endModelIds(plan);
-        return needed.isEmpty() ? Map.of() : db.catalog(scenario).models(needed);
-    }
-
     /**
      * The models a path needs the {@code md:Model.*} header of, which the plan query deliberately leaves out.
      *
@@ -1182,7 +1160,7 @@ public final class RdfDbNetworkLoader {
      */
     static Set<String> endModelIds(UpdatePlan plan) {
         Set<CgmesSubset> touched = plan.stepsBySubset().keySet();
-        Set<String> needed = new java.util.LinkedHashSet<>();
+        Set<String> needed = new LinkedHashSet<>();
         plan.stepsBySubset().forEach((subset, steps) -> {
             needed.add(steps.get(0).model().id());
             needed.add(steps.get(steps.size() - 1).model().id());
@@ -1208,8 +1186,8 @@ public final class RdfDbNetworkLoader {
      */
     static FetchedDiffs fetchSteps(RdfDbConnection db, String scenario, List<UpdatePlan> plans) {
         List<StoredModel> all = new ArrayList<>();
-        Set<String> seen = new java.util.LinkedHashSet<>();
-        Set<String> needed = new java.util.LinkedHashSet<>();
+        Set<String> seen = new LinkedHashSet<>();
+        Set<String> needed = new LinkedHashSet<>();
         for (UpdatePlan plan : plans) {
             plan.steps().forEach(step -> {
                 if (seen.add(step.model().id())) {
@@ -1219,14 +1197,10 @@ public final class RdfDbNetworkLoader {
             needed.addAll(endModelIds(plan));
         }
         long fetchStart = System.nanoTime();
-        List<DifferenceModel> fetched = RdfDbDiffSource.fetchAll(db, all);
+        Map<String, DifferenceModel> byId = RdfDbDiffSource.fetchById(db, all);
         Map<String, StoredModel> stateModels = needed.isEmpty() ? Map.of()
                 : db.catalog(scenario).models(needed);
         Duration fetch = Duration.ofNanos(System.nanoTime() - fetchStart);
-        Map<String, DifferenceModel> byId = new LinkedHashMap<>();
-        for (int i = 0; i < all.size(); i++) {
-            byId.put(all.get(i).id(), fetched.get(i));
-        }
         return new FetchedDiffs(byId, stateModels, fetch,
                 all.stream().mapToInt(model -> (int) Math.max(0, model.tripleCount())).sum());
     }
@@ -1244,17 +1218,15 @@ public final class RdfDbNetworkLoader {
                                                   ReportNode rn, Duration planning) {
         String scenario = target.scenario();
         if (!options.isAllowFullReload()) {
-            RdfDbReports.updateRouteReport(rn, scenario, UpdateResult.Route.FULL_REQUIRED, 0, plan.reasons());
-            return new UpdateResult(UpdateResult.Route.FULL_REQUIRED, network, Map.of(), plan.reasons(),
-                    new UpdateStatistics(planning, Duration.ZERO, Duration.ZERO, Duration.ZERO, 0, 0));
+            return terminal(rn, scenario, UpdateResult.Route.FULL_REQUIRED, network, plan.reasons(), planning,
+                    Duration.ZERO);
         }
         long applyStart = System.nanoTime();
-        RdfDbMaterializer.Materialised replacement =
+        LoadResult replacement =
                 materialize(db, target, options.getNetworkFactory(), params, rn);
         Duration apply = Duration.ofNanos(System.nanoTime() - applyStart);
-        RdfDbReports.updateRouteReport(rn, scenario, UpdateResult.Route.FULL_RELOAD, 0, plan.reasons());
-        return new UpdateResult(UpdateResult.Route.FULL_RELOAD, replacement.network(), Map.of(), plan.reasons(),
-                new UpdateStatistics(planning, Duration.ZERO, Duration.ZERO, apply, 0, 0));
+        return terminal(rn, scenario, UpdateResult.Route.FULL_RELOAD, replacement.network(), plan.reasons(), planning,
+                apply);
     }
 
     private static void recordSnapshotIdentity(Network network, RdfDbConnection db, String scenario,
@@ -1265,29 +1237,18 @@ public final class RdfDbNetworkLoader {
         Map<String, StoredModel> stepModels = new LinkedHashMap<>();
         Set<CgmesSubset> touched = plan.stepsBySubset().keySet();
         plan.steps().forEach(step -> stepModels.put(step.model().id(), step.model()));
-        Map<String, StoredModel> resolved = endModels;
         Map<CgmesSubset, StoredModel> ends = new EnumMap<>(CgmesSubset.class);
         plan.targetState().forEach((subset, id) -> {
             if (!touched.contains(subset)) {
                 return;
             }
-            StoredModel model = stepModels.containsKey(id) ? stepModels.get(id) : resolved.get(id);
+            StoredModel model = stepModels.getOrDefault(id, endModels.get(id));
             if (model != null) {
                 ends.put(subset, model);
             }
         });
         NetworkIdentity.advance(network, ends);
-        Map<CgmesSubset, String> ids = NetworkIdentity.modelIds(network);
-        RdfDbProvenance provenance = network.getExtension(RdfDbProvenance.class);
-        RdfDbProvenanceImpl impl;
-        if (provenance instanceof RdfDbProvenanceImpl existing && provenance.scenario().equals(scenario)) {
-            impl = existing;
-            impl.setModelIds(ids);
-        } else {
-            impl = new RdfDbProvenanceImpl(db.database(), scenario, List.of(), Instant.now(), ids);
-            network.addExtension(RdfDbProvenance.class, impl);
-        }
-        impl.setSnapshot(plan.to());
+        provenanceAt(network, db, scenario).setSnapshot(plan.to());
         classicOperationDone(network);
     }
 

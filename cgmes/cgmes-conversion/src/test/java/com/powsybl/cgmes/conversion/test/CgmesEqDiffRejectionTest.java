@@ -32,7 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The equipment changes of work package 5 that the difference model export refuses, one test per row of the
+ * The equipment changes (limits and impedances) that the difference model export refuses, one test per row of the
  * "not supported" table of the specification.
  *
  * <p>Each of them is a change a receiver could not act on: a structural change CGMES models with objects rather than
