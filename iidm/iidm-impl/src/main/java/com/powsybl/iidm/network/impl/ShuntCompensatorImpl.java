@@ -71,8 +71,13 @@ class ShuntCompensatorImpl extends AbstractConnectable<ShuntCompensator> impleme
             getVoltageRegulation(),
             getNetwork().getMinValidationLevel(),
             getNetwork().getReportNodeContext().getReportNode());
-        this.localTargetV.set(getCurrentIndex(), targetV);
-        getNetwork().invalidateValidationLevel();
+        NetworkImpl n = getNetwork();
+        int variantIndex = n.getVariantIndex();
+        double oldValue = this.localTargetV.set(variantIndex, targetV);
+        String variantId = n.getVariantManager().getVariantId(variantIndex);
+        n.invalidateValidationLevel();
+        // A local voltage target is a steady state value, observable like the local targets of the other holders
+        notifyUpdate("localTargetV", variantId, oldValue, targetV);
         return this;
     }
 

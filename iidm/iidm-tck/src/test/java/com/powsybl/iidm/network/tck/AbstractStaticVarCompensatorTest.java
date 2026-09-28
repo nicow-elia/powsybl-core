@@ -236,7 +236,9 @@ public abstract class AbstractStaticVarCompensatorTest {
 
     /**
      * Switching the regulation of a compensator on or off is a steady state change that an exchange format such as
-     * CGMES carries, so it has to be observable from a network listener like any other setpoint change.
+     * CGMES carries, so it has to be observable from a network listener like any other setpoint change. Since the
+     * voltage regulation refactoring (#3699) the flag lives on the VoltageRegulation, which reports it first; the
+     * deprecated setter then echoes it under its historical name.
      */
     @Test
     public void regulatingNotificationTest() {
@@ -246,8 +248,11 @@ public abstract class AbstractStaticVarCompensatorTest {
         NetworkEventRecorder eventRecorder = new NetworkEventRecorder();
         network.addListener(eventRecorder);
         svc.setRegulating(false);
-        assertEquals(List.of(new UpdateNetworkEvent("SVC2", "regulating",
-                        VariantManagerConstants.INITIAL_VARIANT_ID, true, false)),
+        assertEquals(List.of(
+                        new UpdateNetworkEvent("SVC2", "VoltageRegulation.isRegulating",
+                                VariantManagerConstants.INITIAL_VARIANT_ID, true, false),
+                        new UpdateNetworkEvent("SVC2", "regulating",
+                                VariantManagerConstants.INITIAL_VARIANT_ID, true, false)),
                 eventRecorder.getEvents());
 
         // Setting the same value again is not a change and must not be reported

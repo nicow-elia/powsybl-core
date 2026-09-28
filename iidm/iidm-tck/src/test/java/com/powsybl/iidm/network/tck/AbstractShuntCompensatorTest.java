@@ -9,6 +9,7 @@ package com.powsybl.iidm.network.tck;
 
 import com.powsybl.commons.PowsyblException;
 import com.powsybl.iidm.network.*;
+import com.powsybl.iidm.network.events.UpdateNetworkEvent;
 import com.powsybl.iidm.network.regulation.RegulationMode;
 import com.powsybl.iidm.network.regulation.VoltageRegulation;
 import com.powsybl.iidm.network.regulation.VoltageRegulationBuilder;
@@ -438,6 +439,27 @@ public abstract class AbstractShuntCompensatorTest {
     public void invalidNanTargetV() {
         ValidationException e = assertThrows(ValidationException.class, () -> createLinearShunt(INVALID, INVALID, 5.0, 1.0, 6, 10, null, true, Double.NaN, 0));
         assertEquals("Shunt compensator 'invalid': invalid value (NaN) for localTargetV (voltageRegulation is set with VOLTAGE mode and regulating true and the terminal is unset)", e.getMessage());
+    }
+
+    /**
+     * The local voltage target of a shunt compensator regulating its own terminal is a steady state value that an
+     * exchange format such as CGMES carries, so a change of it has to be observable from a network listener, as the
+     * local targets of the other voltage regulation holders are.
+     */
+    @Test
+    public void localTargetVNotificationTest() {
+        ShuntCompensator shunt = createLinearShunt(SHUNT, "shuntName", 5.0, 4.0, 6, 10, null, true, 200, 10);
+
+        NetworkEventRecorder eventRecorder = new NetworkEventRecorder();
+        network.addListener(eventRecorder);
+        shunt.setLocalTargetV(210.0);
+        assertEquals(List.of(new UpdateNetworkEvent(SHUNT, "localTargetV", VariantManagerConstants.INITIAL_VARIANT_ID, 200.0, 210.0)),
+                eventRecorder.getEvents());
+
+        // Setting the same value again is not a change and must not be reported
+        eventRecorder.reset();
+        shunt.setLocalTargetV(210.0);
+        assertEquals(List.of(), eventRecorder.getEvents());
     }
 
     @Test
