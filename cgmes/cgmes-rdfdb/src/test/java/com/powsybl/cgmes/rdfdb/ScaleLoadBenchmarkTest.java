@@ -69,9 +69,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * three</em> (a real 96 at IGM size would cost minutes and says nothing three do not), {@code walk} = 96 updates of
  * one network, and the heap the 95 extra variants hold. {@code sv20} and above on {@code memory:} only.</p>
  *
- * <p>Gates, relative only: {@code b <= 1.5 a}, {@code c < b} and {@code c <= a} on Fuseki (in process a cache
+ * <p>Gates, relative only, on the Svedala grids (the MicroGrids be and snb are reported as targets, not gated: their
+ * figures are a few tens of milliseconds and a relative gate on them measures noise, review 21 m11 and round 2
+ * r2-m8): {@code b <= 1.5 a}, {@code c < b} and {@code c <= a} on Fuseki (in process a cache
  * saves only a local copy, so warm and cold are equal within noise there, as in {@link RdfDbLoadBenchmarkTest});
- * on the small grids (be, snb, sv1) the warm-against-cold gate is the regression bound {@code c <= 1.5 b + 30 ms}
+ * on sv1 the warm-against-cold gate is the regression bound {@code c <= 1.5 b + 30 ms}
  * and {@code c < b} is reported as a target, because what the cache saves there is a few tens of milliseconds and
  * a whole-module JVM moves a load by more than that (the gate failed once at 1065 vs 765 ms on sv1 inside
  * {@code verify} and passed 322 vs 513 ms alone); {@code b(sv20)/b(sv6)
@@ -113,14 +115,6 @@ class ScaleLoadBenchmarkTest {
     private static final int TIMESTEPS = 96;
     private static final int SEPARATE_SAMPLE = 3;
     private static final long CATALOGUE_FLOOR_MS = 30;
-    /**
-     * The absolute allowance of the load gates on a grid that is not replicated (the MicroGrid {@code be}, {@code snb},
-     * {@code sv1}). There every compared figure is a few tens of milliseconds, and the same code measured the file
-     * import of {@code be} at 41 ms in one run and 164 / 168 ms in the next two at a load of 2 (review 21, finding m11):
-     * a purely relative gate on such figures fails on noise. The allowance is the size of that noise; the replicated
-     * grids, where the gates measure something, keep the purely relative bounds.
-     */
-    private static final long SMALL_GRID_ALLOWANCE_MS = 150;
     private static final String CIM16 = "http://iec.ch/TC57/2013/CIM-schema-cim16#";
     private static final String CIM100 = "http://iec.ch/TC57/CIM100#";
     private static final String SSH16 = "http://entsoe.eu/CIM/SteadyStateHypothesis/1/1";
@@ -340,10 +334,20 @@ class ScaleLoadBenchmarkTest {
         // Gates, relative only
         // The three load gates are the server's, as in RdfDbLoadBenchmarkTest: in process a cache saves only a
         // copy between two local stores, so warm and cold are the same figure within noise there
-        long allowance = grid.small() ? SMALL_GRID_ALLOWANCE_MS : 0;
+        // The MicroGrids (be, snb) are not gated: every compared figure is a few tens of milliseconds, and the same
+        // code measured the file import of be at 41 ms in one run and 164 / 168 ms in the next two at a load of 2
+        // (review 21 m11). A relative gate on such figures measures noise, an absolute allowance contradicts the
+        // relative cadence (round 2, r2-m8): their figures are reported as TARGET lines, and the gates run on the
+        // Svedala grids, sv1 included, purely relative
+        if (!grid.svedala()) {
+            LOGGER.info("TARGET {} on {} / {} (not gated): cold {} ms, warm {} ms, after a checkpoint {} ms against {} ms"
+                    + " for a file import", b <= 1.5 * a && c <= a ? "MET" : "MISSED", grid, backend, b, c,
+                    v.afterCheckpoint, a);
+            return new Measured(a, b, c);
+        }
         if (Backends.FUSEKI.equals(backend)) {
             softly.assertThat((double) b).as("cold database load of " + grid + " against the file import (" + a + " ms)")
-                    .isLessThanOrEqualTo(1.5 * a + allowance);
+                    .isLessThanOrEqualTo(1.5 * a);
             // What the cache saves is the fetch and the N-Triples parse. On a replicated grid that is a quarter of
             // the load and the comparison is safe; on a small grid it is a few tens of milliseconds, which the JVM
             // of a whole module run (a shared in-process Fuseki holding every earlier test's datasets, an old
@@ -360,7 +364,7 @@ class ScaleLoadBenchmarkTest {
                 softly.assertThat(c).as("warm load of " + grid + " on " + backend + " against the cold one").isLessThan(b);
             }
             softly.assertThat(c).as("warm load of " + grid + " on " + backend + " against the file import")
-                    .isLessThanOrEqualTo(a + allowance);
+                    .isLessThanOrEqualTo(a);
             if (grid.small()) {
                 LOGGER.info("TARGET {} on {} / {}: a cold load takes {} ms and a warm one {} ms against {} ms for a file"
                         + " import", b <= 1.5 * a && c <= a ? "MET" : "MISSED", grid, backend, b, c, a);
@@ -369,7 +373,7 @@ class ScaleLoadBenchmarkTest {
         // A checkpointed versioned load is a plain load plus the catalogue query; the query is a fixed cost of a few
         // tens of milliseconds, which on the MicroGrid is as large as the load itself, hence the absolute floor
         softly.assertThat((double) v.afterCheckpoint).as("warm load after a checkpoint of " + grid + " on " + backend
-                + " against the plain warm load (" + c + " ms)").isLessThanOrEqualTo(1.5 * c + CATALOGUE_FLOOR_MS + allowance);
+                + " against the plain warm load (" + c + " ms)").isLessThanOrEqualTo(1.5 * c + CATALOGUE_FLOOR_MS);
         return new Measured(a, b, c);
     }
 
