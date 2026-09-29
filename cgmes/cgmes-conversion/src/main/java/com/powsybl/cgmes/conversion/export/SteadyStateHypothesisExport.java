@@ -288,11 +288,12 @@ public final class SteadyStateHypothesisExport {
         }
 
         writeTapChanger(type, tapChangerId, tc, cimNamespace, writer, context);
+        String end = twt instanceof ThreeWindingsTransformer ? Integer.toString(endNumber) : "";
         if (tc instanceof RatioTapChanger rtc) {
-            addRegulatingControlView(regulatingControlView(new RegulationRef(twt, "", rtc), tapChangerControlId, context,
-                    IidmStateView.LIVE), regulatingControlViews);
+            addRegulatingControlView(regulatingControlView(
+                    new TapChangerRef(twt, CgmesChangeTranslator.RATIO_TAP_CHANGER_PREFIX + end, rtc).regulation(),
+                    tapChangerControlId, context, IidmStateView.LIVE), regulatingControlViews);
         } else if (tc instanceof PhaseTapChanger ptc) {
-            String end = twt instanceof ThreeWindingsTransformer ? Integer.toString(endNumber) : "";
             addRegulatingControlView(regulatingControlView(ptc, tapChangerControlId,
                     new TapChangerRef(twt, CgmesChangeTranslator.PHASE_TAP_CHANGER_PREFIX + end, ptc),
                     context, IidmStateView.LIVE), regulatingControlViews);
@@ -592,8 +593,11 @@ public final class SteadyStateHypothesisExport {
                 // (AbstractReactiveLimitsOwnerConversion#updateRegulatingControlReactivePower,
                 // StaticVarCompensatorConversion#updateRegulatingControl), so the export applies it as well, unless
                 // the equipment model is exported too
-                if (regulationHolder instanceof Generator || regulationHolder instanceof StaticVarCompensator) {
-                    targetValue *= CgmesExportUtil.exportedTerminalSign(regulation.owner(), "", context);
+                if (regulationHolder instanceof Generator || regulationHolder instanceof StaticVarCompensator
+                        || regulationHolder instanceof RatioTapChanger) {
+                    // AbstractTransformerConversion#updateRatioTapChanger reads the target of a ratio tap changer
+                    // with the sign of the end the tap changer sits on
+                    targetValue *= CgmesExportUtil.exportedTerminalSign(regulation.owner(), regulation.end(), context);
                 }
                 targetValueUnitMultiplier = "M";
             } else if (REGULATING_CONTROL_VOLTAGE.equals(mode)) {

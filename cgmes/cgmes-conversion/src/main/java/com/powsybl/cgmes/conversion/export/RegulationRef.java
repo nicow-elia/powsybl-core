@@ -53,6 +53,16 @@ record RegulationRef(Identifiable<?> owner, String attributePrefix, VoltageRegul
         return attributePrefix.isEmpty() ? key : attributePrefix + "." + key;
     }
 
+    /**
+     * The end a ratio tap changer sits on, as its attribute prefix names it ({@code ratioTapChanger2} is end 2), and
+     * {@code ""} for a two windings transformer or a holder that is not a tap changer.
+     */
+    String end() {
+        int length = attributePrefix.length();
+        return length > 0 && Character.isDigit(attributePrefix.charAt(length - 1))
+                ? attributePrefix.substring(length - 1) : "";
+    }
+
     VoltageRegulation regulation() {
         return holder.getVoltageRegulation();
     }

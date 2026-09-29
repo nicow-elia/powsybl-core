@@ -83,7 +83,14 @@ class TerminalSignExportTest {
                     station.getVoltageRegulation().setTargetValue(30.0);
                 },
                 n -> station(n).getRegulatingTargetQ());
-        return Stream.of(svc, phaseTapChanger, vsc).map(Arguments::of);
+        Family ratioTapChanger = new Family("ratio tap changer regulating reactive power", "/issues/voltageRegulation/",
+                new String[] {"transformer_EQ.xml", "transformer_SSH.xml"},
+                n -> {
+                    n.getTwoWindingsTransformer("PT2_2").setProperty(SIGN, "-1");
+                    n.getTwoWindingsTransformer("PT2_2").getRatioTapChanger().getVoltageRegulation().setTargetValue(12.0);
+                },
+                n -> n.getTwoWindingsTransformer("PT2_2").getRatioTapChanger().getRegulatingTargetQ());
+        return Stream.of(svc, phaseTapChanger, vsc, ratioTapChanger).map(Arguments::of);
     }
 
     private static VscConverterStation station(Network network) {
@@ -134,6 +141,8 @@ class TerminalSignExportTest {
             case "static var compensator" ->
                 receiver.getStaticVarCompensator("StaticVarCompensator-Q").getVoltageRegulation().setTargetValue(value);
             case "phase tap changer" -> receiver.getTwoWindingsTransformer("T2W").getPhaseTapChanger().setRegulationValue(value);
+            case "ratio tap changer regulating reactive power" ->
+                receiver.getTwoWindingsTransformer("PT2_2").getRatioTapChanger().getVoltageRegulation().setTargetValue(value);
             default -> station(receiver).getVoltageRegulation().setTargetValue(value);
         }
     }
