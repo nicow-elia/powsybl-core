@@ -98,15 +98,17 @@ class PartialSshExportGoldenTest {
             List<NetworkEvent> backward = RecordedChangeScenarios.record(network, scenario.backwardChange());
 
             Map<String, Object> firstOld = new LinkedHashMap<>();
+            // The new values the canonical events of each equipment reported so far
             Set<String> canonicalSeen = new java.util.HashSet<>();
             for (NetworkEvent event : forward) {
-                // An echo is skipped only when a canonical event of the same equipment precedes it; an echo that is
-                // the only event of its change (the setter created the regulation) is checked like any change
+                // An echo is skipped only when a canonical event of the same equipment with the same new value precedes
+                // it (rule 1 of EventCompactor); an echo that is the only event of its change (the setter created the
+                // regulation) is checked like any change (review 21 round 2, r2-n2)
                 boolean echo = event instanceof UpdateNetworkEvent update && isVoltageRegulationEcho(update, network);
-                String id = event instanceof UpdateNetworkEvent update ? update.id() : null;
-                String key = echo && canonicalSeen.contains(id) ? null : key(event);
-                if (!echo && id != null) {
-                    canonicalSeen.add(id);
+                String seen = event instanceof UpdateNetworkEvent update ? update.id() + "=" + update.newValue() : null;
+                String key = echo && canonicalSeen.contains(seen) ? null : key(event);
+                if (!echo && seen != null) {
+                    canonicalSeen.add(seen);
                 }
                 // containsKey, not putIfAbsent: a recorded old value may legitimately be null, which putIfAbsent
                 // would treat as no value at all
