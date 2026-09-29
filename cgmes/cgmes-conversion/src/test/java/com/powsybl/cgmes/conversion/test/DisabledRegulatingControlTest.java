@@ -48,9 +48,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Real CGMES data: a RegulatingControl that is disabled in the steady state hypothesis gives its equipment a
  * VoltageRegulation that does not regulate, so switching it on is an ordinary, exportable change on all three routes
- * (coordinator question, round 3: the refusal "has no CGMES regulating control the import could use" is reachable only
- * for equipment without a RegulatingControl in its equipment model, e.g. an IIDM network exported by the full export,
- * issue R2-6 a).
+ * (coordinator question, round 3). The refusal "has no CGMES regulating control the import could use" is reached for
+ * equipment without a RegulatingControl in its equipment model (e.g. an IIDM network exported by the full export, issue
+ * R2-6 a), or with one the import ignored (a mode other than voltage or reactive power, a regulating terminal it could
+ * not map, a control the model does not contain; review 21 closing, c-m5).
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
