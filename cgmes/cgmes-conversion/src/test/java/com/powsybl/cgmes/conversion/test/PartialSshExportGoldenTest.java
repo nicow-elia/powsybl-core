@@ -98,9 +98,16 @@ class PartialSshExportGoldenTest {
             List<NetworkEvent> backward = RecordedChangeScenarios.record(network, scenario.backwardChange());
 
             Map<String, Object> firstOld = new LinkedHashMap<>();
+            Set<String> canonicalSeen = new java.util.HashSet<>();
             for (NetworkEvent event : forward) {
-                String key = event instanceof UpdateNetworkEvent update && isVoltageRegulationEcho(update, network)
-                        ? null : key(event);
+                // An echo is skipped only when a canonical event of the same equipment precedes it; an echo that is
+                // the only event of its change (the setter created the regulation) is checked like any change
+                boolean echo = event instanceof UpdateNetworkEvent update && isVoltageRegulationEcho(update, network);
+                String id = event instanceof UpdateNetworkEvent update ? update.id() : null;
+                String key = echo && canonicalSeen.contains(id) ? null : key(event);
+                if (!echo && id != null) {
+                    canonicalSeen.add(id);
+                }
                 // containsKey, not putIfAbsent: a recorded old value may legitimately be null, which putIfAbsent
                 // would treat as no value at all
                 if (key != null && !firstOld.containsKey(key)) {
