@@ -53,6 +53,7 @@ import com.powsybl.iidm.network.extensions.ActivePowerControl;
 import com.powsybl.iidm.network.extensions.ReferencePriorities;
 import com.powsybl.iidm.network.extensions.ReferencePriority;
 import com.powsybl.iidm.network.regulation.RegulationMode;
+import com.powsybl.iidm.network.regulation.VoltageRegulationHolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -972,7 +973,27 @@ class CgmesChangeTranslator {
                 && state.getDouble(hvdcLine, ACTIVE_POWER_SETPOINT, hvdcLine::getActivePowerSetpoint) == 0) {
             return failure("a VsConverter has no operating mode, the mode is only derived from a non zero targetPpcc");
         }
-        return success(bothConverterUpdates(hvdcLine));
+        return unregulatedConverterOf(hvdcLine).<Result<CgmesPropertyBuffer, String>>map(Result::failure)
+                .orElseGet(() -> success(bothConverterUpdates(hvdcLine)));
+    }
+
+    /**
+     * Why a converter of the given line cannot be described, empty when both can: a VsConverter has no control flag,
+     * the CGMES import rebuilds the VoltageRegulation of a converter from {@code qPccControl} and always makes it
+     * regulate, so a converter whose regulation is switched off would come back regulating, in another mode for a
+     * station in voltage mode (powsybl-core #3699: {@code qPccControl} follows {@code isRegulatingWithMode(VOLTAGE)}).
+     */
+    private Optional<String> unregulatedConverterOf(HvdcLine hvdcLine) {
+        return unregulatedConverter(hvdcLine.getConverterStation1()).or(() -> unregulatedConverter(hvdcLine.getConverterStation2()));
+    }
+
+    private Optional<String> unregulatedConverter(Identifiable<?> converter) {
+        if (converter instanceof VoltageRegulationHolder<?> holder && holder.getVoltageRegulation() != null
+                && !new RegulationRef(converter, "", holder).isRegulating(state)) {
+            return Optional.of("converter " + converter.getId() + " does not regulate, and a VsConverter has no control"
+                    + " flag: the CGMES import always makes it regulate in the mode qPccControl names");
+        }
+        return Optional.empty();
     }
 
     /**
@@ -1038,6 +1059,11 @@ class CgmesChangeTranslator {
      */
     private Result<CgmesPropertyBuffer, String> vscStationUpdates(VscConverterStation converter, String attribute) {
         RegulationRef regulation = RegulationRef.of(converter);
+        Optional<String> unregulated = converter.getHvdcLine() != null
+                ? unregulatedConverterOf(converter.getHvdcLine()) : unregulatedConverter(converter);
+        if (unregulated.isPresent()) {
+            return failure(unregulated.get());
+        }
         if (regulation.regulation() != null && regulation.mode(state) == null) {
             return failure("the voltage regulation of converter " + converter.getId() + " has no mode in this"
                     + " variant, so qPccControl cannot be written");
@@ -1070,7 +1096,8 @@ class CgmesChangeTranslator {
                 SteadyStateHypothesisExport.computeAcDcConverterState(converter, state);
         return switch (converter) {
             case LineCommutatedConverter lcc -> lineCommutatedConverterUpdates(lcc, converterState, attribute);
-            case VoltageSourceConverter vsc -> success(voltageSourceConverterUpdates(vsc, converterState));
+            case VoltageSourceConverter vsc -> unregulatedConverter(vsc).<Result<CgmesPropertyBuffer, String>>map(Result::failure)
+                    .orElseGet(() -> success(voltageSourceConverterUpdates(vsc, converterState)));
             default -> failure("converter " + converter.getId() + " is a "
                     + converter.getClass().getSimpleName() + ", which has no steady state setpoints");
         };

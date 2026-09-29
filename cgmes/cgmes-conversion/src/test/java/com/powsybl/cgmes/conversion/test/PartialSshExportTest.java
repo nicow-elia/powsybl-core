@@ -1242,6 +1242,33 @@ class PartialSshExportTest extends AbstractSerDeTest {
         assertEquals(400.0, voltage.receiver().getVoltageSourceConverter("VSC_1_2").getRegulatingTargetV(), TOLERANCE);
     }
 
+    /**
+     * A VsConverter has no control flag: the CGMES import rebuilds the VoltageRegulation of a converter from
+     * {@code qPccControl} and always makes it regulate. A converter whose regulation is switched off (in particular a
+     * station after the legacy {@code setVoltageRegulatorOn(false)}, which since powsybl-core #3699 keeps the voltage
+     * mode and only stops regulating) would come back regulating in another mode, so the change is refused rather than
+     * exported as a different state (review 21 finding M4).
+     */
+    @Test
+    @SuppressWarnings("removal")
+    void vscWhoseRegulationIsSwitchedOffIsRejected() {
+        Network station = readCgmesResources(HVDC_DIR, "hvdc_EQ.xml", "hvdc_SSH.xml");
+        NetworkEventRecorder stationRecorder = new NetworkEventRecorder();
+        station.addListener(stationRecorder);
+        converter(station, 2).setVoltageRegulatorOn(false).setReactivePowerSetpoint(30.0);
+        PowsyblException stationRefusal = assertThrows(PowsyblException.class,
+                () -> PartialSshExport.toString(station, stationRecorder.getEvents(), UnsupportedChangeBehavior.FAIL));
+        assertTrue(stationRefusal.getMessage().contains("has no control flag"), stationRefusal.getMessage());
+
+        Network detailed = readCgmesResources(detailedDcModel(), DC_DIR, "mixed_bipole_EQ.xml", "mixed_bipole_SSH.xml");
+        NetworkEventRecorder detailedRecorder = new NetworkEventRecorder();
+        detailed.addListener(detailedRecorder);
+        detailed.getVoltageSourceConverter("VSC_1_2").getVoltageRegulation().setRegulating(false);
+        PowsyblException detailedRefusal = assertThrows(PowsyblException.class,
+                () -> PartialSshExport.toString(detailed, detailedRecorder.getEvents(), UnsupportedChangeBehavior.FAIL));
+        assertTrue(detailedRefusal.getMessage().contains("has no control flag"), detailedRefusal.getMessage());
+    }
+
     /** Whether a converter controls the power at its connection point or the DC voltage is a steady state choice. */
     @Test
     void detailedConverterControlModeRoundTrip() throws IOException {
