@@ -18,6 +18,7 @@ import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.VR_MODE;
 import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.VR_REGULATING;
 import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.VR_TARGET_DEADBAND;
 import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.VR_TARGET_VALUE;
+import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.VR_TERMINAL;
 
 /**
  * A voltage regulation holder together with what a recorded change calls its values.
@@ -104,8 +105,20 @@ record RegulationRef(Identifiable<?> owner, String attributePrefix, VoltageRegul
         return isRegulating(state) && mode(state) == mode;
     }
 
+    /**
+     * Whether the regulating terminal is structure the state can be read against: the terminal is not per variant and
+     * is read live, so a change set that changed it describes its state before against the wrong terminal.
+     */
+    private void requireTerminalUnchanged(IidmStateView state) {
+        if (state.hasChange(owner, attribute(VR_TERMINAL))) {
+            throw new UnreconstructibleStateException("the regulating terminal of " + owner.getId()
+                    + " changed in the change set, so its targets before the change cannot be told apart");
+        }
+    }
+
     /** As {@link VoltageRegulationHolder#getRegulatingTargetV}: the remote target when a terminal is set, else the local one. */
     double regulatingTargetV(IidmStateView state) {
+        requireTerminalUnchanged(state);
         if ((isWithMode(RegulationMode.VOLTAGE, state) || isWithMode(RegulationMode.VOLTAGE_PER_REACTIVE_POWER, state))
                 && holder.hasRegulatingTerminal()) {
             return targetValue(state);
@@ -115,6 +128,7 @@ record RegulationRef(Identifiable<?> owner, String attributePrefix, VoltageRegul
 
     /** As {@link VoltageRegulationHolder#getRegulatingTargetQ}: the remote target when a terminal is set, else the local one. */
     double regulatingTargetQ(IidmStateView state) {
+        requireTerminalUnchanged(state);
         if (isWithMode(RegulationMode.REACTIVE_POWER, state) && holder.hasRegulatingTerminal()) {
             return targetValue(state);
         }

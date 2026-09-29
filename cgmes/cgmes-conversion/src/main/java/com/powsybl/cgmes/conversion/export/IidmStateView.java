@@ -68,6 +68,11 @@ final class IidmStateView {
         this.changes = changes;
     }
 
+    /** Whether the change set touched the given attribute; always {@code false} for {@link #LIVE}. */
+    boolean hasChange(Identifiable<?> identifiable, String attribute) {
+        return changes.hasChange(identifiable.getId(), attribute);
+    }
+
     double getDouble(Identifiable<?> identifiable, String attribute, DoubleSupplier live) {
         Object old = previous(identifiable, attribute);
         return old == NOT_CHANGED ? live.getAsDouble() : asDouble(identifiable, attribute, old);

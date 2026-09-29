@@ -36,6 +36,8 @@ import com.powsybl.iidm.network.Load;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.RatioTapChanger;
 import com.powsybl.iidm.network.ShuntCompensator;
+import com.powsybl.iidm.network.StaticVarCompensator;
+import com.powsybl.iidm.network.Terminal;
 import com.powsybl.iidm.network.TwoWindingsTransformer;
 import com.powsybl.iidm.network.VariantManagerConstants;
 import com.powsybl.iidm.network.VscConverterStation;
@@ -610,6 +612,32 @@ class CgmesDiffExportTest extends AbstractSerDeTest {
         CgmesDiffExport.Result result = CgmesDiffExport.toDifferences(network, events, new ExportOptions());
         assertTrue(result.differences().isEmpty(), () -> "a change that changed nothing has no difference, got "
                 + result.differences());
+    }
+
+    /**
+     * The regulating terminal is structure: it is not per variant and the state before the change set is read against
+     * the live one. A change set that moved the terminal cannot describe the targets it started from, so a target
+     * change in the same change set is refused rather than exported with a state before computed against the wrong
+     * terminal (review 21 finding m5).
+     */
+    @Test
+    void aTargetChangeNextToATerminalChangeIsUnsupported() {
+        Network network = readCgmesResources("/update/static-var-compensator/", "staticVarCompensator_EQ.xml",
+                "staticVarCompensator_SSH.xml");
+        StaticVarCompensator svc = network.getStaticVarCompensator("StaticVarCompensator-Q");
+        assertTrue(svc.hasRegulatingTerminal());
+        Terminal other = network.getConnectableStream().filter(c -> c != svc)
+                .map(c -> (Terminal) c.getTerminals().get(0))
+                .filter(t -> t != svc.getRegulatingTerminal()).findFirst().orElseThrow();
+        List<NetworkEvent> events = RecordedChangeScenarios.record(network, n -> {
+            svc.getVoltageRegulation().setTerminal(other, 205.0);
+            svc.getVoltageRegulation().setTargetValue(210.0);
+        });
+
+        CgmesDiffExport.Result result = CgmesDiffExport.toDifferences(network, events,
+                new ExportOptions().setUnsupportedChangeBehavior(PartialSshExport.UnsupportedChangeBehavior.IGNORE));
+        assertTrue(events.stream().anyMatch(e -> ((UpdateNetworkEvent) e).attribute().equals("VoltageRegulation.Terminal")));
+        assertTrue(result.exportedEvents().isEmpty(), () -> "nothing is exportable, got " + result.exportedEvents());
     }
 
     @Test
