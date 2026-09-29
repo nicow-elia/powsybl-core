@@ -7,6 +7,12 @@ generator regulating locally | VoltageRegulation.setMode | with regulation | cha
 generator regulating locally | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED
 generator regulating locally | VoltageRegulation.setTerminal | with regulation | change	IIDM_REFUSES
 generator regulating locally | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED
+generator regulating locally | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT
+generator regulating locally | newVoltageRegulation (not regulating) | without regulation | no-op	UNCHANGED
+generator regulating locally | newVoltageRegulation (regulating) | without regulation | change	IIDM_SILENT
+generator regulating locally | newVoltageRegulation (regulating) | without regulation | no-op	UNCHANGED
+generator regulating locally | removeVoltageRegulation | with regulation | change	IIDM_SILENT
+generator regulating locally | removeVoltageRegulation | with regulation | no-op	UNCHANGED
 generator regulating locally | setLocalTargetV | with regulation | change	EXPORTED
 generator regulating locally | setLocalTargetV | with regulation | no-op	UNCHANGED
 generator regulating locally | setLocalTargetV | without regulation | change	REFUSED
@@ -49,6 +55,8 @@ generator regulating remotely | VoltageRegulation.setMode | with regulation | ch
 generator regulating remotely | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED
 generator regulating remotely | VoltageRegulation.setTerminal | with regulation | change	REFUSED
 generator regulating remotely | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED
+generator regulating remotely | removeVoltageRegulation | with regulation | change	IIDM_SILENT
+generator regulating remotely | removeVoltageRegulation | with regulation | no-op	UNCHANGED
 generator regulating remotely | setLocalTargetV | with regulation | change	REFUSED
 generator regulating remotely | setLocalTargetV | with regulation | no-op	UNCHANGED
 generator regulating remotely | setLocalTargetQ | with regulation | change	EXPORTED
@@ -65,6 +73,10 @@ generator regulating remotely | Generator.setTargetQ | with regulation | change	
 generator regulating remotely | Generator.setTargetQ | with regulation | no-op	UNCHANGED
 generator regulating remotely | Generator.setRegulatingTerminal | with regulation | change	REFUSED
 generator regulating remotely | Generator.setRegulatingTerminal | with regulation | no-op	UNCHANGED
+generator without a CGMES regulating control | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT
+generator without a CGMES regulating control | newVoltageRegulation (not regulating) | without regulation | no-op	UNCHANGED
+generator without a CGMES regulating control | newVoltageRegulation (regulating) | without regulation | change	IIDM_REFUSES
+generator without a CGMES regulating control | newVoltageRegulation (regulating) | without regulation | no-op	UNCHANGED
 generator without a CGMES regulating control | setLocalTargetV | without regulation | change	REFUSED
 generator without a CGMES regulating control | setLocalTargetV | without regulation | no-op	UNCHANGED
 generator without a CGMES regulating control | setLocalTargetQ | without regulation | change	EXPORTED
@@ -89,6 +101,12 @@ shunt compensator | VoltageRegulation.setMode | with regulation | change	IIDM_RE
 shunt compensator | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED
 shunt compensator | VoltageRegulation.setTerminal | with regulation | change	REFUSED
 shunt compensator | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED
+shunt compensator | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT
+shunt compensator | newVoltageRegulation (not regulating) | without regulation | no-op	UNCHANGED
+shunt compensator | newVoltageRegulation (regulating) | without regulation | change	IIDM_REFUSES
+shunt compensator | newVoltageRegulation (regulating) | without regulation | no-op	UNCHANGED
+shunt compensator | removeVoltageRegulation | with regulation | change	IIDM_SILENT
+shunt compensator | removeVoltageRegulation | with regulation | no-op	UNCHANGED
 shunt compensator | setLocalTargetV | with regulation | change	EXPORTED
 shunt compensator | setLocalTargetV | with regulation | no-op	UNCHANGED
 shunt compensator | setLocalTargetV | without regulation | change	REFUSED
@@ -113,6 +131,10 @@ shunt compensator | ShuntCompensator.setRegulatingTerminal | with regulation | c
 shunt compensator | ShuntCompensator.setRegulatingTerminal | with regulation | no-op	REFUSED
 shunt compensator | ShuntCompensator.setRegulatingTerminal | without regulation | change	REFUSED
 shunt compensator | ShuntCompensator.setRegulatingTerminal | without regulation | no-op	REFUSED
+equivalent shunt | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT
+equivalent shunt | newVoltageRegulation (not regulating) | without regulation | no-op	UNCHANGED
+equivalent shunt | newVoltageRegulation (regulating) | without regulation | change	IIDM_REFUSES
+equivalent shunt | newVoltageRegulation (regulating) | without regulation | no-op	UNCHANGED
 equivalent shunt | setLocalTargetV | without regulation | change	REFUSED
 equivalent shunt | setLocalTargetV | without regulation | no-op	UNCHANGED
 equivalent shunt | setLocalTargetQ | without regulation | change	IIDM_REFUSES
@@ -133,6 +155,12 @@ static var compensator | VoltageRegulation.setMode | with regulation | change	RE
 static var compensator | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED
 static var compensator | VoltageRegulation.setTerminal | with regulation | change	IIDM_REFUSES
 static var compensator | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED
+static var compensator | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT
+static var compensator | newVoltageRegulation (not regulating) | without regulation | no-op	UNCHANGED
+static var compensator | newVoltageRegulation (regulating) | without regulation | change	IIDM_SILENT
+static var compensator | newVoltageRegulation (regulating) | without regulation | no-op	UNCHANGED
+static var compensator | removeVoltageRegulation | with regulation | change	IIDM_SILENT
+static var compensator | removeVoltageRegulation | with regulation | no-op	UNCHANGED
 static var compensator | setLocalTargetV | with regulation | change	EXPORTED
 static var compensator | setLocalTargetV | with regulation | no-op	UNCHANGED
 static var compensator | setLocalTargetV | without regulation | change	REFUSED
@@ -171,6 +199,12 @@ static var compensator regulating reactive power | VoltageRegulation.setMode | w
 static var compensator regulating reactive power | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED
 static var compensator regulating reactive power | VoltageRegulation.setTerminal | with regulation | change	REFUSED
 static var compensator regulating reactive power | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED
+static var compensator regulating reactive power | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT
+static var compensator regulating reactive power | newVoltageRegulation (not regulating) | without regulation | no-op	UNCHANGED
+static var compensator regulating reactive power | newVoltageRegulation (regulating) | without regulation | change	IIDM_REFUSES
+static var compensator regulating reactive power | newVoltageRegulation (regulating) | without regulation | no-op	UNCHANGED
+static var compensator regulating reactive power | removeVoltageRegulation | with regulation | change	IIDM_SILENT
+static var compensator regulating reactive power | removeVoltageRegulation | with regulation | no-op	UNCHANGED
 static var compensator regulating reactive power | setLocalTargetV | with regulation | change	NOT_REPRESENTED
 static var compensator regulating reactive power | setLocalTargetV | with regulation | no-op	UNCHANGED
 static var compensator regulating reactive power | setLocalTargetV | without regulation | change	REFUSED
@@ -209,6 +243,12 @@ ratio tap changer | VoltageRegulation.setMode | with regulation | change	REFUSED
 ratio tap changer | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED
 ratio tap changer | VoltageRegulation.setTerminal | with regulation | change	REFUSED
 ratio tap changer | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED
+ratio tap changer | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT
+ratio tap changer | newVoltageRegulation (not regulating) | without regulation | no-op	UNCHANGED
+ratio tap changer | newVoltageRegulation (regulating) | without regulation | change	IIDM_REFUSES
+ratio tap changer | newVoltageRegulation (regulating) | without regulation | no-op	UNCHANGED
+ratio tap changer | removeVoltageRegulation | with regulation | change	IIDM_SILENT
+ratio tap changer | removeVoltageRegulation | with regulation | no-op	UNCHANGED
 ratio tap changer | RatioTapChanger.setRegulationMode | with regulation | change	REFUSED
 ratio tap changer | RatioTapChanger.setRegulationMode | with regulation | no-op	UNCHANGED
 ratio tap changer | RatioTapChanger.setRegulationMode | without regulation | change	REFUSED
@@ -233,6 +273,10 @@ ratio tap changer | RatioTapChanger.setRegulationTerminal | with regulation | ch
 ratio tap changer | RatioTapChanger.setRegulationTerminal | with regulation | no-op	UNCHANGED
 ratio tap changer | RatioTapChanger.setRegulationTerminal | without regulation | change	REFUSED
 ratio tap changer | RatioTapChanger.setRegulationTerminal | without regulation | no-op	IIDM_SILENT
+ratio tap changer without a CGMES control | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT
+ratio tap changer without a CGMES control | newVoltageRegulation (not regulating) | without regulation | no-op	UNCHANGED
+ratio tap changer without a CGMES control | newVoltageRegulation (regulating) | without regulation | change	IIDM_REFUSES
+ratio tap changer without a CGMES control | newVoltageRegulation (regulating) | without regulation | no-op	UNCHANGED
 ratio tap changer without a CGMES control | RatioTapChanger.setRegulationMode | without regulation | change	REFUSED
 ratio tap changer without a CGMES control | RatioTapChanger.setRegulationMode | without regulation | no-op	IIDM_SILENT
 ratio tap changer without a CGMES control | RatioTapChanger.setRegulationValue | without regulation | change	REFUSED
@@ -253,6 +297,12 @@ VSC converter station 1 | VoltageRegulation.setMode | with regulation | change	I
 VSC converter station 1 | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED
 VSC converter station 1 | VoltageRegulation.setTerminal | with regulation | change	IIDM_REFUSES
 VSC converter station 1 | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED
+VSC converter station 1 | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT
+VSC converter station 1 | newVoltageRegulation (not regulating) | without regulation | no-op	UNCHANGED
+VSC converter station 1 | newVoltageRegulation (regulating) | without regulation | change	IIDM_SILENT
+VSC converter station 1 | newVoltageRegulation (regulating) | without regulation | no-op	UNCHANGED
+VSC converter station 1 | removeVoltageRegulation | with regulation | change	IIDM_SILENT
+VSC converter station 1 | removeVoltageRegulation | with regulation | no-op	UNCHANGED
 VSC converter station 1 | setLocalTargetV | with regulation | change	EXPORTED
 VSC converter station 1 | setLocalTargetV | with regulation | no-op	UNCHANGED
 VSC converter station 1 | setLocalTargetV | without regulation | change	REFUSED
@@ -293,6 +343,12 @@ VSC converter station 2 | VoltageRegulation.setMode | with regulation | change	I
 VSC converter station 2 | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED
 VSC converter station 2 | VoltageRegulation.setTerminal | with regulation | change	IIDM_REFUSES
 VSC converter station 2 | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED
+VSC converter station 2 | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT
+VSC converter station 2 | newVoltageRegulation (not regulating) | without regulation | no-op	UNCHANGED
+VSC converter station 2 | newVoltageRegulation (regulating) | without regulation | change	IIDM_SILENT
+VSC converter station 2 | newVoltageRegulation (regulating) | without regulation | no-op	UNCHANGED
+VSC converter station 2 | removeVoltageRegulation | with regulation | change	IIDM_SILENT
+VSC converter station 2 | removeVoltageRegulation | with regulation | no-op	UNCHANGED
 VSC converter station 2 | setLocalTargetV | with regulation | change	EXPORTED
 VSC converter station 2 | setLocalTargetV | with regulation | no-op	UNCHANGED
 VSC converter station 2 | setLocalTargetV | without regulation | change	REFUSED
@@ -335,6 +391,12 @@ VSC converter station 1 with its terminal set | VoltageRegulation.setMode | with
 VSC converter station 1 with its terminal set | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED
 VSC converter station 1 with its terminal set | VoltageRegulation.setTerminal | with regulation | change	REFUSED
 VSC converter station 1 with its terminal set | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED
+VSC converter station 1 with its terminal set | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT
+VSC converter station 1 with its terminal set | newVoltageRegulation (not regulating) | without regulation | no-op	UNCHANGED
+VSC converter station 1 with its terminal set | newVoltageRegulation (regulating) | without regulation | change	IIDM_SILENT
+VSC converter station 1 with its terminal set | newVoltageRegulation (regulating) | without regulation | no-op	UNCHANGED
+VSC converter station 1 with its terminal set | removeVoltageRegulation | with regulation | change	IIDM_SILENT
+VSC converter station 1 with its terminal set | removeVoltageRegulation | with regulation | no-op	UNCHANGED
 VSC converter station 1 with its terminal set | setLocalTargetV | with regulation | change	NOT_REPRESENTED
 VSC converter station 1 with its terminal set | setLocalTargetV | with regulation | no-op	UNCHANGED
 VSC converter station 1 with its terminal set | setLocalTargetV | without regulation | change	REFUSED
@@ -377,6 +439,12 @@ VSC converter station 2 with its terminal set | VoltageRegulation.setMode | with
 VSC converter station 2 with its terminal set | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED
 VSC converter station 2 with its terminal set | VoltageRegulation.setTerminal | with regulation | change	REFUSED
 VSC converter station 2 with its terminal set | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED
+VSC converter station 2 with its terminal set | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT
+VSC converter station 2 with its terminal set | newVoltageRegulation (not regulating) | without regulation | no-op	UNCHANGED
+VSC converter station 2 with its terminal set | newVoltageRegulation (regulating) | without regulation | change	IIDM_SILENT
+VSC converter station 2 with its terminal set | newVoltageRegulation (regulating) | without regulation | no-op	UNCHANGED
+VSC converter station 2 with its terminal set | removeVoltageRegulation | with regulation | change	IIDM_SILENT
+VSC converter station 2 with its terminal set | removeVoltageRegulation | with regulation | no-op	UNCHANGED
 VSC converter station 2 with its terminal set | setLocalTargetV | with regulation | change	NOT_REPRESENTED
 VSC converter station 2 with its terminal set | setLocalTargetV | with regulation | no-op	UNCHANGED
 VSC converter station 2 with its terminal set | setLocalTargetV | without regulation | change	REFUSED
@@ -419,6 +487,12 @@ VSC converter station 2 regulating reactive power | VoltageRegulation.setMode | 
 VSC converter station 2 regulating reactive power | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED
 VSC converter station 2 regulating reactive power | VoltageRegulation.setTerminal | with regulation | change	REFUSED
 VSC converter station 2 regulating reactive power | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED
+VSC converter station 2 regulating reactive power | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT
+VSC converter station 2 regulating reactive power | newVoltageRegulation (not regulating) | without regulation | no-op	UNCHANGED
+VSC converter station 2 regulating reactive power | newVoltageRegulation (regulating) | without regulation | change	IIDM_SILENT
+VSC converter station 2 regulating reactive power | newVoltageRegulation (regulating) | without regulation | no-op	UNCHANGED
+VSC converter station 2 regulating reactive power | removeVoltageRegulation | with regulation | change	IIDM_SILENT
+VSC converter station 2 regulating reactive power | removeVoltageRegulation | with regulation | no-op	UNCHANGED
 VSC converter station 2 regulating reactive power | setLocalTargetV | with regulation | change	NOT_REPRESENTED
 VSC converter station 2 regulating reactive power | setLocalTargetV | with regulation | no-op	UNCHANGED
 VSC converter station 2 regulating reactive power | setLocalTargetV | without regulation | change	REFUSED
@@ -461,6 +535,12 @@ detailed voltage source converter | VoltageRegulation.setMode | with regulation 
 detailed voltage source converter | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED
 detailed voltage source converter | VoltageRegulation.setTerminal | with regulation | change	REFUSED
 detailed voltage source converter | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED
+detailed voltage source converter | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT
+detailed voltage source converter | newVoltageRegulation (not regulating) | without regulation | no-op	UNCHANGED
+detailed voltage source converter | newVoltageRegulation (regulating) | without regulation | change	IIDM_REFUSES
+detailed voltage source converter | newVoltageRegulation (regulating) | without regulation | no-op	UNCHANGED
+detailed voltage source converter | removeVoltageRegulation | with regulation | change	IIDM_SILENT
+detailed voltage source converter | removeVoltageRegulation | with regulation | no-op	UNCHANGED
 detailed voltage source converter | setLocalTargetV | with regulation | change	NOT_REPRESENTED
 detailed voltage source converter | setLocalTargetV | with regulation | no-op	UNCHANGED
 detailed voltage source converter | setLocalTargetV | without regulation | change	REFUSED

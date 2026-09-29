@@ -398,6 +398,35 @@ class PartialSshExportTest extends AbstractSerDeTest {
     }
 
     /**
+     * Creating a regulation through the builder is reported by nothing (gap G1): created regulating, it would be lost.
+     * Created NOT regulating and switched on then, the switch is reported, and the change travels on both exports
+     * (review 21 round 3, R3-M1; the way export.md recommends).
+     */
+    @Test
+    void aRegulationCreatedNotRegulatingAndSwitchedOnTravels() throws IOException {
+        Consumer<Network> grantCapability = network -> network.getGenerator("EquivalentInjection")
+                .setProperty(Conversion.PROPERTY_REGULATION_CAPABILITY, "true");
+        Consumer<Network> createAndSwitchOn = network -> {
+            Generator injection = network.getGenerator("EquivalentInjection");
+            injection.setLocalTargetV(401.0);
+            injection.newVoltageRegulation().withMode(RegulationMode.VOLTAGE).withRegulating(false).build();
+            injection.getVoltageRegulation().setRegulating(true);
+        };
+        RoundTripResult result = roundTrip(GENERATOR_DIR, grantCapability, createAndSwitchOn,
+                "generator_EQ.xml", "generator_SSH.xml");
+        assertTrue(result.receiver().getGenerator("EquivalentInjection").isRegulating());
+        assertEquals(401.0, result.receiver().getGenerator("EquivalentInjection").getRegulatingTargetV(), TOLERANCE);
+
+        Network sender = readCgmesResources(GENERATOR_DIR, "generator_EQ.xml", "generator_SSH.xml");
+        grantCapability.accept(sender);
+        List<NetworkEvent> events = RecordedChangeScenarios.record(sender, createAndSwitchOn);
+        assertTrue(events.stream().anyMatch(e -> e instanceof UpdateNetworkEvent u
+                && "VoltageRegulation.isRegulating".equals(u.attribute())));
+        assertTrue(!CgmesDiffExport.toDifferences(sender, events, new CgmesDiffExport.ExportOptions())
+                .differences().models().isEmpty());
+    }
+
+    /**
      * The deprecated setter that switches the regulation of an EquivalentInjection on creates its VoltageRegulation
      * and reports the change under its deprecated name only (gap G1): the state before cannot be told, and a
      * difference could not undo the creation, so both change exports refuse it with the remedy (review 21 round 2,

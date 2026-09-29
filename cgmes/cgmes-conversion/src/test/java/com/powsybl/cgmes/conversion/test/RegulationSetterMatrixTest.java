@@ -262,6 +262,23 @@ class RegulationSetterMatrixTest {
             Terminal terminal = change ? anotherTerminal(n, holder.owner().apply(n), regulation.getTerminal()) : regulation.getTerminal();
             regulation.setTerminal(terminal, regulation.getTargetValue());
         }));
+        // Creation and removal through the API: IIDM reports neither (gap G1, review 21 round 3, R3-M1). The way to
+        // record a creation is to create the regulation not regulating and switch it on then, see export.md
+        setters.add(new Setter("newVoltageRegulation (not regulating)", false, (n, h, change) -> {
+            if (change) {
+                h.newVoltageRegulation().withMode(RegulationMode.VOLTAGE).withRegulating(false).build();
+            }
+        }));
+        setters.add(new Setter("newVoltageRegulation (regulating)", false, (n, h, change) -> {
+            if (change) {
+                h.newVoltageRegulation().withMode(RegulationMode.VOLTAGE).withRegulating(true).build();
+            }
+        }));
+        setters.add(new Setter("removeVoltageRegulation", true, (n, h, change) -> {
+            if (change) {
+                h.removeVoltageRegulation();
+            }
+        }));
         setters.add(new Setter("setLocalTargetV", false,
             (n, h, change) -> h.setLocalTargetV(changed(h.getLocalTargetV(), change, 400.0))));
         setters.add(new Setter("setLocalTargetQ", false,
@@ -459,8 +476,9 @@ class RegulationSetterMatrixTest {
                 for (boolean withRegulation : new boolean[] {true, false}) {
                     // Without a VoltageRegulation there is nothing to call its setters on; and a remote regulation
                     // without a VoltageRegulation is the local case
+                    // The builder is a creation only on a holder without regulation
                     boolean skip = withRegulation
-                            ? !holder.importedWithRegulation()
+                            ? !holder.importedWithRegulation() || setter.name().startsWith("newVoltageRegulation")
                             : setter.needsRegulation() || holder.name().endsWith("remotely");
                     if (skip) {
                         continue;
