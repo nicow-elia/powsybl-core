@@ -73,6 +73,7 @@ import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.VR_MODE;
 import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.VR_REGULATING;
 import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.VR_TARGET_DEADBAND;
 import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.VR_TARGET_VALUE;
+import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.VR_TERMINAL;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -139,6 +140,64 @@ class PartialSshAttributeNameTest {
         assertEquals(List.of(LOCAL_TARGET_V), attributesUpdatedBy(network, () -> generator.setTargetV(generator.getTargetV() + 1.0)));
         assertEquals(List.of(VR_REGULATING, "voltageRegulatorOn"),
                 attributesUpdatedBy(network, () -> generator.setVoltageRegulatorOn(!generator.isVoltageRegulatorOn())));
+    }
+
+    /**
+     * The remaining echoes of plan 21 table 3.3 (review 21 finding m12): mode and terminal of a compensator, mode and
+     * terminal of a ratio tap changer, the terminal of a generator, the setpoints of both VSC classes and the flag of a
+     * detailed converter. The canonical event comes first.
+     */
+    @Test
+    @SuppressWarnings("removal")
+    void remainingEchoes() {
+        Network svcNetwork = SvcTestCaseFactory.create();
+        StaticVarCompensator svc = svcNetwork.getStaticVarCompensator("SVC2");
+        svc.setLocalTargetQ(10.0);
+        assertEquals(List.of(VR_MODE, "regulationMode"),
+                attributesUpdatedBy(svcNetwork, () -> svc.setRegulationMode(RegulationMode.REACTIVE_POWER)));
+
+        Network eurostag = EurostagTutorialExample1Factory.create();
+        Generator generator = eurostag.getGenerator("GEN");
+        // The bridge re-sets the target together with the terminal (VoltageRegulation.setTerminal(terminal, target))
+        assertEquals(List.of(VR_TERMINAL, VR_TARGET_VALUE, "regulatingTerminal"), attributesUpdatedBy(eurostag,
+                () -> generator.setRegulatingTerminal(eurostag.getLoad("LOAD").getTerminal())));
+        RatioTapChanger ratioTapChanger = eurostag.getTwoWindingsTransformer(EurostagTutorialExample1Factory.NHV2_NLOAD)
+                .getRatioTapChanger();
+        assertEquals(List.of(RATIO_TAP_CHANGER_PREFIX + "." + VR_TERMINAL, RATIO_TAP_CHANGER_PREFIX + ".regulationTerminal"),
+                attributesUpdatedBy(eurostag, () -> ratioTapChanger.setRegulationTerminal(eurostag.getLoad("LOAD").getTerminal())));
+        ratioTapChanger.getVoltageRegulation().setRegulating(false);
+        assertEquals(List.of(RATIO_TAP_CHANGER_PREFIX + "." + VR_MODE, RATIO_TAP_CHANGER_PREFIX + REGULATION_MODE_SUFFIX),
+                attributesUpdatedBy(eurostag, () -> ratioTapChanger.setRegulationMode(RegulationMode.REACTIVE_POWER)));
+
+        Network hvdc = HvdcTestNetwork.createVsc();
+        VscConverterStation station = hvdc.getVscConverterStation("C1");
+        assertEquals(List.of(LOCAL_TARGET_V, "voltageSetpoint"),
+                attributesUpdatedBy(hvdc, () -> station.setVoltageSetpoint(station.getVoltageSetpoint() + 1.0)));
+        assertEquals(List.of(LOCAL_TARGET_Q, "reactivePowerSetpoint"),
+                attributesUpdatedBy(hvdc, () -> station.setReactivePowerSetpoint(12.0)));
+
+        Network detailed = DcDetailedNetworkFactory.createVscSymmetricalMonopole();
+        VoltageSourceConverter vsc = detailed.getVoltageSourceConverterStream().findFirst().orElseThrow();
+        // The converter already regulates (reactive power): switching the voltage regulator on changes the mode
+        // without a canonical event and reports the echo alone, with the old value of the voltage kind of flag (F2, F3)
+        assertEquals(List.of("voltageRegulatorOn"),
+                attributesUpdatedBy(detailed, () -> vsc.setVoltageRegulatorOn(!vsc.isVoltageRegulatorOn())));
+        assertEquals(List.of(LOCAL_TARGET_V, "voltageSetpoint"),
+                attributesUpdatedBy(detailed, () -> vsc.setVoltageSetpoint(vsc.getVoltageSetpoint() + 1.0)));
+    }
+
+    /**
+     * Creating a VoltageRegulation with a terminal (gap G1 of plan 21): the creation itself is not reported, the
+     * terminal is (review 21 finding m18).
+     */
+    @Test
+    void voltageRegulationCreationWithATerminal() {
+        Network network = EurostagTutorialExample1Factory.create();
+        Generator generator = network.getGenerator("GEN");
+        generator.removeVoltageRegulation();
+        assertEquals(List.of(VR_TERMINAL), attributesUpdatedBy(network, () -> generator.newVoltageRegulation()
+                .withMode(RegulationMode.REACTIVE_POWER).withTargetValue(10.0)
+                .withTerminal(network.getLoad("LOAD").getTerminal()).withRegulating(false).build()));
     }
 
     /** A generator regulating reactive power remotely: the RemoteReactivePowerControl extension of before #3699. */
