@@ -1294,6 +1294,27 @@ class PartialSshExportTest extends AbstractSerDeTest {
     }
 
     /**
+     * A deprecated setter that has to create the VoltageRegulation reports the target under its deprecated name only
+     * ({@code RatioTapChanger.setRegulationValue} on a tap changer without regulation). The echo repeats no canonical
+     * event, so it is not dropped as a repetition: the change is refused instead of silently lost (review 21 m4).
+     */
+    @Test
+    @SuppressWarnings("removal")
+    void aTargetReportedOnlyUnderItsDeprecatedNameIsRejected() {
+        Network sender = readCgmesResources(TRANSFORMER_DIR, "transformer_EQ.xml", "transformer_SSH.xml");
+        RatioTapChanger ratioTapChanger = sender.getThreeWindingsTransformer("T3W").getLeg2().getRatioTapChanger();
+        ratioTapChanger.removeVoltageRegulation();
+
+        NetworkEventRecorder recorder = new NetworkEventRecorder();
+        sender.addListener(recorder);
+        ratioTapChanger.setRegulationValue(226.0);
+
+        PowsyblException exception = assertThrows(PowsyblException.class,
+                () -> PartialSshExport.toString(sender, recorder.getEvents(), UnsupportedChangeBehavior.FAIL));
+        assertTrue(exception.getMessage().contains("deprecated name only"), exception.getMessage());
+    }
+
+    /**
      * Open problem O2 of report 21: the change export writes the voltage regulation of ratio tap changers only; a
      * target of a ratio tap changer regulating reactive power is refused.
      */

@@ -427,8 +427,11 @@ class CgmesChangeTranslator {
         // are the same string.
         String attribute = EventCompactor.attributeKey(event, identifiable);
         if (attribute == null) {
-            // A legacy echo of a target the voltage regulation reported itself, which the compaction drops
-            return failure("the change repeats a voltage regulation target under its deprecated name");
+            // A target reported under its deprecated name only: the compaction drops the echoes that repeat a
+            // canonical event, the ones left are those of a deprecated setter that created the VoltageRegulation
+            return failure("the voltage regulation target is reported under its deprecated name only, which happens"
+                    + " when the deprecated setter created the VoltageRegulation (IIDM reports no creation); set the"
+                    + " target through the VoltageRegulation");
         }
         TapChangerAttribute tapChangerAttribute = tapChangerAttribute(attribute);
         return switch (identifiable) {

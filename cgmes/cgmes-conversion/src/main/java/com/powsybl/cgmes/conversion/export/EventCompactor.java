@@ -67,6 +67,12 @@ final class EventCompactor {
             NetworkEvent event = Objects.requireNonNull(eventList.get(i));
             keys[i] = updateKey(event, network);
             dropped[i] = keys[i] != null && keys[i].attributeKey() == null;
+            if (dropped[i] && !repeatsTheTargetBefore(eventList, i) && !isNoOp(event)) {
+                // A target echo that repeats nothing: the deprecated setter created the VoltageRegulation, which IIDM
+                // does not report (gap G1). Kept under its own name, so that the export refuses it instead of losing it
+                dropped[i] = false;
+                keys[i] = new UpdateKey(keys[i].identifiableId(), ((UpdateNetworkEvent) event).attribute());
+            }
             // An echo is a change whose key is the canonical name another attribute name was mapped onto
             echo[i] = !dropped[i] && event instanceof UpdateNetworkEvent update && keys[i] != null
                     && !keys[i].attributeKey().equals(update.attribute())
@@ -104,6 +110,25 @@ final class EventCompactor {
 
         return new CompactedChanges(List.copyOf(compactedEvents), Map.copyOf(firstChanges),
                 Set.copyOf(createdExtensions));
+    }
+
+    /** Whether the event before the given target echo is the canonical event of the same target, with the same value. */
+    private static boolean repeatsTheTargetBefore(List<NetworkEvent> events, int index) {
+        if (index == 0 || !(events.get(index - 1) instanceof UpdateNetworkEvent previous)) {
+            return false;
+        }
+        UpdateNetworkEvent echo = (UpdateNetworkEvent) events.get(index);
+        String attribute = previous.attribute();
+        boolean canonicalTarget = attribute.equals(CgmesChangeTranslator.LOCAL_TARGET_V)
+                || attribute.equals(CgmesChangeTranslator.LOCAL_TARGET_Q)
+                || attribute.equals(CgmesChangeTranslator.VR_TARGET_VALUE)
+                || attribute.endsWith("." + CgmesChangeTranslator.VR_TARGET_VALUE);
+        return canonicalTarget && previous.id().equals(echo.id()) && Objects.equals(previous.newValue(), echo.newValue());
+    }
+
+    /** Whether a change reports the value it already had: an echo of a setter that changed nothing. */
+    private static boolean isNoOp(NetworkEvent event) {
+        return event instanceof UpdateNetworkEvent update && Objects.equals(update.oldValue(), update.newValue());
     }
 
     /** Whether a change describes the given variant, which a change belonging to every variant always does. */
