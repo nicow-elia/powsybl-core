@@ -25,6 +25,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Properties;
 import java.util.function.Consumer;
+import java.util.function.ObjDoubleConsumer;
 import java.util.function.ToDoubleFunction;
 import java.util.stream.Stream;
 
@@ -51,7 +52,7 @@ class TerminalSignExportTest {
     Path tmpDir;
 
     record Family(String name, String dir, String[] files, Consumer<Network> reverseAndChange,
-                  ToDoubleFunction<Network> target) {
+                  ToDoubleFunction<Network> target, ObjDoubleConsumer<Network> setTarget) {
         @Override
         public String toString() {
             return name;
@@ -65,7 +66,8 @@ class TerminalSignExportTest {
                     n.getStaticVarCompensator("StaticVarCompensator-Q").setProperty(SIGN, "-1");
                     n.getStaticVarCompensator("StaticVarCompensator-Q").getVoltageRegulation().setTargetValue(220.0);
                 },
-                n -> n.getStaticVarCompensator("StaticVarCompensator-Q").getRegulatingTargetQ());
+                n -> n.getStaticVarCompensator("StaticVarCompensator-Q").getRegulatingTargetQ(),
+                (n, value) -> n.getStaticVarCompensator("StaticVarCompensator-Q").getVoltageRegulation().setTargetValue(value));
         Family phaseTapChanger = new Family("phase tap changer", "/update/transformer/",
                 new String[] {"transformer_EQ.xml", "transformer_SSH.xml"},
                 n -> {
@@ -73,7 +75,8 @@ class TerminalSignExportTest {
                     PhaseTapChanger ptc = n.getTwoWindingsTransformer("T2W").getPhaseTapChanger();
                     ptc.setRegulationValue(ptc.getRegulationValue() + 5.0);
                 },
-                n -> n.getTwoWindingsTransformer("T2W").getPhaseTapChanger().getRegulationValue());
+                n -> n.getTwoWindingsTransformer("T2W").getPhaseTapChanger().getRegulationValue(),
+                (n, value) -> n.getTwoWindingsTransformer("T2W").getPhaseTapChanger().setRegulationValue(value));
         Family vsc = new Family("VSC converter station", "/update/hvdc/", new String[] {"hvdc_EQ.xml", "hvdc_SSH.xml"},
                 n -> {
                     VscConverterStation station = station(n);
@@ -82,14 +85,17 @@ class TerminalSignExportTest {
                     station.getVoltageRegulation().setMode(RegulationMode.REACTIVE_POWER);
                     station.getVoltageRegulation().setTargetValue(30.0);
                 },
-                n -> station(n).getRegulatingTargetQ());
+                n -> station(n).getRegulatingTargetQ(),
+                (n, value) -> station(n).getVoltageRegulation().setTargetValue(value));
         Family ratioTapChanger = new Family("ratio tap changer regulating reactive power", "/issues/voltageRegulation/",
                 new String[] {"transformer_EQ.xml", "transformer_SSH.xml"},
                 n -> {
                     n.getTwoWindingsTransformer("PT2_2").setProperty(SIGN, "-1");
                     n.getTwoWindingsTransformer("PT2_2").getRatioTapChanger().getVoltageRegulation().setTargetValue(12.0);
                 },
-                n -> n.getTwoWindingsTransformer("PT2_2").getRatioTapChanger().getRegulatingTargetQ());
+                n -> n.getTwoWindingsTransformer("PT2_2").getRatioTapChanger().getRegulatingTargetQ(),
+                (n, value) -> n.getTwoWindingsTransformer("PT2_2").getRatioTapChanger().getVoltageRegulation()
+                        .setTargetValue(value));
         return Stream.of(svc, phaseTapChanger, vsc, ratioTapChanger).map(Arguments::of);
     }
 
@@ -181,14 +187,6 @@ class TerminalSignExportTest {
     /** Put the receiver back to the value of the base files, so that only the file can bring the change. */
     private static void receiverOriginalTarget(Network receiver, Family family) {
         Network original = readCgmesResources(family.dir(), family.files());
-        double value = family.target().applyAsDouble(original);
-        switch (family.name()) {
-            case "static var compensator" ->
-                receiver.getStaticVarCompensator("StaticVarCompensator-Q").getVoltageRegulation().setTargetValue(value);
-            case "phase tap changer" -> receiver.getTwoWindingsTransformer("T2W").getPhaseTapChanger().setRegulationValue(value);
-            case "ratio tap changer regulating reactive power" ->
-                receiver.getTwoWindingsTransformer("PT2_2").getRatioTapChanger().getVoltageRegulation().setTargetValue(value);
-            default -> station(receiver).getVoltageRegulation().setTargetValue(value);
-        }
+        family.setTarget().accept(receiver, family.target().applyAsDouble(original));
     }
 }

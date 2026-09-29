@@ -8,10 +8,10 @@
 package com.powsybl.cgmes.conversion.export;
 
 import com.powsybl.cgmes.conversion.export.EventCompactor.CompactedChanges;
+import com.powsybl.cgmes.conversion.test.RecordedChangeScenarios;
 import com.powsybl.iidm.network.BoundaryLine;
 import com.powsybl.iidm.network.Generator;
 import com.powsybl.iidm.network.Network;
-import com.powsybl.iidm.network.NetworkEventRecorder;
 import com.powsybl.iidm.network.ShuntCompensator;
 import com.powsybl.iidm.network.StaticVarCompensator;
 import com.powsybl.iidm.network.events.CreationNetworkEvent;
@@ -223,14 +223,6 @@ class EventCompactorTest {
 
     // The echoes of the deprecated voltage regulation setters (powsybl-core #3699), see LegacyRegulationKeys
 
-    private static List<NetworkEvent> recordedBy(Network network, Runnable change) {
-        NetworkEventRecorder recorder = new NetworkEventRecorder();
-        network.addListener(recorder);
-        change.run();
-        network.removeListener(recorder);
-        return List.copyOf(recorder.getEvents());
-    }
-
     /**
      * Rule 1: an echo repeating its canonical event is dropped, whatever lies between them; the old value kept is the
      * canonical one.
@@ -241,7 +233,7 @@ class EventCompactorTest {
         Network network = EurostagTutorialExample1Factory.create();
         Generator generator = network.getGenerator("GEN");
         boolean regulating = generator.getVoltageRegulation().isRegulating();
-        List<NetworkEvent> events = recordedBy(network, () -> {
+        List<NetworkEvent> events = RecordedChangeScenarios.record(network, n -> {
             generator.setVoltageRegulatorOn(!regulating);
             generator.getVoltageRegulation().setRegulating(regulating);
             generator.setVoltageRegulatorOn(!regulating);
@@ -266,7 +258,7 @@ class EventCompactorTest {
         Network network = ShuntTestCaseFactory.create();
         ShuntCompensator shunt = network.getShuntCompensator("SHUNT");
         shunt.getVoltageRegulation().setTargetDeadband(1.0);
-        List<NetworkEvent> events = recordedBy(network, () -> shunt.setTargetDeadband(1.0));
+        List<NetworkEvent> events = RecordedChangeScenarios.record(network, n -> shunt.setTargetDeadband(1.0));
         assertEquals(1, events.size());
         assertTrue(Double.isNaN((Double) ((UpdateNetworkEvent) events.get(0)).oldValue()));
         CompactedChanges changes = EventCompactor.compact(events, VARIANT, network);
@@ -335,7 +327,7 @@ class EventCompactorTest {
         Network network = SvcTestCaseFactory.create();
         StaticVarCompensator svc = network.getStaticVarCompensator("SVC2");
         double before = svc.getLocalTargetV();
-        List<NetworkEvent> events = recordedBy(network, () -> svc.setVoltageSetpoint(before + 1.0));
+        List<NetworkEvent> events = RecordedChangeScenarios.record(network, n -> svc.setVoltageSetpoint(before + 1.0));
         assertEquals(2, events.size());
         CompactedChanges changes = EventCompactor.compact(events, VARIANT, network);
 
@@ -373,7 +365,7 @@ class EventCompactorTest {
     void aBoundaryLineTargetIsNotAnEcho() {
         Network network = BoundaryLineNetworkFactory.createWithGeneration();
         BoundaryLine.Generation generation = network.getBoundaryLine("BL").getGeneration();
-        List<NetworkEvent> events = recordedBy(network, () -> generation.setTargetV(generation.getTargetV() + 1.0));
+        List<NetworkEvent> events = RecordedChangeScenarios.record(network, n -> generation.setTargetV(generation.getTargetV() + 1.0));
         CompactedChanges changes = EventCompactor.compact(events, VARIANT, network);
 
         assertEquals(events, changes.events());

@@ -7,6 +7,7 @@
  */
 package com.powsybl.cgmes.conversion.export;
 
+import com.powsybl.cgmes.conversion.test.RecordedChangeScenarios;
 import com.powsybl.iidm.network.AcDcConverter;
 import com.powsybl.iidm.network.BoundaryLine;
 import com.powsybl.iidm.network.DcSwitch;
@@ -16,7 +17,6 @@ import com.powsybl.iidm.network.LccConverterStation;
 import com.powsybl.iidm.network.LineCommutatedConverter;
 import com.powsybl.iidm.network.Load;
 import com.powsybl.iidm.network.Network;
-import com.powsybl.iidm.network.NetworkEventRecorder;
 import com.powsybl.iidm.network.PhaseTapChanger;
 import com.powsybl.iidm.network.RatioTapChanger;
 import com.powsybl.iidm.network.ShuntCompensator;
@@ -555,13 +555,6 @@ class PartialSshAttributeNameTest {
     }
 
     private static List<NetworkEvent> eventsRecordedBy(Network network, Runnable change) {
-        NetworkEventRecorder recorder = new NetworkEventRecorder();
-        network.addListener(recorder);
-        try {
-            change.run();
-        } finally {
-            network.removeListener(recorder);
-        }
-        return List.copyOf(recorder.getEvents());
+        return RecordedChangeScenarios.record(network, n -> change.run());
     }
 }

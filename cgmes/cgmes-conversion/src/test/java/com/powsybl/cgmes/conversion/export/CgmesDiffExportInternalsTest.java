@@ -113,7 +113,7 @@ class CgmesDiffExportInternalsTest {
         options.header(SSH).addDependentOn(sourceEquipmentId);
         CgmesExportContext context = new CgmesExportContext(network);
         DifferenceModelBuilder builder = new DifferenceModelBuilder(network, context,
-                EventCompactor.compact(List.of(), null, null), options);
+                EventCompactor.CompactedChanges.NONE, options);
 
         // No mapping produces equipment statements yet, so the two buffers are built by hand
         CgmesPropertyBuffer after = new CgmesPropertyBuffer();
@@ -148,7 +148,7 @@ class CgmesDiffExportInternalsTest {
         options.header(SSH).clearDependencies().addDependentOn("urn:uuid:explicit");
 
         DifferenceModelBuilder builder = new DifferenceModelBuilder(network, new CgmesExportContext(network),
-                EventCompactor.compact(List.of(), null, null), options);
+                EventCompactor.CompactedChanges.NONE, options);
         CgmesPropertyBuffer after = new CgmesPropertyBuffer();
         after.mergeFrom(CgmesPropertyBuffer.newUpdates("ConformLoad", "EnergyConsumer").value("EnergyConsumer.p", 12.5)
                 .object(EQ, "ConformLoad", "EnergyConsumer").value("EnergyConsumer.pfixed", 2.0).updates());

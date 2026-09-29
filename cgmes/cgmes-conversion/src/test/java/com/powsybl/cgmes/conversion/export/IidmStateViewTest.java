@@ -8,6 +8,7 @@
 package com.powsybl.cgmes.conversion.export;
 
 import com.powsybl.cgmes.conversion.export.EventCompactor.CompactedChanges;
+import com.powsybl.cgmes.conversion.test.RecordedChangeScenarios;
 import com.powsybl.iidm.network.CurrentLimits;
 import com.powsybl.iidm.network.Generator;
 import com.powsybl.iidm.network.HvdcLine;
@@ -15,7 +16,6 @@ import com.powsybl.iidm.network.Identifiable;
 import com.powsybl.iidm.network.Line;
 import com.powsybl.iidm.network.Load;
 import com.powsybl.iidm.network.Network;
-import com.powsybl.iidm.network.NetworkEventRecorder;
 import com.powsybl.iidm.network.events.ExtensionCreationNetworkEvent;
 import com.powsybl.iidm.network.events.ExtensionUpdateNetworkEvent;
 import com.powsybl.iidm.network.events.NetworkEvent;
@@ -131,11 +131,9 @@ class IidmStateViewTest {
         Network regulated = EurostagTutorialExample1Factory.create();
         Generator generator = regulated.getGenerator("GEN");
         boolean regulating = generator.getVoltageRegulation().isRegulating();
-        NetworkEventRecorder recorder = new NetworkEventRecorder();
-        regulated.addListener(recorder);
-        generator.setVoltageRegulatorOn(!regulating);
-        assertEquals(2, recorder.getEvents().size());
-        IidmStateView state = IidmStateView.before(EventCompactor.compact(List.copyOf(recorder.getEvents()), VARIANT, regulated));
+        List<NetworkEvent> events = RecordedChangeScenarios.record(regulated, n -> generator.setVoltageRegulatorOn(!regulating));
+        assertEquals(2, events.size());
+        IidmStateView state = IidmStateView.before(EventCompactor.compact(events, VARIANT, regulated));
         assertEquals(regulating, state.getBoolean(generator, CgmesChangeTranslator.VR_REGULATING, () -> !regulating));
         assertTrue(state.unconsumedKeys().isEmpty());
     }
