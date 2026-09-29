@@ -282,8 +282,9 @@ class RegulationSetterMatrixTest {
         setters.add(new Setter("VoltageRegulation.setTerminal", true, (n, h, change) -> {
             VoltageRegulation regulation = h.getVoltageRegulation();
             Terminal terminal = change ? anotherTerminal(n, holder.owner().apply(n), regulation.getTerminal()) : regulation.getTerminal();
-            // A defined target, so that the row tests the export and not the validation (review 21 closing, c-m10)
-            double target = regulation.isWithTerminal() ? regulation.getTargetValue()
+            // A defined target, so that the row tests the export and not the validation (review 21 closing, c-m10).
+            // Without a terminal the target stays NaN, as IIDM requires: the no-op of a regulation without terminal
+            double target = terminal == null || regulation.isWithTerminal() ? regulation.getTargetValue()
                     : regulation.getMode() == RegulationMode.REACTIVE_POWER ? h.getRegulatingTargetQ() : h.getRegulatingTargetV();
             regulation.setTerminal(terminal, target);
         }));
@@ -340,6 +341,8 @@ class RegulationSetterMatrixTest {
                     Generator g = (Generator) h;
                     g.setTargetQ(changed(g.getTargetQ(), change, 10.0));
                 }));
+                // The no-op of a regulation without terminal is setRegulatingTerminal(null), which IIDM refuses: the bridge
+                // passes the regulating target with the null terminal, not NaN (upstream; the same in the other bridges)
                 setters.add(new Setter("Generator.setRegulatingTerminal", false, (n, h, change) -> {
                     Generator g = (Generator) h;
                     g.setRegulatingTerminal(change ? anotherTerminal(n, g, g.getRegulatingTerminal()) : currentTerminal(g));

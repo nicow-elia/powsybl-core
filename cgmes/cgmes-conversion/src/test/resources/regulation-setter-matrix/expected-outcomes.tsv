@@ -6,7 +6,7 @@ generator regulating locally | VoltageRegulation.setRegulating | with regulation
 generator regulating locally | VoltageRegulation.setMode | with regulation | change	IIDM_REFUSES	iidm-validation
 generator regulating locally | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED	no-change
 generator regulating locally | VoltageRegulation.setTerminal | with regulation | change	REFUSED	terminal-eq
-generator regulating locally | VoltageRegulation.setTerminal | with regulation | no-op	IIDM_REFUSES	iidm-validation
+generator regulating locally | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED	no-change
 generator regulating locally | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT	G1
 generator regulating locally | newVoltageRegulation (not regulating) | without regulation | no-op	UNCHANGED	no-change
 generator regulating locally | newVoltageRegulation (regulating) | without regulation | change	IIDM_SILENT	G1
@@ -154,7 +154,7 @@ static var compensator | VoltageRegulation.setRegulating | with regulation | no-
 static var compensator | VoltageRegulation.setMode | with regulation | change	REFUSED	mode-eq
 static var compensator | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED	no-change
 static var compensator | VoltageRegulation.setTerminal | with regulation | change	REFUSED	terminal-eq
-static var compensator | VoltageRegulation.setTerminal | with regulation | no-op	IIDM_REFUSES	iidm-validation
+static var compensator | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED	no-change
 static var compensator | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT	G1
 static var compensator | newVoltageRegulation (not regulating) | without regulation | no-op	UNCHANGED	no-change
 static var compensator | newVoltageRegulation (regulating) | without regulation | change	IIDM_SILENT	G1
@@ -296,7 +296,7 @@ VSC converter station 1 | VoltageRegulation.setRegulating | with regulation | no
 VSC converter station 1 | VoltageRegulation.setMode | with regulation | change	IIDM_REFUSES	iidm-validation
 VSC converter station 1 | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED	no-change
 VSC converter station 1 | VoltageRegulation.setTerminal | with regulation | change	REFUSED	own-terminal
-VSC converter station 1 | VoltageRegulation.setTerminal | with regulation | no-op	IIDM_REFUSES	iidm-validation
+VSC converter station 1 | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED	no-change
 VSC converter station 1 | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT	G1
 VSC converter station 1 | newVoltageRegulation (not regulating) | without regulation | no-op	UNCHANGED	no-change
 VSC converter station 1 | newVoltageRegulation (regulating) | without regulation | change	IIDM_SILENT	G1
@@ -342,7 +342,7 @@ VSC converter station 2 | VoltageRegulation.setRegulating | with regulation | no
 VSC converter station 2 | VoltageRegulation.setMode | with regulation | change	IIDM_REFUSES	iidm-validation
 VSC converter station 2 | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED	no-change
 VSC converter station 2 | VoltageRegulation.setTerminal | with regulation | change	REFUSED	own-terminal
-VSC converter station 2 | VoltageRegulation.setTerminal | with regulation | no-op	IIDM_REFUSES	iidm-validation
+VSC converter station 2 | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED	no-change
 VSC converter station 2 | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT	G1
 VSC converter station 2 | newVoltageRegulation (not regulating) | without regulation | no-op	UNCHANGED	no-change
 VSC converter station 2 | newVoltageRegulation (regulating) | without regulation | change	IIDM_SILENT	G1
