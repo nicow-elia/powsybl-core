@@ -1311,6 +1311,36 @@ class PartialSshExportTest extends AbstractSerDeTest {
         PowsyblException detailedRefusal = assertThrows(PowsyblException.class,
                 () -> PartialSshExport.toString(detailed, detailedRecorder.getEvents(), UnsupportedChangeBehavior.FAIL));
         assertTrue(detailedRefusal.getMessage().contains("has no control flag"), detailedRefusal.getMessage());
+        // The remedy (review 21 round 2, r2-m4)
+        assertTrue(stationRefusal.getMessage().contains("Remedy: let it regulate"), stationRefusal.getMessage());
+
+        // A power change of the line writes the blocks of both stations, so it is refused as well (r2-m2)
+        Network line = readCgmesResources(HVDC_DIR, "hvdc_EQ.xml", "hvdc_SSH.xml");
+        converter(line, 2).getVoltageRegulation().setRegulating(false);
+        List<NetworkEvent> lineChange = RecordedChangeScenarios.record(line,
+                n -> n.getHvdcLine("DCLineSegment-Vsc").setActivePowerSetpoint(300.0));
+        PowsyblException lineRefusal = assertThrows(PowsyblException.class,
+                () -> PartialSshExport.toString(line, lineChange, UnsupportedChangeBehavior.FAIL));
+        assertTrue(lineRefusal.getMessage().contains("has no control flag"), lineRefusal.getMessage());
+    }
+
+    /**
+     * A station without VoltageRegulation cannot be described: the CGMES import gives every VsConverter one, from
+     * {@code qPccControl}, so the receiver would gain a regulation the sender does not have. A power change of its line
+     * is refused with the remedy (review 21 round 2, r2-m3).
+     */
+    @Test
+    void vscStationWithoutVoltageRegulationIsRejected() {
+        Network sender = readCgmesResources(HVDC_DIR, "hvdc_EQ.xml", "hvdc_SSH.xml");
+        converter(sender, 2).removeVoltageRegulation();
+        List<NetworkEvent> events = RecordedChangeScenarios.record(sender,
+                n -> n.getHvdcLine("DCLineSegment-Vsc").setActivePowerSetpoint(300.0));
+
+        PowsyblException exception = assertThrows(PowsyblException.class,
+                () -> PartialSshExport.toString(sender, events, UnsupportedChangeBehavior.FAIL));
+        assertTrue(exception.getMessage().contains("has no VoltageRegulation, but the CGMES update gives it one from its"
+                + " VsConverter.qPccControl"), exception.getMessage());
+        assertTrue(exception.getMessage().contains("Remedy: "), exception.getMessage());
     }
 
     /**

@@ -239,18 +239,19 @@ class CgmesChangeRegulatingControls {
     private Result<RegulatingControlView, String> holderView(RegulationRef regulation, String controlId, IidmStateView state) {
         Identifiable<?> owner = regulation.owner();
         if (regulation.regulation() == null) {
-            return failure(owner.getType() + " " + owner.getId() + " has no voltage regulation the steady state"
-                    + " hypothesis profile can express");
+            return failure(CgmesChangeTranslator.noVoltageRegulation(owner, "RegulatingControl"));
         }
         RegulationMode mode = regulation.mode(state);
         if (mode == null) {
             return failure("the voltage regulation of " + owner.getType() + " " + owner.getId()
-                    + " has no mode in this variant");
+                    + " has no mode in this variant. " + CgmesChangeTranslator.REMEDY + "set the mode of its"
+                    + " VoltageRegulation in this variant");
         }
         if (regulation.holder() instanceof Generator generator && !agreesWithCgmesMode(generator, mode)) {
             return failure("the voltage regulation of generator " + generator.getId() + " is in mode " + mode
                     + ", but the CGMES update reads its RegulatingControl in the mode "
-                    + generator.getProperty(PROPERTY_MODE) + " recorded at import");
+                    + generator.getProperty(PROPERTY_MODE) + " recorded at import. " + CgmesChangeTranslator.REMEDY
+                    + "keep the mode the import set, or export the equipment model with the change");
         }
         return success(SteadyStateHypothesisExport.regulatingControlView(regulation, controlId, context, state));
     }

@@ -223,14 +223,21 @@ regulation of a generator, a shunt compensator, a static var compensator, a VSC 
 `VoltageRegulation` (target, deadband, flag, mode), plus local targets kept by the holder itself. The deprecated setters
 (`setVoltageRegulatorOn`, `setTargetV`, `setVoltageSetpoint`, `RatioTapChanger.setRegulationValue`, ...) still work: they
 write through the `VoltageRegulation`, which reports the change under its own name, and then report it once more under
-their historical name. The export treats that second event as an *echo*: a repeated flag, mode, deadband or terminal is
-merged into the change it repeats, and a repeated target is dropped, the target having been reported under its own name
-first. A change made through a deprecated setter therefore exports the same file as the same change made through the
-`VoltageRegulation`. Creating or removing a `VoltageRegulation` is not reported by IIDM at all: a regulation created after
-the recording started is exported from the live state only (see the limitations of the
+their historical name. The export treats that second event as an *echo*, with one rule:
+
+1. an echo that repeats a value an earlier event of the same equipment reported under its own name is dropped;
+2. an echo that sets the value it had, or that reports no old value (`setTargetDeadband` reports `NaN`), is dropped;
+3. any other echo is the only report of a change the `VoltageRegulation` did not report. That happens when the deprecated
+   setter had to create the `VoltageRegulation` (IIDM reports no creation) or reported a wrong old value; the state
+   before the change set cannot be told, so both change exports refuse it. The refusal says so and gives the remedy:
+   give the equipment its `VoltageRegulation` before recording, and change it through its own setters.
+
+A change made through a deprecated setter on equipment that has its `VoltageRegulation` therefore exports the same file
+as the same change made through the `VoltageRegulation`. Creating or removing a `VoltageRegulation` is not reported by
+IIDM at all: a regulation created without any other report is not exported (see the limitations of the
 [difference model export](#difference-model-export-from-recorded-changes)).
 
-CGMES 3 operational limit values are steady state data and *are* exported, as `CurrentLimit.value`, `ActivePowerLimit.value`, `ApparentPowerLimit.value` and `VoltageLimit.value`; CGMES 2.4.15 limit values and all branch impedances belong to the equipment profile and need a [difference model](#cgmes-difference-model-export). Anything else, in particular the creation or the removal of equipment and changes of terminal connection status, has no representation in the SSH profile. Every export method takes an `UnsupportedChangeBehavior` saying what to do with such a change: `FAIL` rejects it, so that it is never silently lost, and `IGNORE` logs a warning and leaves it out of the file. Using the `write` endpoints return value, you can obtain a log of changes that made it to the file for tracking the effect of `IGNORE`.
+CGMES 3 operational limit values are steady state data and *are* exported, as `CurrentLimit.value`, `ActivePowerLimit.value`, `ApparentPowerLimit.value` and `VoltageLimit.value`; CGMES 2.4.15 limit values and all branch impedances belong to the equipment profile and need a [difference model](#cgmes-difference-model-export). Anything else, in particular the creation or the removal of equipment and changes of terminal connection status, has no representation in the SSH profile. Every export method takes an `UnsupportedChangeBehavior` saying what to do with such a change: `FAIL` rejects it, so that it is never silently lost (a refusal of a regulation change names the cause and, after `Remedy:`, what to do instead), and `IGNORE` logs a warning and leaves it out of the file. Using the `write` endpoints return value, you can obtain a log of changes that made it to the file for tracking the effect of `IGNORE`.
 
 ### Header options
 
@@ -278,6 +285,7 @@ Other changes are reported as unsupported, because the SSH profile cannot expres
 * A change of the regulation of a generator whose `VoltageRegulation` mode disagrees with the CGMES mode recorded at import, or whose `VoltageRegulation` has no mode in the working variant.
 * A change of a VSC converter, of either DC model, whose `VoltageRegulation` does not regulate: a `VsConverter` has no control flag, and the import rebuilds the regulation from `qPccControl` and always makes it regulate. This includes a station after the deprecated `setVoltageRegulatorOn(false)`, which keeps the voltage mode and only stops regulating; to switch a station to reactive power regulation, change the mode of its `VoltageRegulation`. A change of the power of an HVDC line with such a station is refused for the same reason.
 * A regulation change of a ratio tap changer that does not regulate voltage: the change export only writes the voltage regulation of ratio tap changers.
+* A change of a generator, a shunt compensator, a `StaticVarCompensator` or a VSC converter that has no `VoltageRegulation` although its CGMES equipment gives it one on every import (from its `RegulatingControl`, or from `qPccControl` for a `VsConverter`): the receiver would gain a regulation the sender does not have. Give the equipment a `VoltageRegulation`, not regulating if it must not regulate, before recording.
 * The power factor of a line commutated converter whose line carries no power: the factor is carried by `ACDCConverter.p` and `q`, which are then zero.
 * The converters mode of an HVDC line of voltage source converters whose setpoint is zero: a `VsConverter` has no operating mode, the mode is only derived from a non zero `targetPpcc`.
 * Switching the regulation of a generator imported from an `EquivalentInjection` on when the equipment model gives it no regulation capability: the CGMES update keeps its regulation off whatever the file says.
@@ -309,7 +317,7 @@ Five defects of the CGMES import and of the full SSH export had to be fixed for 
 * [#4028](https://github.com/powsybl/powsybl-core/issues/4028) (fixed upstream by #4057): the CGMES update read an `ACDCConverter.targetPpcc` of zero as no value at all, so a line brought down to no power kept the power it had.
 * [#4029](https://github.com/powsybl/powsybl-core/issues/4029) (fixed upstream by #4103): the steady state hypothesis of an `AsynchronousMachine` was written without its kind and its control flag, and the update query demands all four properties, so the setpoints of such a load could never be read back.
 * [#4034](https://github.com/powsybl/powsybl-core/issues/4034) (fixed upstream by #4107): the update query did not select `PhaseTapChangerSymmetrical`, so a position written for one was silently dropped on import.
-* Terminal sign of regulation targets (not fixed upstream): the import multiplies the target of a generator or compensator regulating reactive power, the `targetQpcc` of a VSC converter station and the active power target of a phase tap changer by the recorded `CGMES.terminalSign`; the export now applies the same sign.
+* Terminal sign of regulation targets (not fixed upstream): the import multiplies the target of a generator or compensator regulating reactive power, the `targetQpcc` of a VSC converter station and the active power target of a phase tap changer by the recorded `CGMES.terminalSign`; the export applies the same sign, and to the reactive power target of a ratio tap changer, when the SSH is exported without its equipment model (read against the original EQ); with its EQ the regulating terminal is the IIDM one and the sign is +1.
 
 (cgmes-difference-model-export)=
 ## Difference model export from recorded changes

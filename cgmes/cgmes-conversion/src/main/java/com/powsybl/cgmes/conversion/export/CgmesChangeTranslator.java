@@ -433,6 +433,10 @@ class CgmesChangeTranslator {
         // duration a limit change carries in its payload select the right limit. For every other attribute the two
         // are the same string.
         String attribute = EventCompactor.attributeKey(event, identifiable);
+        Optional<String> rebuilt = regulationTheImportRebuilds(identifiable);
+        if (rebuilt.isPresent()) {
+            return failure(rebuilt.get());
+        }
         TapChangerAttribute tapChangerAttribute = tapChangerAttribute(attribute);
         return switch (identifiable) {
             case Switch sw when OPEN.equals(attribute) -> switchUpdates(sw);
@@ -474,10 +478,45 @@ class CgmesChangeTranslator {
     private static String equipmentOnlyRegulation(String attribute) {
         return switch (attribute.substring(attribute.lastIndexOf('.') + 1)) {
             case "RegulationMode", "regulationMode" ->
-                "the regulation mode is RegulatingControl.mode, which belongs to the EQ profile";
-            case "Terminal" -> "the regulating terminal is RegulatingControl.Terminal, which belongs to the EQ profile";
-            default -> "a CGMES RegulatingControl has no slope, the " + attribute + " has no CGMES property";
+                "the regulation mode is RegulatingControl.mode, which belongs to the EQ profile. " + REMEDY
+                        + "export the equipment model with the change (a full CGMES export), or keep the mode the"
+                        + " import set";
+            case "Terminal", "regulationTerminal" ->
+                "the regulating terminal is RegulatingControl.Terminal, which belongs to the EQ profile. " + REMEDY
+                        + "export the equipment model with the change (a full CGMES export), or keep the regulating"
+                        + " terminal the import set";
+            default -> "a CGMES RegulatingControl has no slope, the " + attribute + " has no CGMES property. "
+                    + REMEDY + "leave the slope as the import set it";
         };
+    }
+
+    /**
+     * Why the given holder cannot be described although it changed, empty when it can: it has no VoltageRegulation,
+     * but the CGMES update gives it one on every update of its equipment, from the RegulatingControl the equipment
+     * model assigns it (a voltage source converter always has one, from {@code qPccControl}). A receiver would
+     * therefore not end in the state of the sender (review 21 round 2, r2-m3).
+     */
+    private static Optional<String> regulationTheImportRebuilds(Identifiable<?> identifiable) {
+        String source = switch (identifiable) {
+            case VscConverterStation station when station.getVoltageRegulation() == null -> "VsConverter.qPccControl";
+            case VoltageSourceConverter converter when converter.getVoltageRegulation() == null ->
+                "VsConverter.qPccControl";
+            case Generator generator when generator.getVoltageRegulation() == null
+                    && generator.hasProperty(PROPERTY_REGULATING_CONTROL) -> "RegulatingControl";
+            case ShuntCompensator shunt when shunt.getVoltageRegulation() == null
+                    && shunt.hasProperty(PROPERTY_REGULATING_CONTROL) -> "RegulatingControl";
+            case StaticVarCompensator svc when svc.getVoltageRegulation() == null
+                    && svc.hasProperty(PROPERTY_REGULATING_CONTROL) -> "RegulatingControl";
+            default -> null;
+        };
+        return Optional.ofNullable(source).map(from -> noVoltageRegulation(identifiable, from));
+    }
+
+    /** The refusal of a holder without VoltageRegulation whose CGMES equipment makes the import give it one. */
+    static String noVoltageRegulation(Identifiable<?> holder, String source) {
+        return holder.getType() + " " + holder.getId() + " has no VoltageRegulation, but the CGMES update gives it one"
+                + " from its " + source + ", so the receiver would not end in this state. " + REMEDY + "give it a"
+                + " VoltageRegulation (not regulating, if it must not regulate) before recording the change set";
     }
 
     /** No mapping claimed the change: no CGMES profile this export writes has a property for it. */
@@ -488,6 +527,11 @@ class CgmesChangeTranslator {
         if (isTransformer(identifiable) && TRANSFORMER_IMPEDANCE_ATTRIBUTES.contains(impedanceAttribute)) {
             return failure("no CGMES property corresponds to " + identifiable.getType() + "." + attribute
                     + " (transformer impedances cannot be mapped to CGMES ends, see docs)");
+        }
+        if (attribute.endsWith(VR_TARGET_DEADBAND)) {
+            return failure("the CGMES update reads the deadband of a RegulatingControl for shunt compensators and tap"
+                    + " changers only, not for a " + identifiable.getType() + ". " + REMEDY + "leave the deadband"
+                    + " of this regulation as the import set it");
         }
         return failure("no CGMES steady state property corresponds to " + identifiable.getType() + "." + attribute);
     }
@@ -896,10 +940,13 @@ class CgmesChangeTranslator {
             RegulationRef regulation = ref.regulation();
             if (regulation.regulation() == null) {
                 return failure("tap changer " + aliasType + " of " + transformer.getId()
-                        + " has no voltage regulation the receiving side could read");
+                        + " has no voltage regulation the receiving side could read. " + REMEDY + "give it a"
+                        + " VoltageRegulation (not regulating, if it must not regulate) before recording the change"
+                        + " set");
             }
             if (regulation.mode(state) != RegulationMode.VOLTAGE) {
-                return failure("the change export only writes the voltage regulation of ratio tap changers");
+                return failure("the change export only writes the voltage regulation of ratio tap changers (open"
+                        + " problem O2 of report 21). " + REMEDY + "export the full steady state hypothesis instead");
             }
         } else if (tapChanger instanceof PhaseTapChanger phaseTapChanger && phaseTapChanger.getRegulationTerminal() == null) {
             return failure("tap changer " + aliasType + " of " + transformer.getId()
@@ -909,7 +956,8 @@ class CgmesChangeTranslator {
                 .map(controlId -> regulatingControls.updatesFor(controlId, state)
                         .map(regulatingControl -> merge(tapChangerBlock, regulatingControl)))
                 .orElseGet(() -> failure("tap changer " + aliasType + " of " + transformer.getId()
-                        + " has no CGMES tap changer control to carry this change"));
+                        + " has no CGMES tap changer control to carry this change. " + REMEDY + "keep its regulation"
+                        + " as the equipment model defines it, or export the equipment model with the change"));
     }
 
     private <C extends Connectable<C>> CgmesPropertyBuffer tapChangerBlock(C transformer, String aliasType, String defaultClassName,
@@ -933,7 +981,8 @@ class CgmesChangeTranslator {
     private Result<CgmesPropertyBuffer, String> shuntCompensatorUpdates(ShuntCompensator shunt, String attribute) {
         if (Boolean.parseBoolean(shunt.getProperty(PROPERTY_IS_EQUIVALENT_SHUNT))) {
             return failure("shunt compensator " + shunt.getId()
-                    + " is exported as an EquivalentShunt, which has no steady state properties");
+                    + " is exported as an EquivalentShunt, which has no steady state properties. " + REMEDY
+                    + "keep it as the equipment model defines it, or export the equipment model with the change");
         }
         // The CGMES update reads the section count and the control flag of a shunt as one block, so every change
         // of either writes both. Only a change of the regulation itself also describes the RegulatingControl.
@@ -1001,7 +1050,12 @@ class CgmesChangeTranslator {
         if (converter instanceof VoltageRegulationHolder<?> holder && holder.getVoltageRegulation() != null
                 && !new RegulationRef(converter, "", holder).isRegulating(state)) {
             return Optional.of("converter " + converter.getId() + " does not regulate, and a VsConverter has no control"
-                    + " flag: the CGMES import always makes it regulate in the mode qPccControl names");
+                    + " flag: the CGMES import always makes it regulate in the mode qPccControl names. " + REMEDY
+                    + "let it regulate, in REACTIVE_POWER mode with its reactive power target for a converter that"
+                    + " must not regulate voltage");
+        }
+        if (converter instanceof VoltageRegulationHolder<?> holder && holder.getVoltageRegulation() == null) {
+            return Optional.of(noVoltageRegulation(converter, "VsConverter.qPccControl"));
         }
         return Optional.empty();
     }
@@ -1076,7 +1130,8 @@ class CgmesChangeTranslator {
         }
         if (regulation.regulation() != null && regulation.mode(state) == null) {
             return failure("the voltage regulation of converter " + converter.getId() + " has no mode in this"
-                    + " variant, so qPccControl cannot be written");
+                    + " variant, so qPccControl cannot be written. " + REMEDY + "set the mode of its"
+                    + " VoltageRegulation in this variant");
         }
         CgmesPropertyBuffer control = vscControlModeUpdates(converter).object(CgmesNames.VS_CONVERTER, cgmesId(converter))
                 .value("VsConverter.targetUpcc", SteadyStateHypothesisExport.vscTargetUpcc(regulation, state))
@@ -1713,7 +1768,8 @@ class CgmesChangeTranslator {
     private Result<String, String> regulatingControlId(Identifiable<?> identifiable) {
         if (!identifiable.hasProperty(PROPERTY_REGULATING_CONTROL)) {
             return failure(identifiable.getType() + " " + identifiable.getId()
-                    + " has no CGMES regulating control to carry this change");
+                    + " has no CGMES regulating control to carry this change. " + REMEDY + "keep its regulation as"
+                    + " the equipment model defines it, or export the equipment model with the change");
         }
         return success(context.getNamingStrategy().getCgmesIdFromProperty(identifiable, PROPERTY_REGULATING_CONTROL));
     }
