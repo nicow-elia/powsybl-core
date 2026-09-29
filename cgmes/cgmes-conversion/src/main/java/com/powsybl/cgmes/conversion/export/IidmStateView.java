@@ -93,6 +93,10 @@ final class IidmStateView {
         if (old == NOT_CHANGED) {
             return live.get();
         }
+        if (old == null) {
+            // A recorded null is a value: the regulation mode of a VoltageRegulation in a variant it was not created in
+            return null;
+        }
         if (type.isInstance(old)) {
             return type.cast(old);
         }

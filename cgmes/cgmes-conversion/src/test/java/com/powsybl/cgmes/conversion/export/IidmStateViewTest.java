@@ -9,11 +9,13 @@ package com.powsybl.cgmes.conversion.export;
 
 import com.powsybl.cgmes.conversion.export.EventCompactor.CompactedChanges;
 import com.powsybl.iidm.network.CurrentLimits;
+import com.powsybl.iidm.network.Generator;
 import com.powsybl.iidm.network.HvdcLine;
 import com.powsybl.iidm.network.Identifiable;
 import com.powsybl.iidm.network.Line;
 import com.powsybl.iidm.network.Load;
 import com.powsybl.iidm.network.Network;
+import com.powsybl.iidm.network.NetworkEventRecorder;
 import com.powsybl.iidm.network.events.ExtensionCreationNetworkEvent;
 import com.powsybl.iidm.network.events.ExtensionUpdateNetworkEvent;
 import com.powsybl.iidm.network.events.NetworkEvent;
@@ -21,6 +23,7 @@ import com.powsybl.iidm.network.events.OperationalLimitsInfo;
 import com.powsybl.iidm.network.events.PermanentLimitInfo;
 import com.powsybl.iidm.network.events.TemporaryLimitInfo;
 import com.powsybl.iidm.network.events.UpdateNetworkEvent;
+import com.powsybl.iidm.network.regulation.RegulationMode;
 import com.powsybl.iidm.network.test.EurostagTutorialExample1Factory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,6 +35,7 @@ import java.util.TreeSet;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -105,6 +109,35 @@ class IidmStateViewTest {
         assertEquals(HvdcLine.ConvertersMode.SIDE_1_INVERTER_SIDE_2_RECTIFIER,
                 state.getEnum(load, "convertersMode", HvdcLine.ConvertersMode.class,
                         () -> HvdcLine.ConvertersMode.SIDE_1_RECTIFIER_SIDE_2_INVERTER));
+    }
+
+    /**
+     * A recorded null is a value for an enum: the regulation mode of a VoltageRegulation is undefined in a variant it
+     * was not created in (review 21 finding m7).
+     */
+    @Test
+    void aRecordedNullEnumIsNull() {
+        IidmStateView state = before(update(load, "VoltageRegulation.RegulationMode", null, RegulationMode.VOLTAGE));
+        assertNull(state.getEnum(load, "VoltageRegulation.RegulationMode", RegulationMode.class, () -> RegulationMode.VOLTAGE));
+    }
+
+    /**
+     * The echo of a deprecated setter and its canonical event describe one value: the view reads the old value the
+     * canonical event carried, under the canonical key (plan 21 §3.4).
+     */
+    @Test
+    @SuppressWarnings("removal")
+    void anEchoAndItsCanonicalEventAreOneValue() {
+        Network regulated = EurostagTutorialExample1Factory.create();
+        Generator generator = regulated.getGenerator("GEN");
+        boolean regulating = generator.getVoltageRegulation().isRegulating();
+        NetworkEventRecorder recorder = new NetworkEventRecorder();
+        regulated.addListener(recorder);
+        generator.setVoltageRegulatorOn(!regulating);
+        assertEquals(2, recorder.getEvents().size());
+        IidmStateView state = IidmStateView.before(EventCompactor.compact(List.copyOf(recorder.getEvents()), VARIANT, regulated));
+        assertEquals(regulating, state.getBoolean(generator, CgmesChangeTranslator.VR_REGULATING, () -> !regulating));
+        assertTrue(state.unconsumedKeys().isEmpty());
     }
 
     @Test
