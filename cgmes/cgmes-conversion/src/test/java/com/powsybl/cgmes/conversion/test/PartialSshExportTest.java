@@ -1325,6 +1325,49 @@ class PartialSshExportTest extends AbstractSerDeTest {
     }
 
     /**
+     * The local voltage target of a generator regulating voltage at a remote terminal is the target a load flow falls
+     * back to when it switches to local control, and the SSH has no property for it: a change of it is refused on both
+     * exports, not dropped (review 21 round 3, R3-M3).
+     */
+    @Test
+    void theLocalVoltageTargetOfARemoteVoltageRegulationIsRejected() {
+        Network sender = readCgmesResources(GENERATOR_DIR, "generator_EQ.xml", "generator_SSH.xml");
+        Generator generator = sender.getGenerator("SynchronousMachine");
+        generator.getVoltageRegulation().setTerminal(sender.getGenerator("ExternalNetworkInjection").getTerminal(), 410.0);
+        List<NetworkEvent> events = RecordedChangeScenarios.record(sender,
+                n -> n.getGenerator("SynchronousMachine").setLocalTargetV(399.0));
+
+        PowsyblException partial = assertThrows(PowsyblException.class,
+                () -> PartialSshExport.toString(sender, events, UnsupportedChangeBehavior.FAIL));
+        assertTrue(partial.getMessage().contains("falls back to") && partial.getMessage().contains("Remedy: "),
+                partial.getMessage());
+        assertThrows(PowsyblException.class,
+                () -> CgmesDiffExport.toDifferences(sender, events, new CgmesDiffExport.ExportOptions()));
+    }
+
+    /**
+     * A change the steady state hypothesis does not represent writes nothing and is not listed among the exported
+     * changes, as the difference is empty (review 21 round 3, R3-M3): the voltage target of a compensator regulating
+     * reactive power.
+     */
+    @Test
+    void aChangeTheSshDoesNotRepresentIsNotListedAsExported() {
+        Network sender = readCgmesResources("/update/static-var-compensator/", "staticVarCompensator_EQ.xml",
+                "staticVarCompensator_SSH.xml");
+        List<NetworkEvent> events = RecordedChangeScenarios.record(sender,
+                n -> n.getStaticVarCompensator("StaticVarCompensator-Q").setLocalTargetV(401.0));
+        assertEquals(1, events.size());
+
+        List<NetworkEvent> exported = PartialSshExport.write(sender, events, new java.io.ByteArrayOutputStream(),
+                new PartialSshExport.ExportOptions().setUnsupportedChangeBehavior(UnsupportedChangeBehavior.FAIL));
+        assertEquals(List.of(), exported);
+        CgmesDiffExport.Result difference = CgmesDiffExport.toDifferences(sender, events,
+                new CgmesDiffExport.ExportOptions());
+        assertTrue(difference.differences().models().isEmpty());
+        assertEquals(List.of(), difference.exportedEvents());
+    }
+
+    /**
      * The voltage target of a station regulating reactive power is not represented in the steady state hypothesis:
      * the import rebuilds a reactive power regulation from {@code qPccControl} and its target, and keeps the local
      * voltage target it had, whatever {@code targetUpcc} says. A change of it alone is therefore not a change of the
@@ -1348,10 +1391,9 @@ class PartialSshExportTest extends AbstractSerDeTest {
 
         assertTrue(CgmesDiffExport.toDifferences(sender, events, new CgmesDiffExport.ExportOptions())
                 .differences().models().isEmpty());
-        RoundTripResult result = roundTrip(HVDC_DIR, reactiveMode,
-                n -> converter(n, 2).setLocalTargetV(before + 5.0), "hvdc_EQ.xml", "hvdc_SSH.xml");
-        assertEquals(before, converter(result.receiver(), 2).getLocalTargetV(), TOLERANCE);
-        assertEquals(30.0, converter(result.receiver(), 2).getRegulatingTargetQ(), TOLERANCE);
+        // Nothing is written and nothing is listed as exported (review 21 round 3, R3-M3)
+        assertEquals(List.of(), PartialSshExport.write(sender, events, new java.io.ByteArrayOutputStream(),
+                new PartialSshExport.ExportOptions().setUnsupportedChangeBehavior(UnsupportedChangeBehavior.FAIL)));
     }
 
     /**

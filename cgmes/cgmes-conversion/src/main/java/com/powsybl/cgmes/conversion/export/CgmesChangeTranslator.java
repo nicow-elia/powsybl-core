@@ -53,6 +53,7 @@ import com.powsybl.iidm.network.extensions.ActivePowerControl;
 import com.powsybl.iidm.network.extensions.ReferencePriorities;
 import com.powsybl.iidm.network.extensions.ReferencePriority;
 import com.powsybl.iidm.network.regulation.RegulationMode;
+import com.powsybl.iidm.network.regulation.VoltageRegulation;
 import com.powsybl.iidm.network.regulation.VoltageRegulationHolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -120,6 +121,14 @@ import static com.powsybl.commons.util.Result.success;
  * <p>Every value a change log can speak about is read through an {@link IidmStateView}; structure is read live. A
  * value the previous state needs but the change log never recorded makes the change unsupported rather than wrong,
  * through {@link UnreconstructibleStateException}.</p>
+ *
+ * <p><b>The local voltage target of a regulation holder</b> (review 21 round 3, R3-M3): in a voltage mode without a
+ * regulating terminal it is the regulating target and is exported. In another mode, or when the regulation names the
+ * holder's own terminal (it then regulates to its target value), it is not represented in the steady state hypothesis
+ * and nothing reads it: a change of it alone is not a change of the SSH, translated into nothing and not listed as
+ * exported. In a voltage mode with a regulating terminal elsewhere it is the target a load flow falls back to when it
+ * switches to local control, and the SSH has no property for it: refused. The same rule is in
+ * {@code docs/grid_exchange_formats/cgmes/export.md}.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
@@ -333,7 +342,11 @@ class CgmesChangeTranslator {
                 if (beforeUpdates != null) {
                     beforeUpdates.mergeFrom(b);
                 }
-                exportedEvents.add(event);
+                // A change the steady state hypothesis does not represent is translated into nothing: it neither
+                // reaches the file nor is refused, and is not listed
+                if (!a.isEmpty()) {
+                    exportedEvents.add(event);
+                }
             } else if (beforeResult instanceof Result.Failure(String reason)) {
                 after.reject(event, reason);
             }
@@ -434,6 +447,24 @@ class CgmesChangeTranslator {
         if (rebuilt.isPresent()) {
             return failure(rebuilt.get());
         }
+        if (LOCAL_TARGET_V.equals(attribute) && identifiable instanceof VoltageRegulationHolder<?> holder
+                && holder.getVoltageRegulation() != null) {
+            VoltageRegulation regulation = holder.getVoltageRegulation();
+            if (!isVoltageMode(regulation.getMode())
+                    || regulation.isWithTerminal() && regulation.getTerminal() == holder.getTerminal()) {
+                // Not represented in the steady state hypothesis and read by nothing: another mode, or a regulation
+                // of the holder's own terminal, which regulates to its target value. Not a change of the SSH
+                return success(new CgmesPropertyBuffer());
+            }
+            if (regulation.isWithTerminal()) {
+                return failure(identifiable.getType() + " " + identifiable.getId() + " regulates voltage at a"
+                        + " regulating terminal, so its local voltage target is the target a load flow falls back to"
+                        + " when it switches to local control, and the steady state hypothesis has no property for it."
+                        + " " + REMEDY + "export the equipment model with the change, or change the target of the"
+                        + " regulation only (VoltageRegulation.setTargetValue; Generator.setTargetV(v, local) reports a"
+                        + " local target in any case)");
+            }
+        }
         TapChangerAttribute tapChangerAttribute = tapChangerAttribute(attribute);
         return switch (identifiable) {
             case Switch sw when OPEN.equals(attribute) -> switchUpdates(sw);
@@ -507,6 +538,10 @@ class CgmesChangeTranslator {
             default -> null;
         };
         return Optional.ofNullable(source).map(from -> noVoltageRegulation(identifiable, from));
+    }
+
+    private static boolean isVoltageMode(RegulationMode mode) {
+        return mode == RegulationMode.VOLTAGE || mode == RegulationMode.VOLTAGE_PER_REACTIVE_POWER;
     }
 
     /** The refusal of a holder without VoltageRegulation whose CGMES equipment makes the import give it one. */

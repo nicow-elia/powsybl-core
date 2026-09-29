@@ -49,7 +49,7 @@ generator regulating remotely | VoltageRegulation.setMode | with regulation | ch
 generator regulating remotely | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED
 generator regulating remotely | VoltageRegulation.setTerminal | with regulation | change	REFUSED
 generator regulating remotely | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED
-generator regulating remotely | setLocalTargetV | with regulation | change	NOT_REPRESENTED
+generator regulating remotely | setLocalTargetV | with regulation | change	REFUSED
 generator regulating remotely | setLocalTargetV | with regulation | no-op	UNCHANGED
 generator regulating remotely | setLocalTargetQ | with regulation | change	EXPORTED
 generator regulating remotely | setLocalTargetQ | with regulation | no-op	UNCHANGED
@@ -57,9 +57,9 @@ generator regulating remotely | Generator.setVoltageRegulatorOn | with regulatio
 generator regulating remotely | Generator.setVoltageRegulatorOn | with regulation | no-op	UNCHANGED
 generator regulating remotely | Generator.setTargetV | with regulation | change	EXPORTED
 generator regulating remotely | Generator.setTargetV | with regulation | no-op	UNCHANGED
-generator regulating remotely | Generator.setTargetV(v, local) | with regulation | change	EXPORTED
+generator regulating remotely | Generator.setTargetV(v, local) | with regulation | change	REFUSED
 generator regulating remotely | Generator.setTargetV(v, local) | with regulation | no-op	REFUSED
-generator regulating remotely | Generator.setTargetV(v, same local) | with regulation | change	EXPORTED
+generator regulating remotely | Generator.setTargetV(v, same local) | with regulation | change	REFUSED
 generator regulating remotely | Generator.setTargetV(v, same local) | with regulation | no-op	REFUSED
 generator regulating remotely | Generator.setTargetQ | with regulation | change	EXPORTED
 generator regulating remotely | Generator.setTargetQ | with regulation | no-op	UNCHANGED

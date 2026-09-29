@@ -618,7 +618,12 @@ class RegulationSetterMatrixTest {
         if (!written && iidmSilent(c, sender, events, original, changed)) {
             return Outcome.IIDM_SILENT;
         }
-        return inactive.containsAll(senderChange.keySet()) ? Outcome.NOT_REPRESENTED : Outcome.EXPORTED;
+        if (inactive.containsAll(senderChange.keySet())) {
+            // Not represented: neither written nor listed as exported, by any route
+            assertTrue(!written, () -> c.name() + ": a change the SSH does not represent was written");
+            return Outcome.NOT_REPRESENTED;
+        }
+        return Outcome.EXPORTED;
     }
 
     /** The regulating terminal of the regulation of the case, as its connectable and side, or {@code none}. */
@@ -651,12 +656,11 @@ class RegulationSetterMatrixTest {
     }
 
     /**
-     * The local voltage target of the holder when its regulation does not use it in the state compared (the end of the
-     * change set after an apply, the original state after a revert), with
-     * the regulating voltage target derived from it: the regulation has a regulating terminal (it then regulates to the
-     * target of the regulation) or another mode than voltage. The steady state hypothesis has no property for such a
-     * value (the full export writes none either), so a receiver keeps what its equipment model gave it, exactly as for
-     * {@code CgmesDiffRoundTripTest#KNOWN_IMPORT_NORMALISATIONS}.
+     * The local voltage target of the holder, with the regulating voltage target derived from it, when its regulation is
+     * not in a voltage mode (only the local target when it regulates the holder's own terminal), in the state compared (the end of the change set after an apply, the original state after
+     * a revert). The steady state hypothesis does not represent it and nothing reads it, so a change of it alone is not
+     * a change of the SSH and is not exported (review 21 round 3, R3-M3; the local target of a voltage regulation at a
+     * terminal, which a load flow falls back to, is refused instead).
      */
     private static Set<String> inactiveLocalTargets(Case c, Network sender) {
         VoltageRegulationHolder<?> holder = c.holder().holder().apply(sender);
@@ -667,7 +671,8 @@ class RegulationSetterMatrixTest {
         if (regulation.getMode() != RegulationMode.VOLTAGE) {
             return Set.of(owner.getId() + ".localTargetV", owner.getId() + ".regulatingTargetV");
         }
-        return regulation.isWithTerminal() ? Set.of(owner.getId() + ".localTargetV") : Set.of();
+        // A regulation of the holder's own terminal regulates to its target value: the local target is not read
+        return regulation.getTerminal() == holder.getTerminal() ? Set.of(owner.getId() + ".localTargetV") : Set.of();
     }
 
     private static DifferenceModelSet exportAndParse(Network sender, List<NetworkEvent> events,
