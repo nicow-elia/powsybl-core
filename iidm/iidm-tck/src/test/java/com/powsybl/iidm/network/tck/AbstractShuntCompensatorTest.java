@@ -447,6 +447,7 @@ public abstract class AbstractShuntCompensatorTest {
      * local targets of the other voltage regulation holders are.
      */
     @Test
+    @SuppressWarnings("removal")
     public void localTargetVNotificationTest() {
         ShuntCompensator shunt = createLinearShunt(SHUNT, "shuntName", 5.0, 4.0, 6, 10, null, true, 200, 10);
 
@@ -460,6 +461,12 @@ public abstract class AbstractShuntCompensatorTest {
         eventRecorder.reset();
         shunt.setLocalTargetV(210.0);
         assertEquals(List.of(), eventRecorder.getEvents());
+
+        // The deprecated setter of a shunt regulating locally reports the local target first, then its echo
+        eventRecorder.reset();
+        shunt.setTargetV(220.0);
+        assertEquals(List.of("localTargetV", "targetV"),
+                eventRecorder.getEvents().stream().map(e -> ((UpdateNetworkEvent) e).attribute()).toList());
     }
 
     @Test
