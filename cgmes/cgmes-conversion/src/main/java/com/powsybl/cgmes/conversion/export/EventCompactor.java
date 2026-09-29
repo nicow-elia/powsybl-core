@@ -209,7 +209,9 @@ final class EventCompactor {
 
     /** As {@link #attributeKey(UpdateNetworkEvent, Identifiable)}, looking the identifiable up in the network. */
     static String attributeKey(UpdateNetworkEvent event, Network network) {
-        return attributeKey(event, network != null ? network.getIdentifiable(event.id()) : null);
+        // Only a target echo needs to know the equipment (a boundary line's targetV is a value of its own)
+        boolean needsIdentifiable = network != null && LegacyRegulationKeys.needsIdentifiable(event.attribute());
+        return attributeKey(event, needsIdentifiable ? network.getIdentifiable(event.id()) : null);
     }
 
     /** The key identifying the value a change describes, for any kind of event. */

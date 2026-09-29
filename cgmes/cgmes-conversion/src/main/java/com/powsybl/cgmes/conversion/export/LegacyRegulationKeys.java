@@ -67,6 +67,11 @@ final class LegacyRegulationKeys {
     private static final Pattern RATIO_TAP_CHANGER_ECHO = Pattern.compile(
             "^(ratioTapChanger[123]?)\\.(regulating|regulationMode|targetDeadband|regulationTerminal|regulationValue)$");
 
+    /** Whether the key of the given attribute depends on the kind of equipment it was reported on. */
+    static boolean needsIdentifiable(String attribute) {
+        return TARGET_ECHOES.contains(attribute);
+    }
+
     /**
      * The attribute a change of the given identifiable is kept under.
      *

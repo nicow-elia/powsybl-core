@@ -289,6 +289,29 @@ class EventCompactorTest {
         assertNull(EventCompactor.attributeKey((UpdateNetworkEvent) events.get(1), network));
     }
 
+    /**
+     * Only the three target echoes need to know what equipment a change belongs to (a boundary line's {@code targetV} is
+     * not an echo), so no other change costs an identifiable lookup during the compaction (review 21 finding F2/m1).
+     */
+    @Test
+    void onlyTargetEchoesLookTheIdentifiableUp() {
+        int[] lookups = {0};
+        Network counting = (Network) java.lang.reflect.Proxy.newProxyInstance(Network.class.getClassLoader(),
+                new Class<?>[] {Network.class}, (proxy, method, args) -> {
+                    if ("getIdentifiable".equals(method.getName())) {
+                        lookups[0]++;
+                        return null;
+                    }
+                    throw new UnsupportedOperationException(method.getName());
+                });
+        EventCompactor.compact(List.of(update("L", "p0", 1.0, 2.0), update("G", "voltageRegulatorOn", true, false),
+                update("S", "sectionCount", 1, 2)), VARIANT, counting);
+        assertEquals(0, lookups[0]);
+
+        EventCompactor.compact(List.of(update("G", "targetV", 400.0, 401.0)), VARIANT, counting);
+        assertEquals(1, lookups[0]);
+    }
+
     /** A boundary line generation is not a voltage regulation holder: its targetV is a value of its own. */
     @Test
     void aBoundaryLineTargetIsNotAnEcho() {
