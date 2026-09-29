@@ -25,8 +25,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * The pass that creates the fictitious switch of every disconnected terminal (powsybl-core #4085) scans the switches of
- * the network once, not once per disconnected terminal (review 21 B2 and round 2 r2-m1): on a large model the scan per
- * terminal made the import 1.6 times slower.
+ * the network once, not once per disconnected terminal: on a large model the scan per terminal made the import 1.6 times
+ * slower.
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
@@ -93,8 +93,8 @@ class FictitiousSwitchPassTest {
     }
 
     /**
-     * The single-terminal overload keeps upstream's cost: the switches are scanned only for a disconnected terminal,
-     * after the early returns (review 21 closing, c-m7).
+     * The single-terminal overload keeps its former cost: the switches are scanned only for a disconnected terminal,
+     * after the early returns.
      */
     @Test
     void theSingleTerminalOverloadScansOnlyForADisconnectedTerminal() {
