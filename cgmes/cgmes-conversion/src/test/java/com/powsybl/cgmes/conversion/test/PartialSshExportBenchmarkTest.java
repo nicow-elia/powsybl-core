@@ -19,6 +19,7 @@ import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.NetworkEventRecorder;
 import com.powsybl.iidm.network.Switch;
 import com.powsybl.iidm.network.events.NetworkEvent;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,6 +60,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
+@Tag("benchmark")
 class PartialSshExportBenchmarkTest {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(PartialSshExportBenchmarkTest.class);

@@ -15,6 +15,7 @@ import com.powsybl.cgmes.model.CgmesModel;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.NetworkFactory;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -76,6 +77,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
+@Tag("benchmark")
 class RdfDbLoadBenchmarkTest {
 
     private static final int WARMUPS = Integer.getInteger("powsybl.rdfdb.benchmark.warmups", 3);

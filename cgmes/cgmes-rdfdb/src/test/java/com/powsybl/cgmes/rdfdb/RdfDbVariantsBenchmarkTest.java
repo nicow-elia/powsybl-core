@@ -12,6 +12,7 @@ import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.events.NetworkEvent;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.slf4j.Logger;
@@ -63,6 +64,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
+@Tag("benchmark")
 class RdfDbVariantsBenchmarkTest {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(RdfDbVariantsBenchmarkTest.class);

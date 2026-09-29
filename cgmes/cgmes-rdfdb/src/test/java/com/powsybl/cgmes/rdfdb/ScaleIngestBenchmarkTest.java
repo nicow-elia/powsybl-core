@@ -14,6 +14,7 @@ import com.powsybl.commons.report.ReportNode;
 import org.assertj.core.api.SoftAssertions;
 import org.eclipse.rdf4j.model.Value;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -71,6 +72,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
+@Tag("benchmark")
 class ScaleIngestBenchmarkTest {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ScaleIngestBenchmarkTest.class);

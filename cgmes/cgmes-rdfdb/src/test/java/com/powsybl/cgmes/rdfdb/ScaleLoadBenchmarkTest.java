@@ -25,6 +25,7 @@ import com.powsybl.iidm.network.NetworkFactory;
 import com.powsybl.iidm.network.events.NetworkEvent;
 import org.assertj.core.api.SoftAssertions;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -102,6 +103,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
+@Tag("benchmark")
 class ScaleLoadBenchmarkTest {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ScaleLoadBenchmarkTest.class);

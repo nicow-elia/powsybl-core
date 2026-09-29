@@ -14,6 +14,7 @@ import com.powsybl.cgmes.rdfdb.SvedalaTimestepFixtures.TimestepFiles;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Network;
 import org.eclipse.rdf4j.model.Value;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.slf4j.Logger;
@@ -107,6 +108,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
+@Tag("benchmark")
 class RdfDbIngestionBenchmarkTest {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(RdfDbIngestionBenchmarkTest.class);
