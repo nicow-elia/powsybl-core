@@ -89,6 +89,12 @@ final class IidmStateView {
         return old == NOT_CHANGED ? live.getAsBoolean() : asBoolean(identifiable, attribute, old);
     }
 
+    /** Any value, such as a regulating terminal, as it was before the change set (possibly {@code null}). */
+    Object getObject(Identifiable<?> identifiable, String attribute, Supplier<?> live) {
+        Object old = previous(identifiable, attribute);
+        return old == NOT_CHANGED ? live.get() : old;
+    }
+
     <E extends Enum<E>> E getEnum(Identifiable<?> identifiable, String attribute, Class<E> type, Supplier<E> live) {
         Object old = previous(identifiable, attribute);
         if (old == NOT_CHANGED) {

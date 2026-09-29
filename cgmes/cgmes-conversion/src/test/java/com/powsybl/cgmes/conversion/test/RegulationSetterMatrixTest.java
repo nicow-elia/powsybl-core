@@ -396,6 +396,25 @@ class RegulationSetterMatrixTest {
                             s.getVoltageRegulation().setRegulating(!change && s.getVoltageRegulation().isRegulating());
                             s.setLocalTargetQ(changed(s.getLocalTargetQ(), change, 30.0));
                         }));
+                // Switching a station between voltage and reactive power regulation the way the CGMES import represents
+                // it: reactive power regulates the station's own terminal (review 21 round 3, R3-M4)
+                setters.add(new Setter("switch to reactive power at the own terminal", true, (n, h, change) -> {
+                    VscConverterStation s = (VscConverterStation) h;
+                    VoltageRegulation regulation = s.getVoltageRegulation();
+                    if (change) {
+                        regulation.setTerminal(s.getTerminal(), s.getRegulatingTargetV());
+                        regulation.setMode(RegulationMode.REACTIVE_POWER);
+                        regulation.setTargetValue(s.getLocalTargetQ() + 1.0);
+                    }
+                }));
+                setters.add(new Setter("switch to voltage", true, (n, h, change) -> {
+                    VscConverterStation s = (VscConverterStation) h;
+                    VoltageRegulation regulation = s.getVoltageRegulation();
+                    if (change) {
+                        regulation.setMode(RegulationMode.VOLTAGE);
+                        regulation.setTargetValue(Double.isNaN(s.getLocalTargetV()) ? 400.0 : s.getLocalTargetV() + 1.0);
+                    }
+                }));
                 setters.add(new Setter("VscConverterStation.setRegulatingTerminal", false, (n, h, change) -> {
                     VscConverterStation s = (VscConverterStation) h;
                     s.setRegulatingTerminal(change ? anotherTerminal(n, s, s.getRegulatingTerminal()) : s.getRegulatingTerminal());
@@ -430,8 +449,11 @@ class RegulationSetterMatrixTest {
             for (Setter setter : setters) {
                 // Rows that cannot carry a change (review 21 round 3, r3-m9): a ratio tap changer has no local targets,
                 // and the target value of a regulation without terminal is not read (refused by IIDM, or ignored)
+                RegulationMode mode = loaded.getVoltageRegulation() != null ? loaded.getVoltageRegulation().getMode() : null;
                 if (loaded instanceof RatioTapChanger && setter.name().startsWith("setLocalTarget")
-                        || !withTerminal && setter.name().equals("VoltageRegulation.setTargetValue")) {
+                        || !withTerminal && setter.name().equals("VoltageRegulation.setTargetValue")
+                        || setter.name().startsWith("switch to reactive") && mode != RegulationMode.VOLTAGE
+                        || setter.name().equals("switch to voltage") && mode != RegulationMode.REACTIVE_POWER) {
                     continue;
                 }
                 for (boolean withRegulation : new boolean[] {true, false}) {
@@ -612,8 +634,9 @@ class RegulationSetterMatrixTest {
             return Outcome.REFUSED;
         }
         if (senderChange.isEmpty()) {
-            assertTrue(!terminalChanged, () -> c.name() + ": a change of the regulating terminal exported");
-            return Outcome.UNCHANGED;
+            // Only the regulating terminal changed, which the fingerprint does not hold: a station switching between
+            // no terminal and its own one travels as qPccControl (R3-M4), with a receiver in an equivalent state
+            return !terminalChanged ? Outcome.UNCHANGED : written ? Outcome.EXPORTED : Outcome.NOT_REPRESENTED;
         }
         if (!written && iidmSilent(c, sender, events, original, changed)) {
             return Outcome.IIDM_SILENT;

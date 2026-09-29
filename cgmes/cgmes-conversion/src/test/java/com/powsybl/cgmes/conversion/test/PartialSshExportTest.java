@@ -38,7 +38,6 @@ import com.powsybl.iidm.network.Switch;
 import com.powsybl.iidm.network.TapChanger;
 import com.powsybl.iidm.network.ThreeWindingsTransformer;
 import com.powsybl.iidm.network.TwoWindingsTransformer;
-import com.powsybl.iidm.network.ValidationException;
 import com.powsybl.iidm.network.VariantManagerConstants;
 import com.powsybl.iidm.network.VscConverterStation;
 import com.powsybl.iidm.network.events.ExtensionUpdateNetworkEvent;
@@ -1416,25 +1415,30 @@ class PartialSshExportTest extends AbstractSerDeTest {
     }
 
     /**
-     * Open problem O1 of report 21: IIDM accepts reactive power regulation of a station only with a regulating terminal,
-     * and the regulating terminal is equipment data, not stored per variant. Setting it while recording is refused;
-     * it has to be set before (as {@code RecordedChangeScenarios.regulateOwnTerminal} does).
+     * Open problem O1 of report 21, closed in round 3 (R3-M4): IIDM accepts reactive power regulation of a station only
+     * with a regulating terminal. Regulating the station's own terminal (or none) is part of {@code qPccControl}, which
+     * the CGMES import sets itself, so switching an imported station from voltage to reactive power regulation at its
+     * own terminal is an exportable change; any other regulating terminal is refused with a remedy.
      */
     @Test
-    void vscRegulatingTerminalChangeIsRejected() {
+    void aVscStationSwitchesToReactivePowerAtItsOwnTerminal() throws IOException {
+        RoundTripResult result = roundTrip(HVDC_DIR, sender -> {
+            VscConverterStation station = converter(sender, 2);
+            station.getVoltageRegulation().setTerminal(station.getTerminal(), station.getRegulatingTargetV());
+            station.getVoltageRegulation().setMode(RegulationMode.REACTIVE_POWER);
+            station.getVoltageRegulation().setTargetValue(30.0);
+        }, "hvdc_EQ.xml", "hvdc_SSH.xml");
+        assertTrue(result.sshXml().contains("VsQpccControlKind.reactivePcc"));
+        VscConverterStation received = converter(result.receiver(), 2);
+        assertEquals(RegulationMode.REACTIVE_POWER, received.getVoltageRegulation().getMode());
+        assertEquals(30.0, received.getRegulatingTargetQ(), TOLERANCE);
+
         Network sender = readCgmesResources(HVDC_DIR, "hvdc_EQ.xml", "hvdc_SSH.xml");
-        VscConverterStation station = converter(sender, 2);
-        assertThrows(ValidationException.class,
-                () -> station.getVoltageRegulation().setMode(RegulationMode.REACTIVE_POWER));
-
-        NetworkEventRecorder recorder = new NetworkEventRecorder();
-        sender.addListener(recorder);
-        RecordedChangeScenarios.regulateOwnTerminal(station);
-        station.getVoltageRegulation().setMode(RegulationMode.REACTIVE_POWER);
-
+        List<NetworkEvent> other = RecordedChangeScenarios.record(sender, n -> converter(n, 2).getVoltageRegulation()
+                .setTerminal(converter(n, 1).getTerminal(), converter(n, 2).getRegulatingTargetV()));
         PowsyblException exception = assertThrows(PowsyblException.class,
-                () -> PartialSshExport.toString(sender, recorder.getEvents(), UnsupportedChangeBehavior.FAIL));
-        assertTrue(exception.getMessage().contains("the regulating terminal is RegulatingControl.Terminal"),
+                () -> PartialSshExport.toString(sender, other, UnsupportedChangeBehavior.FAIL));
+        assertTrue(exception.getMessage().contains("is not its own terminal") && exception.getMessage().contains("Remedy: "),
                 exception.getMessage());
     }
 

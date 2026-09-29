@@ -480,6 +480,15 @@ class CgmesChangeTranslator {
             case LccConverterStation converter when POWER_FACTOR.equals(attribute) -> lccPowerFactorUpdates(converter);
             case AcDcConverter<?> converter when AC_DC_CONVERTER_ATTRIBUTES.contains(attribute) -> acDcConverterUpdates(converter, attribute);
             case VscConverterStation converter when VSC_CONVERTER_ATTRIBUTES.contains(attribute) -> vscStationUpdates(converter, attribute);
+            // Regulating its own terminal or none is the qPccControl of the station, exported with it; any other
+            // terminal has no CGMES property (review 21 round 3, R3-M4)
+            case VscConverterStation converter when VR_TERMINAL.equals(attribute) ->
+                RegulationRef.isOwnTerminalSwitch(converter.getTerminal(), event.oldValue(), event.newValue())
+                        ? vscStationUpdates(converter, attribute)
+                        : failure("the regulating terminal of converter " + converter.getId() + " is not its own"
+                                + " terminal, and a VsConverter has no property for another one: the import makes it"
+                                + " regulate its own terminal. " + REMEDY + "regulate the converter's own terminal"
+                                + " (VoltageRegulation.setTerminal(converter terminal, target)), or none");
             case VoltageLevel voltageLevel when VOLTAGE_LIMIT_ATTRIBUTES.contains(attribute) ->
                 voltageLimitUpdates(voltageLevel, attribute);
             case Line line when LINE_IMPEDANCE_ATTRIBUTES.contains(attribute) -> lineImpedanceUpdates(line, attribute);

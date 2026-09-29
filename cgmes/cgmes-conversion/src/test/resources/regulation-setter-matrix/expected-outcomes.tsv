@@ -279,8 +279,10 @@ VSC converter station 1 | VscConverterStation.setVoltageRegulatorOn(false) + set
 VSC converter station 1 | VscConverterStation.setVoltageRegulatorOn(false) + setReactivePowerSetpoint | without regulation | no-op	IIDM_SILENT
 VSC converter station 1 | VoltageRegulation.setRegulating(false) + setLocalTargetQ | with regulation | change	REFUSED
 VSC converter station 1 | VoltageRegulation.setRegulating(false) + setLocalTargetQ | with regulation | no-op	UNCHANGED
+VSC converter station 1 | switch to reactive power at the own terminal | with regulation | change	EXPORTED
+VSC converter station 1 | switch to reactive power at the own terminal | with regulation | no-op	UNCHANGED
 VSC converter station 1 | VscConverterStation.setRegulatingTerminal | with regulation | change	REFUSED
-VSC converter station 1 | VscConverterStation.setRegulatingTerminal | with regulation | no-op	REFUSED
+VSC converter station 1 | VscConverterStation.setRegulatingTerminal | with regulation | no-op	EXPORTED
 VSC converter station 1 | VscConverterStation.setRegulatingTerminal | without regulation | change	REFUSED
 VSC converter station 1 | VscConverterStation.setRegulatingTerminal | without regulation | no-op	REFUSED
 VSC converter station 2 | VoltageRegulation.setTargetDeadband | with regulation | change	REFUSED
@@ -317,8 +319,10 @@ VSC converter station 2 | VscConverterStation.setVoltageRegulatorOn(false) + set
 VSC converter station 2 | VscConverterStation.setVoltageRegulatorOn(false) + setReactivePowerSetpoint | without regulation | no-op	IIDM_SILENT
 VSC converter station 2 | VoltageRegulation.setRegulating(false) + setLocalTargetQ | with regulation | change	REFUSED
 VSC converter station 2 | VoltageRegulation.setRegulating(false) + setLocalTargetQ | with regulation | no-op	UNCHANGED
+VSC converter station 2 | switch to reactive power at the own terminal | with regulation | change	EXPORTED
+VSC converter station 2 | switch to reactive power at the own terminal | with regulation | no-op	UNCHANGED
 VSC converter station 2 | VscConverterStation.setRegulatingTerminal | with regulation | change	REFUSED
-VSC converter station 2 | VscConverterStation.setRegulatingTerminal | with regulation | no-op	REFUSED
+VSC converter station 2 | VscConverterStation.setRegulatingTerminal | with regulation | no-op	EXPORTED
 VSC converter station 2 | VscConverterStation.setRegulatingTerminal | without regulation | change	REFUSED
 VSC converter station 2 | VscConverterStation.setRegulatingTerminal | without regulation | no-op	REFUSED
 VSC converter station 1 with its terminal set | VoltageRegulation.setTargetValue | with regulation | change	EXPORTED
@@ -357,6 +361,8 @@ VSC converter station 1 with its terminal set | VscConverterStation.setVoltageRe
 VSC converter station 1 with its terminal set | VscConverterStation.setVoltageRegulatorOn(false) + setReactivePowerSetpoint | without regulation | no-op	IIDM_SILENT
 VSC converter station 1 with its terminal set | VoltageRegulation.setRegulating(false) + setLocalTargetQ | with regulation | change	REFUSED
 VSC converter station 1 with its terminal set | VoltageRegulation.setRegulating(false) + setLocalTargetQ | with regulation | no-op	UNCHANGED
+VSC converter station 1 with its terminal set | switch to reactive power at the own terminal | with regulation | change	EXPORTED
+VSC converter station 1 with its terminal set | switch to reactive power at the own terminal | with regulation | no-op	UNCHANGED
 VSC converter station 1 with its terminal set | VscConverterStation.setRegulatingTerminal | with regulation | change	REFUSED
 VSC converter station 1 with its terminal set | VscConverterStation.setRegulatingTerminal | with regulation | no-op	UNCHANGED
 VSC converter station 1 with its terminal set | VscConverterStation.setRegulatingTerminal | without regulation | change	REFUSED
@@ -397,6 +403,8 @@ VSC converter station 2 with its terminal set | VscConverterStation.setVoltageRe
 VSC converter station 2 with its terminal set | VscConverterStation.setVoltageRegulatorOn(false) + setReactivePowerSetpoint | without regulation | no-op	IIDM_SILENT
 VSC converter station 2 with its terminal set | VoltageRegulation.setRegulating(false) + setLocalTargetQ | with regulation | change	REFUSED
 VSC converter station 2 with its terminal set | VoltageRegulation.setRegulating(false) + setLocalTargetQ | with regulation | no-op	UNCHANGED
+VSC converter station 2 with its terminal set | switch to reactive power at the own terminal | with regulation | change	EXPORTED
+VSC converter station 2 with its terminal set | switch to reactive power at the own terminal | with regulation | no-op	UNCHANGED
 VSC converter station 2 with its terminal set | VscConverterStation.setRegulatingTerminal | with regulation | change	REFUSED
 VSC converter station 2 with its terminal set | VscConverterStation.setRegulatingTerminal | with regulation | no-op	UNCHANGED
 VSC converter station 2 with its terminal set | VscConverterStation.setRegulatingTerminal | without regulation | change	REFUSED
@@ -437,6 +445,8 @@ VSC converter station 2 regulating reactive power | VscConverterStation.setVolta
 VSC converter station 2 regulating reactive power | VscConverterStation.setVoltageRegulatorOn(false) + setReactivePowerSetpoint | without regulation | no-op	IIDM_SILENT
 VSC converter station 2 regulating reactive power | VoltageRegulation.setRegulating(false) + setLocalTargetQ | with regulation | change	REFUSED
 VSC converter station 2 regulating reactive power | VoltageRegulation.setRegulating(false) + setLocalTargetQ | with regulation | no-op	UNCHANGED
+VSC converter station 2 regulating reactive power | switch to voltage | with regulation | change	EXPORTED
+VSC converter station 2 regulating reactive power | switch to voltage | with regulation | no-op	UNCHANGED
 VSC converter station 2 regulating reactive power | VscConverterStation.setRegulatingTerminal | with regulation | change	REFUSED
 VSC converter station 2 regulating reactive power | VscConverterStation.setRegulatingTerminal | with regulation | no-op	UNCHANGED
 VSC converter station 2 regulating reactive power | VscConverterStation.setRegulatingTerminal | without regulation | change	REFUSED

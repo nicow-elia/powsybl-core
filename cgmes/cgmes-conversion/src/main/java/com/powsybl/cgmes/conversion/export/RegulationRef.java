@@ -8,6 +8,7 @@
 package com.powsybl.cgmes.conversion.export;
 
 import com.powsybl.iidm.network.Identifiable;
+import com.powsybl.iidm.network.Terminal;
 import com.powsybl.iidm.network.regulation.RegulationMode;
 import com.powsybl.iidm.network.regulation.VoltageRegulation;
 import com.powsybl.iidm.network.regulation.VoltageRegulationHolder;
@@ -115,12 +116,28 @@ record RegulationRef(Identifiable<?> owner, String attributePrefix, VoltageRegul
         return isRegulating(state) && mode(state) == mode;
     }
 
+    /** The regulating terminal of the regulation in the state read, {@code null} when it has none. */
+    Terminal terminal(IidmStateView state) {
+        VoltageRegulation regulation = regulation();
+        return regulation == null ? null : (Terminal) state.getObject(owner, attribute(VR_TERMINAL), regulation::getTerminal);
+    }
+
+    /**
+     * Whether a change of the regulating terminal is only a switch between no terminal and the holder's own one, which
+     * for a VSC converter station is part of {@code qPccControl}, not of the equipment (review 21 round 3, R3-M4).
+     */
+    static boolean isOwnTerminalSwitch(Terminal own, Object before, Object after) {
+        return (before == null || before == own) && (after == null || after == own);
+    }
+
     /**
      * Whether the regulating terminal is structure the state can be read against: the terminal is not per variant and
-     * is read live, so a change set that changed it describes its state before against the wrong terminal.
+     * is read live, so a change set that changed it describes its state before against the wrong terminal. A switch
+     * between no terminal and the holder's own one is read through the state.
      */
     private void requireTerminalUnchanged(IidmStateView state) {
-        if (state.hasChange(owner, attribute(VR_TERMINAL))) {
+        if (state.hasChange(owner, attribute(VR_TERMINAL))
+                && !isOwnTerminalSwitch(holder.getTerminal(), terminal(state), regulation().getTerminal())) {
             throw new UnreconstructibleStateException("the regulating terminal of " + owner.getId()
                     + " changed in the change set, so its targets before the change cannot be told apart");
         }
@@ -130,7 +147,7 @@ record RegulationRef(Identifiable<?> owner, String attributePrefix, VoltageRegul
     double regulatingTargetV(IidmStateView state) {
         requireTerminalUnchanged(state);
         if ((isWithMode(RegulationMode.VOLTAGE, state) || isWithMode(RegulationMode.VOLTAGE_PER_REACTIVE_POWER, state))
-                && holder.hasRegulatingTerminal()) {
+                && terminal(state) != null) {
             return targetValue(state);
         }
         return localTargetV(state);
@@ -139,7 +156,7 @@ record RegulationRef(Identifiable<?> owner, String attributePrefix, VoltageRegul
     /** As {@link VoltageRegulationHolder#getRegulatingTargetQ}: the remote target when a terminal is set, else the local one. */
     double regulatingTargetQ(IidmStateView state) {
         requireTerminalUnchanged(state);
-        if (isWithMode(RegulationMode.REACTIVE_POWER, state) && holder.hasRegulatingTerminal()) {
+        if (isWithMode(RegulationMode.REACTIVE_POWER, state) && terminal(state) != null) {
             return targetValue(state);
         }
         return localTargetQ(state);
