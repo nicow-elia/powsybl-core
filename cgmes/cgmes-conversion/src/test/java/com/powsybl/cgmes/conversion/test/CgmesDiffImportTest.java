@@ -119,6 +119,26 @@ class CgmesDiffImportTest {
                 "the reactive power the difference does not mention has to survive the update");
     }
 
+    /**
+     * Since powsybl-core #4103 the update query of an AsynchronousMachine requires its kind and its control flag next
+     * to p and q (all four in one group). A minimal difference that states the active power only is completed from the
+     * receiver with the other three and applied (review 21 finding m15).
+     */
+    @Test
+    void anAsynchronousMachineDifferenceStatingThePowerOnlyIsCompleted() {
+        Network sender = load();
+        Network receiver = load();
+        double q = receiver.getLoad("AsynchronousMachine").getQ0();
+        DifferenceModelSet set = differenceOf(sender, n -> n.getLoad("AsynchronousMachine").setP0(201.5),
+                CgmesDiffExport.DiffGranularity.CHANGED_ONLY, options -> { });
+        DifferenceModel model = set.get(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow();
+        assertEquals(1, model.forward().size());
+
+        assertEquals(CgmesDiffImport.Route.FAST, CgmesDiffImport.apply(receiver, set, previousValues(), ReportNode.NO_OP).route());
+        assertEquals(201.5, receiver.getLoad("AsynchronousMachine").getP0(), 1e-9);
+        assertEquals(q, receiver.getLoad("AsynchronousMachine").getQ0(), 1e-9);
+    }
+
     // Metadata
 
     @Test
