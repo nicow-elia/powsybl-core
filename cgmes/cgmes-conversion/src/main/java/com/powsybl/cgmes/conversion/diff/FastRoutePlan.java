@@ -613,7 +613,8 @@ final class FastRoutePlan {
          *
          * <p>In the simplified model &mdash; the default &mdash; a voltage source converter update also writes
          * {@code HvdcLine.maxP} and {@code VscConverterStation.lossFactor}, neither of which is per variant. The
-         * detailed model writes only per-variant setpoints.</p>
+         * detailed model writes per-variant setpoints, and its VoltageRegulation, see
+         * {@link #rebuildsSharedRegulation}.</p>
          */
         private boolean isDetailedConverter(ResolvedSubject subject) {
             return objectsOf(subject).stream().anyMatch(VoltageSourceConverter.class::isInstance);

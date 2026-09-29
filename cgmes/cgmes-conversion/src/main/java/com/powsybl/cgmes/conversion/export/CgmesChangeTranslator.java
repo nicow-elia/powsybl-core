@@ -197,9 +197,6 @@ class CgmesChangeTranslator {
     private static final String ACDC_TERMINAL_CONNECTED = "ACDCTerminal.connected";
     private static final String ROTATING_MACHINE_P = "RotatingMachine.p";
     private static final String ROTATING_MACHINE_Q = "RotatingMachine.q";
-    private static final String UNIT_MULTIPLIER = "UnitMultiplier";
-    private static final String KILO = "k";
-    private static final String MEGA = "M";
 
     private static final Set<String> LOAD_ATTRIBUTES = Set.of(P0, Q0);
     private static final Set<String> GENERATOR_ATTRIBUTES =

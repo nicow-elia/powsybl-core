@@ -35,8 +35,9 @@ import java.util.function.Supplier;
  * from event payloads afterwards.</p>
  *
  * <p>Only the values the change log can speak about go through a view. Structure &mdash; identifiers, aliases, CGMES
- * properties, regulating terminals, nominal voltages, limits &mdash; is read live in both passes, because a change
- * set of steady state hypothesis values does not touch it.</p>
+ * properties, nominal voltages, the existence of a VoltageRegulation and its regulating terminal (neither is stored
+ * per variant; a change set that changed the terminal is refused, {@code RegulationRef}) &mdash; is read live in both
+ * passes. Limit values and their durations are values and are read through the view.</p>
  *
  * <p>Every getter takes the live read as a supplier. {@link #LIVE} is the view over an empty change set: a read
  * through it finds the change set empty before any lookup key is built and then makes the live call. The full steady
