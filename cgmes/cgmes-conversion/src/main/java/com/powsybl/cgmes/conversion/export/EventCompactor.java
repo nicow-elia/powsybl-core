@@ -98,7 +98,7 @@ final class EventCompactor {
             if (!repeated.isEmpty()) {
                 keys[index] = echoKey((UpdateNetworkEvent) event, repeated, reported);
             } else {
-                keys[index] = keyOf(event, identifiable);
+                keys[index] = keyOf(event);
                 if (keys[index] != null) {
                     if (event instanceof UpdateNetworkEvent update
                             && LegacyRegulationKeys.isRepeatable(keys[index].attributeKey())) {
@@ -194,9 +194,9 @@ final class EventCompactor {
     }
 
     /** The attribute a change that is not an echo describes, or {@code null} for a change no attribute identifies. */
-    private static UpdateKey keyOf(NetworkEvent event, Identifiable<?> identifiable) {
+    private static UpdateKey keyOf(NetworkEvent event) {
         return switch (event) {
-            case UpdateNetworkEvent update -> new UpdateKey(update.id(), attributeKey(update, identifiable));
+            case UpdateNetworkEvent update -> new UpdateKey(update.id(), attributeKey(update));
             // An extension attribute is namespaced by its extension: two extensions of the same object may well
             // both call an attribute "enabled" without describing the same value.
             case ExtensionUpdateNetworkEvent update ->
@@ -221,18 +221,14 @@ final class EventCompactor {
      * name as a whole replacement but carries the raw limits object as payload; it keeps the plain attribute name,
      * which is also what makes the mapping able to tell the two apart and refuse the selection change.</p>
      *
-     * <p>The name a deprecated voltage regulation setter reports a change under is replaced by the name of the value
-     * it repeats, and a repeated target yields {@code null}: see {@link LegacyRegulationKeys}.</p>
+     * <p>An echo of a deprecated voltage regulation setter never gets here: the compaction and the translator
+     * recognise it first ({@link LegacyRegulationKeys}).</p>
      *
-     * @param event        a change of an attribute, that is an {@link UpdateNetworkEvent}
-     * @param identifiable the identifiable the change was reported on, {@code null} when it no longer exists
-     * @return the key, or {@code null} for the echo of a voltage regulation target, which has no value of its own
+     * @param event a change of an attribute, that is an {@link UpdateNetworkEvent}
+     * @return the key
      */
-    static String attributeKey(UpdateNetworkEvent event, Identifiable<?> identifiable) {
-        String attribute = LegacyRegulationKeys.canonical(identifiable, event.attribute());
-        if (attribute == null) {
-            return null;
-        }
+    static String attributeKey(UpdateNetworkEvent event) {
+        String attribute = event.attribute();
         if (attribute.indexOf(KEY_SEPARATOR.charAt(0)) >= 0) {
             // Already a refined key: a synthetic probe event built by the difference model importer
             return attribute;
@@ -245,13 +241,6 @@ final class EventCompactor {
             case OperationalLimitsInfo info -> attribute + KEY_SEPARATOR + info.groupId();
             case null, default -> attribute;
         };
-    }
-
-    /** As {@link #attributeKey(UpdateNetworkEvent, Identifiable)}, looking the identifiable up in the network. */
-    static String attributeKey(UpdateNetworkEvent event, Network network) {
-        // Only a target echo needs to know the equipment (a boundary line's targetV is a value of its own)
-        boolean needsIdentifiable = network != null && LegacyRegulationKeys.needsIdentifiable(event.attribute());
-        return attributeKey(event, needsIdentifiable ? network.getIdentifiable(event.id()) : null);
     }
 
     /** The attribute key of an extension attribute, which is namespaced by the name of its extension. */

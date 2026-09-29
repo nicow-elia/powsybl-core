@@ -47,9 +47,6 @@ final class LegacyRegulationKeys {
     private LegacyRegulationKeys() {
     }
 
-    /** The key under which a change is kept: the attribute itself, a canonical attribute, or {@link #DROPPED}. */
-    static final String DROPPED = null;
-
     // Keyed by attribute name for any kind of identifiable: at powsybl-core 7.5 no other equipment than the voltage
     // regulation holders named in the comments reports these names (a boundary line spells its flag
     // voltageRegulationOn), so no type check is needed; a new user of one of these names would have to be added here.
@@ -95,9 +92,14 @@ final class LegacyRegulationKeys {
         if (attribute.startsWith("ratioTapChanger")) {
             Matcher matcher = RATIO_TAP_CHANGER_ECHO.matcher(attribute);
             if (matcher.matches()) {
-                String canonicalOfTheTapChanger = canonical(identifiable, attribute);
-                return Set.of(canonicalOfTheTapChanger != null ? canonicalOfTheTapChanger
-                        : matcher.group(1) + "." + VR_TARGET_VALUE);
+                String prefix = matcher.group(1) + ".";
+                return Set.of(prefix + switch (matcher.group(2)) {
+                    case "regulating" -> VR_REGULATING;
+                    case "regulationMode" -> VR_MODE;
+                    case "targetDeadband" -> VR_TARGET_DEADBAND;
+                    case "regulationTerminal" -> VR_TERMINAL;
+                    default -> VR_TARGET_VALUE;
+                });
             }
         }
         return Set.of();
@@ -112,36 +114,5 @@ final class LegacyRegulationKeys {
     /** Whether the given change is an echo. */
     static boolean isEcho(Identifiable<?> identifiable, String attribute) {
         return !repeatedKeys(identifiable, attribute).isEmpty();
-    }
-
-    /**
-     * The attribute a change of the given identifiable is kept under.
-     *
-     * @param identifiable the identifiable the change was reported on, {@code null} when the network no longer has it
-     * @return the attribute unchanged when it is not an echo, the canonical attribute it repeats, or {@link #DROPPED}
-     */
-    static String canonical(Identifiable<?> identifiable, String attribute) {
-        String canonical = CANONICAL.get(attribute);
-        if (canonical != null) {
-            return canonical;
-        }
-        // A boundary line generation is not a voltage regulation holder: its targetV is a value of its own
-        if (TARGET_ECHOES.contains(attribute) && identifiable != null && !(identifiable instanceof BoundaryLine)) {
-            return DROPPED;
-        }
-        if (attribute.startsWith("ratioTapChanger")) {
-            Matcher matcher = RATIO_TAP_CHANGER_ECHO.matcher(attribute);
-            if (matcher.matches()) {
-                String prefix = matcher.group(1) + ".";
-                return switch (matcher.group(2)) {
-                    case "regulating" -> prefix + VR_REGULATING;
-                    case "regulationMode" -> prefix + VR_MODE;
-                    case "targetDeadband" -> prefix + VR_TARGET_DEADBAND;
-                    case "regulationTerminal" -> prefix + VR_TERMINAL;
-                    default -> DROPPED;
-                };
-            }
-        }
-        return attribute;
     }
 }

@@ -168,7 +168,7 @@ class EventCompactorTest {
     void selectionEventsKeepThePlainAttribute() {
         UpdateNetworkEvent selection = update("L", "limits1_CURRENT", "someLimitsObject", null);
         CompactedChanges changes = EventCompactor.compact(List.of(selection), VARIANT, null);
-        assertEquals("limits1_CURRENT", EventCompactor.attributeKey(selection, (Network) null));
+        assertEquals("limits1_CURRENT", EventCompactor.attributeKey(selection));
         assertTrue(changes.hasChange("L", "limits1_CURRENT"));
     }
 
@@ -177,7 +177,7 @@ class EventCompactorTest {
         UpdateNetworkEvent replacement = update("L", "limits1_CURRENT",
                 new OperationalLimitsInfo(null, "A", true), new OperationalLimitsInfo(null, "A", true));
         CompactedChanges changes = EventCompactor.compact(List.of(replacement), VARIANT, null);
-        assertEquals("limits1_CURRENT@A", EventCompactor.attributeKey(replacement, (Network) null));
+        assertEquals("limits1_CURRENT@A", EventCompactor.attributeKey(replacement));
         assertTrue(changes.hasChange("L", "limits1_CURRENT@A"));
     }
 
@@ -185,7 +185,7 @@ class EventCompactorTest {
     @Test
     void anAlreadyRefinedKeyIsKept() {
         UpdateNetworkEvent probe = update("L", "limits1_CURRENT.permanentLimit@A", null, null);
-        assertEquals("limits1_CURRENT.permanentLimit@A", EventCompactor.attributeKey(probe, (Network) null));
+        assertEquals("limits1_CURRENT.permanentLimit@A", EventCompactor.attributeKey(probe));
     }
 
     @Test
@@ -335,7 +335,6 @@ class EventCompactorTest {
         assertEquals(List.of(events.get(0)), changes.events());
         assertEquals(before, changes.firstOldValue("SVC2", CgmesChangeTranslator.LOCAL_TARGET_V));
         assertFalse(changes.hasChange("SVC2", "voltageSetpoint"));
-        assertNull(EventCompactor.attributeKey((UpdateNetworkEvent) events.get(1), network));
     }
 
     /**

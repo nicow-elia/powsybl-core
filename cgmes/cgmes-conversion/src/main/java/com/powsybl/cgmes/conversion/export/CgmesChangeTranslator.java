@@ -442,7 +442,7 @@ class CgmesChangeTranslator {
         // The key rather than the plain attribute name, so that the operational limits group and the acceptable
         // duration a limit change carries in its payload select the right limit. For every other attribute the two
         // are the same string.
-        String attribute = EventCompactor.attributeKey(event, identifiable);
+        String attribute = EventCompactor.attributeKey(event);
         Optional<String> rebuilt = regulationTheImportRebuilds(identifiable);
         if (rebuilt.isPresent()) {
             return failure(rebuilt.get());
