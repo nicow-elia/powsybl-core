@@ -33,10 +33,10 @@ import com.powsybl.iidm.network.Terminal;
 import com.powsybl.iidm.network.VoltageSourceConverter;
 import com.powsybl.iidm.network.VscConverterStation;
 import com.powsybl.iidm.network.events.NetworkEvent;
+import com.powsybl.iidm.network.events.UpdateNetworkEvent;
 import com.powsybl.iidm.network.regulation.RegulationMode;
 import com.powsybl.iidm.network.regulation.VoltageRegulation;
 import com.powsybl.iidm.network.regulation.VoltageRegulationHolder;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
@@ -45,6 +45,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Properties;
 import java.util.Set;
 import java.util.SortedMap;
@@ -73,10 +74,13 @@ import static org.junit.jupiter.api.Assertions.fail;
  * </ul>
  * <p>A silently empty export and a receiver that ends in another state than the sender are both failures. The only
  * values a receiver may legitimately differ on are the local targets its regulation does not use, see
- * {@link #inactiveLocalTargets}. The only change that may go unexported is one IIDM reports nowhere: a deprecated
- * setter that created the {@code VoltageRegulation} and changed nothing else (gap G1, see {@link #reportsNothing}).
- * A partial file that describes nothing is not applied, since a CGMES update visits the whole receiver whatever the
- * file holds.</p>
+ * {@link #inactiveLocalTargets}. The only change that may go unexported is one IIDM reports nowhere (gap G1, see
+ * {@link #iidmSilent}). A partial file that describes nothing is not applied, since a CGMES update visits the whole
+ * receiver whatever the file holds.</p>
+ *
+ * <p>The outcome of every case ({@link Outcome}) is committed in {@value #EXPECTED_OUTCOMES} and compared after the
+ * run, so that a later change cannot turn an export into a refusal, or a refusal into a silent loss, unnoticed.
+ * {@code -Dmatrix.regenerate=true} rewrites it from the observed outcomes, for a review of the diff.</p>
  *
  * <p>{@code -Dmatrix.trace=true} prints the recorded events and the outcome of every route of every case.</p>
  *
@@ -225,11 +229,12 @@ class RegulationSetterMatrixTest {
     }
 
     /** A terminal of another equipment than the holder, to regulate. */
-    private static Terminal anotherTerminal(Network network, Identifiable<?> owner) {
+    private static Terminal anotherTerminal(Network network, Identifiable<?> owner, Terminal current) {
         return network.getConnectableStream()
                 .filter(c -> !c.getId().equals(owner.getId()) && !(c instanceof BusbarSection)
                         && !(c instanceof AcDcConverter<?>))
                 .map(c -> (Terminal) ((Connectable<?>) c).getTerminals().get(0))
+                .filter(t -> t != current)
                 .findFirst().orElseThrow();
     }
 
@@ -254,7 +259,7 @@ class RegulationSetterMatrixTest {
         }));
         setters.add(new Setter("VoltageRegulation.setTerminal", true, (n, h, change) -> {
             VoltageRegulation regulation = h.getVoltageRegulation();
-            Terminal terminal = change ? anotherTerminal(n, holder.owner().apply(n)) : regulation.getTerminal();
+            Terminal terminal = change ? anotherTerminal(n, holder.owner().apply(n), regulation.getTerminal()) : regulation.getTerminal();
             regulation.setTerminal(terminal, regulation.getTargetValue());
         }));
         setters.add(new Setter("setLocalTargetV", false,
@@ -295,7 +300,7 @@ class RegulationSetterMatrixTest {
                 }));
                 setters.add(new Setter("Generator.setRegulatingTerminal", false, (n, h, change) -> {
                     Generator g = (Generator) h;
-                    g.setRegulatingTerminal(change ? anotherTerminal(n, g) : g.getRegulatingTerminal());
+                    g.setRegulatingTerminal(change ? anotherTerminal(n, g, g.getRegulatingTerminal()) : g.getRegulatingTerminal());
                 }));
             }
             case ShuntCompensator ignored -> {
@@ -313,7 +318,7 @@ class RegulationSetterMatrixTest {
                 }));
                 setters.add(new Setter("ShuntCompensator.setRegulatingTerminal", false, (n, h, change) -> {
                     ShuntCompensator s = (ShuntCompensator) h;
-                    s.setRegulatingTerminal(change ? anotherTerminal(n, s) : s.getRegulatingTerminal());
+                    s.setRegulatingTerminal(change ? anotherTerminal(n, s, s.getRegulatingTerminal()) : s.getRegulatingTerminal());
                 }));
             }
             case StaticVarCompensator ignored -> {
@@ -335,7 +340,7 @@ class RegulationSetterMatrixTest {
                 }));
                 setters.add(new Setter("StaticVarCompensator.setRegulatingTerminal", false, (n, h, change) -> {
                     StaticVarCompensator s = (StaticVarCompensator) h;
-                    s.setRegulatingTerminal(change ? anotherTerminal(n, s) : s.getRegulatingTerminal());
+                    s.setRegulatingTerminal(change ? anotherTerminal(n, s, s.getRegulatingTerminal()) : s.getRegulatingTerminal());
                 }));
             }
             case RatioTapChanger ignored -> {
@@ -362,7 +367,7 @@ class RegulationSetterMatrixTest {
                 setters.add(new Setter("RatioTapChanger.setRegulationTerminal", false, (n, h, change) -> {
                     RatioTapChanger r = (RatioTapChanger) h;
                     Identifiable<?> owner = holder.owner().apply(n);
-                    r.setRegulationTerminal(change ? anotherTerminal(n, owner) : r.getRegulationTerminal());
+                    r.setRegulationTerminal(change ? anotherTerminal(n, owner, r.getRegulationTerminal()) : r.getRegulationTerminal());
                 }));
             }
             case VscConverterStation ignored -> {
@@ -393,7 +398,7 @@ class RegulationSetterMatrixTest {
                         }));
                 setters.add(new Setter("VscConverterStation.setRegulatingTerminal", false, (n, h, change) -> {
                     VscConverterStation s = (VscConverterStation) h;
-                    s.setRegulatingTerminal(change ? anotherTerminal(n, s) : s.getRegulatingTerminal());
+                    s.setRegulatingTerminal(change ? anotherTerminal(n, s, s.getRegulatingTerminal()) : s.getRegulatingTerminal());
                 }));
             }
             case VoltageSourceConverter ignored -> {
@@ -420,7 +425,15 @@ class RegulationSetterMatrixTest {
         for (Holder holder : holders()) {
             List<Setter> setters = new ArrayList<>(newApi(holder));
             setters.addAll(bridges(holder));
+            VoltageRegulationHolder<?> loaded = holder.holder().apply(holder.load(true));
+            boolean withTerminal = loaded.getVoltageRegulation() != null && loaded.getVoltageRegulation().isWithTerminal();
             for (Setter setter : setters) {
+                // Rows that cannot carry a change (review 21 round 3, r3-m9): a ratio tap changer has no local targets,
+                // and the target value of a regulation without terminal is not read (refused by IIDM, or ignored)
+                if (loaded instanceof RatioTapChanger && setter.name().startsWith("setLocalTarget")
+                        || !withTerminal && setter.name().equals("VoltageRegulation.setTargetValue")) {
+                    continue;
+                }
                 for (boolean withRegulation : new boolean[] {true, false}) {
                     // Without a VoltageRegulation there is nothing to call its setters on; and a remote regulation
                     // without a VoltageRegulation is the local case
@@ -439,15 +452,84 @@ class RegulationSetterMatrixTest {
         return cases;
     }
 
+    /** The outcome of a case, committed per case in {@value #EXPECTED_OUTCOMES}. */
+    enum Outcome {
+        /** The sender changed, every route takes a receiver to its state (and back to the original on revert). */
+        EXPORTED,
+        /** Every route refuses the change, with a cause and a remedy. */
+        REFUSED,
+        /** The sender changed only in values the SSH does not represent (see {@link #inactiveLocalTargets}). */
+        NOT_REPRESENTED,
+        /**
+         * The sender changed, but IIDM reported no event with a new value (gap G1: a regulation created or removed):
+         * no export can see it, and none writes anything.
+         */
+        IIDM_SILENT,
+        /** IIDM refuses the setter itself: there is no change. */
+        IIDM_REFUSES,
+        /** The setter sets the values the holder has: the sender does not change (only for the no-op cases). */
+        UNCHANGED
+    }
+
+    /** The committed expected outcome of every case, a generated and reviewed resource. */
+    static final String EXPECTED_OUTCOMES = "/regulation-setter-matrix/expected-outcomes.tsv";
+
+    private static final Map<String, Outcome> OBSERVED = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static Map<String, Outcome> expectedOutcomes() {
+        Map<String, Outcome> expected = new java.util.LinkedHashMap<>();
+        java.io.InputStream stream = RegulationSetterMatrixTest.class.getResourceAsStream(EXPECTED_OUTCOMES);
+        if (stream == null) {
+            return expected;
+        }
+        try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                new java.io.InputStreamReader(stream, java.nio.charset.StandardCharsets.UTF_8))) {
+            reader.lines().filter(line -> !line.isBlank() && !line.startsWith("#")).forEach(line -> {
+                int tab = line.lastIndexOf('\t');
+                expected.put(line.substring(0, tab), Outcome.valueOf(line.substring(tab + 1)));
+            });
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
+        return expected;
+    }
+
+    private static final Map<String, Outcome> EXPECTED = expectedOutcomes();
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("cases")
     void everyRegulationSetterIsExportedOrRefused(Case c) {
-        check(c);
+        Outcome outcome = check(c);
+        OBSERVED.put(c.name(), outcome);
+        trace(c, "OUTCOME", outcome.name());
+        if (!Boolean.getBoolean("matrix.regenerate")) {
+            assertEquals(EXPECTED.get(c.name()), outcome, () -> c.name() + ": not the committed outcome ("
+                    + EXPECTED_OUTCOMES + ", regenerate with -Dmatrix.regenerate=true and review the diff)");
+        }
     }
 
-    private static void check(Case c) {
+    /** With {@code -Dmatrix.regenerate=true}, write the observed outcomes as the new expected ones. */
+    @org.junit.jupiter.api.AfterAll
+    static void regenerate() throws java.io.IOException {
+        if (!Boolean.getBoolean("matrix.regenerate")) {
+            return;
+        }
+        StringBuilder table = new StringBuilder("# case\texpected outcome, see RegulationSetterMatrixTest.Outcome\n");
+        for (Case c : cases()) {
+            // A case that failed has no outcome and is left out: the next run then fails on it
+            if (OBSERVED.containsKey(c.name())) {
+                table.append(c.name()).append('\t').append(OBSERVED.get(c.name())).append('\n');
+            }
+        }
+        java.nio.file.Path file = java.nio.file.Path.of("src/test/resources" + EXPECTED_OUTCOMES);
+        java.nio.file.Files.createDirectories(file.getParent());
+        java.nio.file.Files.writeString(file, table.toString());
+    }
+
+    private static Outcome check(Case c) {
         Network sender = c.holder().load(c.withRegulation());
         SortedMap<String, String> original = SteadyStateFingerprint.of(sender);
+        String terminalBefore = regulatingTerminalOf(c, sender);
         // What the regulation does not use in the original state, for the comparison after a revert
         Set<String> inactiveBefore = inactiveLocalTargets(c, sender);
         List<NetworkEvent> events;
@@ -457,19 +539,25 @@ class RegulationSetterMatrixTest {
         } catch (UnsupportedOperationException | PowsyblException e) {
             // IIDM itself refuses the setter on this holder: there is no change to export
             trace(c, "setter", "IIDM REFUSES " + e.getMessage());
-            Assumptions.abort("IIDM refuses " + c.setter().name() + " here: " + e.getMessage());
-            return;
+            return Outcome.IIDM_REFUSES;
         }
         SortedMap<String, String> changed = SteadyStateFingerprint.of(sender);
+        Map<String, String[]> senderChange = SteadyStateFingerprint.diff(original, changed);
         trace(c, "events", events.toString());
-        trace(c, "sender", SteadyStateFingerprint.diff(original, changed).entrySet().stream()
+        trace(c, "sender", senderChange.entrySet().stream()
                 .map(en -> en.getKey() + "=" + en.getValue()[0] + "->" + en.getValue()[1]).toList().toString());
+        // A change case that changes nothing tests nothing (review 21 round 3, r3-m9). The regulating terminal is not in
+        // the fingerprint (the import normalises it), so it is compared here, on the sender only
+        boolean terminalChanged = !Objects.equals(terminalBefore, regulatingTerminalOf(c, sender));
+        assertTrue(!c.change() || !senderChange.isEmpty() || terminalChanged,
+                () -> c.name() + ": the change changes nothing");
 
         Properties parameters = new Properties();
         parameters.putAll(c.holder().importParams());
         parameters.put(CgmesImport.USE_PREVIOUS_VALUES_DURING_UPDATE, "true");
         Set<String> inactive = inactiveLocalTargets(c, sender);
-        boolean nothingExported = false;
+        int refusals = 0;
+        boolean written = false;
 
         // The partial steady state hypothesis. A file that describes nothing is not applied: an update runs the whole
         // CGMES update over the receiver whatever the file holds, which is not what an empty change asks for
@@ -478,19 +566,19 @@ class RegulationSetterMatrixTest {
             List<NetworkEvent> exported = PartialSshExport.write(sender, events, bytes,
                     new PartialSshExport.ExportOptions()
                             .setUnsupportedChangeBehavior(PartialSshExport.UnsupportedChangeBehavior.FAIL));
+            written = !exported.isEmpty();
             Network receiver = c.holder().load(c.withRegulation());
-            if (exported.isEmpty() && reportsNothing(c, original, changed)) {
-                nothingExported = true;
-            } else {
-                if (!exported.isEmpty()) {
-                    MemDataSource dataSource = new MemDataSource();
-                    dataSource.putData("partial_SSH.xml", bytes.toByteArray());
-                    receiver.update(dataSource, parameters);
-                }
+            if (written) {
+                MemDataSource dataSource = new MemDataSource();
+                dataSource.putData("partial_SSH.xml", bytes.toByteArray());
+                receiver.update(dataSource, parameters);
+            }
+            if (written || !iidmSilent(c, sender, events, original, changed)) {
                 assertSameState(c, "partial SSH", changed, SteadyStateFingerprint.of(receiver), inactive, events);
             }
         } catch (PowsyblException e) {
             assertRefusal(c, "partial SSH", e);
+            refusals++;
         }
 
         // The difference model, both granularities, applied and reverted
@@ -501,39 +589,65 @@ class RegulationSetterMatrixTest {
                 parsed = exportAndParse(sender, events, granularity);
             } catch (PowsyblException e) {
                 assertRefusal(c, route, e);
+                refusals++;
                 continue;
             }
-            if (parsed.models().isEmpty() && nothingExported) {
+            written |= !parsed.models().isEmpty();
+            if (parsed.models().isEmpty() && iidmSilent(c, sender, events, original, changed)) {
                 continue;
             }
             Network receiver = c.holder().load(c.withRegulation());
             try {
                 CgmesDiffImport.apply(receiver, parsed, parameters, ReportNode.NO_OP);
             } catch (CgmesDiffNotApplicableException e) {
-                // An explicit refusal of the in-place route, with its reasons: not silent
-                trace(c, route, "SLOW " + e.getMessage());
-                assertTrue(!e.getMessage().isEmpty(), c.name());
-                continue;
+                fail(c.name() + ": the in-place route refused " + route + ": " + e.getMessage());
             }
             assertSameState(c, route, changed, SteadyStateFingerprint.of(receiver), inactive, events);
             CgmesDiffImport.revert(receiver, parsed, parameters, ReportNode.NO_OP);
             assertSameState(c, route + " reverted", original, SteadyStateFingerprint.of(receiver), inactiveBefore, events);
         }
+
+        if (refusals > 0) {
+            assertEquals(3, refusals, () -> c.name() + ": refused by some routes only");
+            return Outcome.REFUSED;
+        }
+        if (senderChange.isEmpty()) {
+            assertTrue(!terminalChanged, () -> c.name() + ": a change of the regulating terminal exported");
+            return Outcome.UNCHANGED;
+        }
+        if (!written && iidmSilent(c, sender, events, original, changed)) {
+            return Outcome.IIDM_SILENT;
+        }
+        return inactive.containsAll(senderChange.keySet()) ? Outcome.NOT_REPRESENTED : Outcome.EXPORTED;
+    }
+
+    /** The regulating terminal of the regulation of the case, as its connectable and side, or {@code none}. */
+    private static String regulatingTerminalOf(Case c, Network network) {
+        VoltageRegulation regulation = c.holder().holder().apply(network).getVoltageRegulation();
+        Terminal terminal = regulation == null ? null : regulation.getTerminal();
+        return terminal == null ? "none" : terminal.getConnectable().getId() + "/"
+                + terminal.getConnectable().getTerminals().indexOf(terminal);
     }
 
     /**
-     * Whether the sender changed although the change set reports nothing an export can see: the deprecated setter
-     * created the {@code VoltageRegulation}, which IIDM reports nowhere (gap G1, issue draft
-     * {@code voltage-regulation-creation-fires-no-event.md}), and every event it did report is dropped by the
-     * compaction as a no-op. It is recognised narrowly: the sender differs from the original by a
-     * {@code VoltageRegulation} it did not have, and the export wrote nothing.
+     * Whether the sender changed although IIDM reported nothing an export can see (gap G1, issue draft
+     * {@code voltage-regulation-creation-fires-no-event.md}): a {@code VoltageRegulation} was created or removed, and
+     * no recorded event has an old value different from its new one. When a deprecated setter created the regulation
+     * and reported a no-op, the regulation it created must not regulate either: a holder that starts regulating has
+     * changed in a way the log would have to show (review 21 round 3, R3-M2).
      */
-    private static boolean reportsNothing(Case c, SortedMap<String, String> original,
-                                          SortedMap<String, String> changed) {
-        boolean g1 = SteadyStateFingerprint.diff(original, changed).entrySet().stream()
-                .anyMatch(entry -> entry.getKey().endsWith("voltageRegulation") && "none".equals(entry.getValue()[0]));
-        trace(c, "G1", String.valueOf(g1));
-        return g1;
+    private static boolean iidmSilent(Case c, Network sender, List<NetworkEvent> events,
+                                      SortedMap<String, String> original, SortedMap<String, String> changed) {
+        boolean creationOrRemoval = SteadyStateFingerprint.diff(original, changed).entrySet().stream()
+                .anyMatch(entry -> entry.getKey().endsWith("voltageRegulation")
+                        && ("none".equals(entry.getValue()[0]) || "none".equals(entry.getValue()[1])));
+        boolean nothingReported = events.stream().allMatch(event -> event instanceof UpdateNetworkEvent update
+                && Objects.equals(update.oldValue(), update.newValue()));
+        VoltageRegulation now = c.holder().holder().apply(sender).getVoltageRegulation();
+        boolean startsRegulatingUnderANoOp = !events.isEmpty() && now != null && now.isRegulating();
+        boolean silent = creationOrRemoval && nothingReported && !startsRegulatingUnderANoOp;
+        trace(c, "G1", String.valueOf(silent));
+        return silent;
     }
 
     /**

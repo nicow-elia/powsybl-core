@@ -226,7 +226,7 @@ write through the `VoltageRegulation`, which reports the change under its own na
 their historical name. The export treats that second event as an *echo*, with one rule:
 
 1. an echo that repeats a value an earlier event of the same equipment reported under its own name is dropped;
-2. an echo that sets the value it had, or that reports no old value (`setTargetDeadband` reports `NaN`), is dropped;
+2. an echo that sets the value it had is dropped;
 3. any other echo is the only report of a change the `VoltageRegulation` did not report. That happens when the deprecated
    setter had to create the `VoltageRegulation` (IIDM reports no creation) or reported a wrong old value; the state
    before the change set cannot be told, so both change exports refuse it. The refusal says so and gives the remedy:

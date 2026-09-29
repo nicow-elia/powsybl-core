@@ -115,15 +115,6 @@ final class LegacyRegulationKeys {
     }
 
     /**
-     * Whether an echo reports no old value at all: {@code ShuntCompensator.setTargetDeadband} and
-     * {@code RatioTapChanger.setTargetDeadband} report {@code NaN} whatever the deadband was.
-     */
-    static boolean reportsNoOldValue(String attribute, Object oldValue) {
-        return oldValue instanceof Double value && value.isNaN()
-                && ("targetDeadband".equals(attribute) || attribute.endsWith(".targetDeadband"));
-    }
-
-    /**
      * The attribute a change of the given identifiable is kept under.
      *
      * @param identifiable the identifiable the change was reported on, {@code null} when the network no longer has it

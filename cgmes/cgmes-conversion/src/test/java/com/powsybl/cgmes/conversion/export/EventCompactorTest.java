@@ -248,13 +248,14 @@ class EventCompactorTest {
     }
 
     /**
-     * Rule 2: an echo that is the only event of its key (the canonical event was suppressed, nothing changed) and
-     * reports no old value ({@code ShuntCompensator.setTargetDeadband} reports NaN whatever the deadband was) is a
-     * no-op: neither exported nor remembered.
+     * An echo without canonical event that reports no old value ({@code ShuntCompensator.setTargetDeadband} reports NaN
+     * whatever the deadband was) is not a no-op: the bridge may have created the regulation with that deadband, so it
+     * is the sole carrier of a change (rule 3), kept under its own name and never remembered (review 21 round 3,
+     * r3-m7: rule 2 no longer has a NaN clause).
      */
     @Test
     @SuppressWarnings("removal")
-    void anEchoWithoutOldValueThatRepeatsNothingIsANoOp() {
+    void anEchoWithoutOldValueThatRepeatsNothingIsASoleCarrier() {
         Network network = ShuntTestCaseFactory.create();
         ShuntCompensator shunt = network.getShuntCompensator("SHUNT");
         shunt.getVoltageRegulation().setTargetDeadband(1.0);
@@ -263,7 +264,7 @@ class EventCompactorTest {
         assertTrue(Double.isNaN((Double) ((UpdateNetworkEvent) events.get(0)).oldValue()));
         CompactedChanges changes = EventCompactor.compact(events, VARIANT, network);
 
-        assertEquals(List.of(), changes.events());
+        assertEquals(events, changes.events());
         assertFalse(changes.hasChange("SHUNT", CgmesChangeTranslator.VR_TARGET_DEADBAND));
         assertFalse(changes.hasChange("SHUNT", "targetDeadband"));
     }

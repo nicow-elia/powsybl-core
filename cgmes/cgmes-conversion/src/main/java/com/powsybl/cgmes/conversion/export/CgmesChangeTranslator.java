@@ -525,6 +525,11 @@ class CgmesChangeTranslator {
             return failure("no CGMES property corresponds to " + identifiable.getType() + "." + attribute
                     + " (transformer impedances cannot be mapped to CGMES ends, see docs)");
         }
+        if ("pccTerminal".equals(attribute)) {
+            // The regulating terminal of a voltage source converter of the detailed model is its point of common coupling
+            return failure("the point of common coupling of a converter is ACDCConverter.PccTerminal, which belongs to"
+                    + " the EQ profile. " + REMEDY + "export the equipment model with the change (a full CGMES export)");
+        }
         if (attribute.endsWith(VR_TARGET_DEADBAND)) {
             return failure("the CGMES update reads the deadband of a RegulatingControl for shunt compensators and tap"
                     + " changers only, not for a " + identifiable.getType() + ". " + REMEDY + "leave the deadband"

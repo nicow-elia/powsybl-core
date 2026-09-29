@@ -48,8 +48,7 @@ import java.util.Set;
  * <ol>
  *     <li>An echo <b>repeats</b> a change when an earlier event of the same equipment in the log reported one of the
  *     canonical values it stands for with the same new value. It is dropped: neither exported nor remembered.</li>
- *     <li>An echo that sets the value it had (old value equal to the new one), or that reports no old value at all
- *     (the {@code NaN} of a deadband echo), is a <b>no-op</b> and is dropped.</li>
+ *     <li>An echo that sets the value it had (old value equal to the new one) is a <b>no-op</b> and is dropped.</li>
  *     <li>Any other echo is the <b>sole carrier</b> of a change the new model did not report. That happens when the
  *     deprecated setter created the {@code VoltageRegulation}, which IIDM reports nowhere (gap G1), and when a
  *     bridge reports a wrong old value for a value it did not change; the two cannot be told apart from the log.
@@ -137,8 +136,7 @@ final class EventCompactor {
     private static UpdateKey echoKey(UpdateNetworkEvent echo, Set<String> repeated, Map<UpdateKey, Set<Object>> reported) {
         boolean repeats = repeated.stream().anyMatch(key -> reported
                 .getOrDefault(new UpdateKey(echo.id(), key), Set.of()).contains(echo.newValue()));
-        boolean noOp = Objects.equals(echo.oldValue(), echo.newValue())
-                || LegacyRegulationKeys.reportsNoOldValue(echo.attribute(), echo.oldValue());
+        boolean noOp = Objects.equals(echo.oldValue(), echo.newValue());
         return repeats || noOp ? DROPPED : new UpdateKey(echo.id(), echo.attribute());
     }
 

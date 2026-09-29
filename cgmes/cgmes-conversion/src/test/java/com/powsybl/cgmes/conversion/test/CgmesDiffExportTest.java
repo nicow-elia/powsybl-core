@@ -598,7 +598,9 @@ class CgmesDiffExportTest extends AbstractSerDeTest {
      * A deprecated setter that does not change the value still fires its echo, and the echo of
      * {@code ShuntCompensator.setTargetDeadband} reports NaN as the old value whatever the deadband was. The canonical
      * event is suppressed (old value equals new value), so the echo is the only event of its key: it must not be read
-     * as the state before the change set, which would describe a deadband that was added (review 21 finding M5).
+     * as the state before the change set, which would describe a deadband that was added (review 21 finding M5). The
+     * same echo is what a bridge that created the regulation with that deadband reports, so it is refused as the sole
+     * carrier of a change rather than taken for a no-op (review 21 round 3, r3-m7).
      */
     @Test
     @SuppressWarnings("removal")
@@ -609,9 +611,9 @@ class CgmesDiffExportTest extends AbstractSerDeTest {
                 n -> n.getShuntCompensator("LinearShuntCompensator").setTargetDeadband(1.0));
         assertEquals(List.of("targetDeadband"), events.stream().map(e -> ((UpdateNetworkEvent) e).attribute()).toList());
 
-        CgmesDiffExport.Result result = CgmesDiffExport.toDifferences(network, events, new ExportOptions());
-        assertTrue(result.differences().isEmpty(), () -> "a change that changed nothing has no difference, got "
-                + result.differences());
+        PowsyblException refusal = assertThrows(PowsyblException.class,
+                () -> CgmesDiffExport.toDifferences(network, events, new ExportOptions()));
+        assertTrue(refusal.getMessage().contains("Remedy: "), refusal.getMessage());
     }
 
     /**
