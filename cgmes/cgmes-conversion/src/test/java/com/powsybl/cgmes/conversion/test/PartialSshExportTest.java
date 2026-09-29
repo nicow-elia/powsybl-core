@@ -1073,8 +1073,9 @@ class PartialSshExportTest extends AbstractSerDeTest {
 
     /**
      * Zero is a setpoint like any other, and a line brought down to no power is exactly the change an operator
-     * expects to survive. A targetPpcc of zero written on the rectifier side is a setpoint, not a missing value.
-     * (https://github.com/powsybl/powsybl-core/issues/4028)
+     * expects to survive. A targetPpcc of zero is a setpoint, not a missing value: since powsybl-core #4057 (which
+     * fixed https://github.com/powsybl/powsybl-core/issues/4028) the import takes a finite targetPpcc stated on either
+     * side as the power of the link.
      */
     @Test
     void hvdcActivePowerSetpointOfZeroRoundTrip() throws IOException {
@@ -1743,11 +1744,12 @@ class PartialSshExportTest extends AbstractSerDeTest {
         // The two participation factors collapse, the priority of the other extension does not merge with them
         // (the second extension was the RemoteReactivePowerControl before powsybl-core #3699 removed it)
         assertEquals(2, compactedEvents.size());
-        assertEquals(List.of(
-                        new ExtensionUpdateNetworkEvent("SynchronousMachine", ActivePowerControl.NAME,
-                                "participationFactor", VariantManagerConstants.INITIAL_VARIANT_ID, 2.0, 3.0),
-                        recorder.getEvents().get(2)),
-                compactedEvents);
+        assertEquals(new ExtensionUpdateNetworkEvent("SynchronousMachine", ActivePowerControl.NAME,
+                        "participationFactor", VariantManagerConstants.INITIAL_VARIANT_ID, 2.0, 3.0), compactedEvents.get(0));
+        ExtensionUpdateNetworkEvent priority = (ExtensionUpdateNetworkEvent) compactedEvents.get(1);
+        assertEquals("SynchronousMachine", priority.id());
+        assertEquals("referencePriorities", priority.extensionName());
+        assertEquals("referencePriority", priority.attribute());
     }
 
     /** The variant check applies to a change of an extension exactly as it applies to a change of the equipment. */

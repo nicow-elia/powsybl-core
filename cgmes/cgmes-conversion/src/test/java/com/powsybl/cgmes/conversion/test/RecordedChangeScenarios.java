@@ -476,9 +476,11 @@ public final class RecordedChangeScenarios {
         scenarios.add(scenario("staticVarCompensatorRegulating", STATIC_VAR_COMPENSATOR_DIR, SVC_FILES,
                 n -> n.getStaticVarCompensator("StaticVarCompensator-V").setRegulating(false),
                 n -> n.getStaticVarCompensator("StaticVarCompensator-V").setRegulating(true)));
-        // The setpoint of the mode a compensator is not in has no property in the steady state hypothesis: its
-        // RegulatingControl carries the target of the CGMES mode alone. Changed next to the active setpoint, so
-        // that the difference is not empty and the inactive value really is left out of both directions.
+        // The setpoint of the mode a compensator is not in has no property on its RegulatingControl, which carries
+        // the target of the CGMES mode alone. Changed next to the active setpoint, so that the difference is not
+        // empty. Since powsybl-core #3699 the reactive setpoint of a compensator regulating voltage is its local
+        // reactive target, which is exported as StaticVarCompensator.q; the voltage setpoint of a compensator
+        // regulating reactive power is still left out of both directions.
         scenarios.add(scenario("staticVarCompensatorInactiveReactiveSetpoint", STATIC_VAR_COMPENSATOR_DIR, SVC_FILES,
                 n -> n.getStaticVarCompensator("StaticVarCompensator-V").setReactivePowerSetpoint(10.0),
                 n -> n.getStaticVarCompensator("StaticVarCompensator-V").setVoltageSetpoint(400.0).setReactivePowerSetpoint(50.0),

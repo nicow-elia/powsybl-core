@@ -50,6 +50,9 @@ final class LegacyRegulationKeys {
     /** The key under which a change is kept: the attribute itself, a canonical attribute, or {@link #DROPPED}. */
     static final String DROPPED = null;
 
+    // Keyed by attribute name for any kind of identifiable: at powsybl-core 7.5 no other equipment than the voltage
+    // regulation holders named in the comments reports these names (a boundary line spells its flag
+    // voltageRegulationOn), so no type check is needed; a new user of one of these names would have to be added here.
     private static final Map<String, String> CANONICAL = Map.of(
             // Generator, shunt compensator, VSC converter station, voltage source converter
             "voltageRegulatorOn", VR_REGULATING,
