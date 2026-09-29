@@ -14,7 +14,6 @@ import com.powsybl.iidm.network.*;
 import com.powsybl.triplestore.api.PropertyBag;
 
 import java.util.*;
-import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static com.powsybl.cgmes.conversion.Conversion.*;
@@ -30,34 +29,42 @@ public final class TerminalConversion {
     }
 
     public static void create(Network network, PropertyBag cgmesTerminal, Context context) {
-        create(network, cgmesTerminal, context, () -> terminalsWithFictitiousSwitch(network));
+        create(network, cgmesTerminal, context, null);
     }
 
     /**
-     * As {@link #create(Network, PropertyBag, Context)}, with the terminals that already have a fictitious switch
-     * given by the caller, so that a pass over all the terminals of a model does not scan all the switches of the
-     * network once per disconnected terminal. The set is completed with the terminals this call creates a switch for.
+     * As {@link #create(Network, PropertyBag, Context)}, for a pass over all the terminals of a model: the terminals
+     * that already have a fictitious switch are given, built once with {@link #terminalsWithFictitiousSwitch}, and
+     * completed with the terminal of every switch this call creates, so that the pass scans the switches of the
+     * network once instead of once per disconnected terminal. {@code null} looks them up for this terminal alone.
      */
-    public static void create(Network network, PropertyBag cgmesTerminal, Context context, Supplier<Set<String>> terminalsWithFictitiousSwitch) {
+    public static void create(Network network, PropertyBag cgmesTerminal, Context context, Set<String> terminalsWithFictitiousSwitch) {
         String cgmesTerminalId = cgmesTerminal.getId(CgmesNames.TERMINAL);
         boolean connected = cgmesTerminal.asBoolean(CgmesNames.CONNECTED, true);
-        if (createFictitiousSwitch(network, cgmesTerminalId, connected, context, terminalsWithFictitiousSwitch)) {
-            create(network, cgmesTerminalId, context);
-            terminalsWithFictitiousSwitch.get().add(cgmesTerminalId);
+        if (createFictitiousSwitch(network, cgmesTerminalId, connected, context, terminalsWithFictitiousSwitch)
+                && create(network, cgmesTerminalId, context) && terminalsWithFictitiousSwitch != null) {
+            terminalsWithFictitiousSwitch.add(cgmesTerminalId);
         }
     }
 
-    /** The CGMES terminals a fictitious switch was created for, identified by the properties the creation sets. */
+    /**
+     * Whether a switch is the fictitious switch created for a disconnected terminal, identified by the properties the
+     * creation sets: its identifier is {@code <terminal>_SW_fict} unless identifier unicity is ensured.
+     */
+    public static boolean isFictitiousSwitchOfATerminal(Switch sw) {
+        return sw != null && "true".equals(sw.getProperty(PROPERTY_IS_CREATED_FOR_DISCONNECTED_TERMINAL))
+                && sw.getProperty(PROPERTY_TERMINAL) != null;
+    }
+
+    /** The CGMES terminals of the network that have a fictitious switch. */
     public static Set<String> terminalsWithFictitiousSwitch(Network network) {
-        return network.getSwitchStream()
-                .filter(s -> "true".equals(s.getProperty(PROPERTY_IS_CREATED_FOR_DISCONNECTED_TERMINAL)))
+        return network.getSwitchStream().filter(TerminalConversion::isFictitiousSwitchOfATerminal)
                 .map(s -> s.getProperty(PROPERTY_TERMINAL))
-                .filter(Objects::nonNull)
                 .collect(Collectors.toCollection(HashSet::new));
     }
 
     private static boolean createFictitiousSwitch(Network network, String cgmesTerminalId, boolean connected, Context context,
-                                                  Supplier<Set<String>> terminalsWithFictitiousSwitch) {
+                                                  Set<String> terminalsWithFictitiousSwitch) {
         // Terminal id shouldn't be null
         Objects.requireNonNull(cgmesTerminalId);
 
@@ -68,7 +75,9 @@ public final class TerminalConversion {
         }
 
         // Check if a fictitious switch has already been created (from a previous update).
-        if (terminalsWithFictitiousSwitch.get().contains(cgmesTerminalId)) {
+        Set<String> existing = terminalsWithFictitiousSwitch != null ? terminalsWithFictitiousSwitch
+                : terminalsWithFictitiousSwitch(network);
+        if (existing.contains(cgmesTerminalId)) {
             return false;
         }
 
@@ -80,18 +89,22 @@ public final class TerminalConversion {
         };
     }
 
-    private static void create(Network network, String cgmesTerminalId, Context context) {
+    /** Create the fictitious switch of a terminal of a node/breaker voltage level, and say whether one was created. */
+    private static boolean create(Network network, String cgmesTerminalId, Context context) {
         Identifiable<?> identifiable = network.getIdentifiable(cgmesTerminalId);
         if (identifiable instanceof Switch sw) {
             if (sw.getVoltageLevel().getTopologyKind() == TopologyKind.NODE_BREAKER) {
                 createSwitchForSwitch(sw, getNode(sw, cgmesTerminalId), cgmesTerminalId, context);
+                return true;
             }
         } else if (identifiable instanceof Connectable<?> connectable) {
             Terminal terminal = getTerminal(connectable, cgmesTerminalId);
             if (terminal != null && terminal.getVoltageLevel().getTopologyKind() == TopologyKind.NODE_BREAKER) {
                 createSwitchForTerminal(terminal, cgmesTerminalId, context);
+                return true;
             }
         }
+        return false;
     }
 
     private static int getNode(Switch sw, String terminalId) {

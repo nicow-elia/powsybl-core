@@ -9,6 +9,7 @@ package com.powsybl.cgmes.conversion.diff;
 
 import com.powsybl.cgmes.conversion.Conversion;
 import com.powsybl.cgmes.conversion.diff.FastRouteCapabilities.Family;
+import com.powsybl.cgmes.conversion.elements.TerminalConversion;
 import com.powsybl.cgmes.conversion.export.CgmesExportUtil;
 import com.powsybl.cgmes.conversion.export.CgmesLimitIndex;
 import com.powsybl.cgmes.extensions.CgmesTapChanger;
@@ -369,7 +370,7 @@ final class DiffSubjectResolver {
         Set<String> ids = new LinkedHashSet<>();
         ids.add(owner.getId());
         Switch usual = network.getSwitch(cgmesTerminalId + FICTITIOUS_SWITCH_SUFFIX);
-        if (FastRoutePlan.isFictitiousSwitchOfATerminal(usual) && cgmesTerminalId.equals(usual.getProperty(Conversion.PROPERTY_TERMINAL))) {
+        if (TerminalConversion.isFictitiousSwitchOfATerminal(usual) && cgmesTerminalId.equals(usual.getProperty(Conversion.PROPERTY_TERMINAL))) {
             ids.add(usual.getId());
         } else {
             Optional.ofNullable(fictitiousSwitchByTerminal().get(cgmesTerminalId)).ifPresent(ids::add);
@@ -381,7 +382,7 @@ final class DiffSubjectResolver {
         if (fictitiousSwitchByTerminal == null) {
             fictitiousSwitchByTerminal = new HashMap<>();
             network.getSwitchStream()
-                    .filter(FastRoutePlan::isFictitiousSwitchOfATerminal)
+                    .filter(TerminalConversion::isFictitiousSwitchOfATerminal)
                     .forEach(sw -> fictitiousSwitchByTerminal.put(sw.getProperty(Conversion.PROPERTY_TERMINAL), sw.getId()));
         }
         return fictitiousSwitchByTerminal;

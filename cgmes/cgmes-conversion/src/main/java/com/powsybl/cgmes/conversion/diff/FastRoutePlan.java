@@ -12,6 +12,7 @@ import com.powsybl.cgmes.conversion.RegulatingControlMapping;
 import com.powsybl.cgmes.conversion.UpdateScope;
 import com.powsybl.cgmes.conversion.diff.DiffSubjectResolver.ResolvedSubject;
 import com.powsybl.cgmes.conversion.diff.FastRouteCapabilities.PropertyGroup;
+import com.powsybl.cgmes.conversion.elements.TerminalConversion;
 import com.powsybl.cgmes.conversion.export.CgmesLimitIndex;
 import com.powsybl.cgmes.conversion.export.CgmesObjectDump;
 import com.powsybl.cgmes.extensions.CgmesMetadataModels;
@@ -92,16 +93,6 @@ final class FastRoutePlan {
     private static final String Q_PCC_CONTROL = "VsConverter.qPccControl";
     private static final String CONNECTED = "ACDCTerminal.connected";
     private static final String REGULATING_CONTROL_ENABLED = "RegulatingControl.enabled";
-
-    /**
-     * Whether a switch is the fictitious switch the CGMES update created for a disconnected terminal of a node/breaker
-     * voltage level (powsybl-core #4085), identified by the properties the creation sets, as the importer does: its
-     * identifier may differ from {@code <terminal>_SW_fict} when identifier unicity is ensured.
-     */
-    static boolean isFictitiousSwitchOfATerminal(Switch sw) {
-        return sw != null && "true".equals(sw.getProperty(Conversion.PROPERTY_IS_CREATED_FOR_DISCONNECTED_TERMINAL))
-                && sw.getProperty(Conversion.PROPERTY_TERMINAL) != null;
-    }
 
     /**
      * One object of the synthetic update document.
@@ -568,7 +559,7 @@ final class FastRoutePlan {
          * terminal as a whole, which may call a terminal of a bus/breaker end unsafe but never the other way round.
          */
         private boolean createsFictitiousSwitch(ResolvedSubject subject) {
-            if (subject.iidmIds().stream().map(network::getSwitch).anyMatch(FastRoutePlan::isFictitiousSwitchOfATerminal)) {
+            if (subject.iidmIds().stream().map(network::getSwitch).anyMatch(TerminalConversion::isFictitiousSwitchOfATerminal)) {
                 return false;
             }
             return objectsOf(subject).stream().anyMatch(object -> switch (object) {
