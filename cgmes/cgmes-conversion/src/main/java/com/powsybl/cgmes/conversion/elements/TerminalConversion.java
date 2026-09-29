@@ -14,6 +14,7 @@ import com.powsybl.iidm.network.*;
 import com.powsybl.triplestore.api.PropertyBag;
 
 import java.util.*;
+import java.util.function.Supplier;
 
 import static com.powsybl.cgmes.conversion.Conversion.*;
 import static com.powsybl.cgmes.conversion.elements.AbstractConductingEquipmentConversion.getDefaultIsOpen;
@@ -28,16 +29,15 @@ public final class TerminalConversion {
     }
 
     public static void create(Network network, PropertyBag cgmesTerminal, Context context) {
-        create(network, cgmesTerminal, context, null);
+        create(network, cgmesTerminal, context, () -> terminalsWithFictitiousSwitch(network));
     }
 
-    /** As above, with the terminals that have a fictitious switch built once per pass (completed here), or null. */
-    public static void create(Network network, PropertyBag cgmesTerminal, Context context, Set<String> terminalsWithFictitiousSwitch) {
+    /** As above, with the terminals that have a fictitious switch, asked for only at a disconnected terminal. */
+    public static void create(Network network, PropertyBag cgmesTerminal, Context context, Supplier<Set<String>> terminalsWithFictitiousSwitch) {
         String cgmesTerminalId = cgmesTerminal.getId(CgmesNames.TERMINAL);
         boolean connected = cgmesTerminal.asBoolean(CgmesNames.CONNECTED, true);
         if (createFictitiousSwitch(network, cgmesTerminalId, connected, context, terminalsWithFictitiousSwitch)) {
             create(network, cgmesTerminalId, context);
-            Optional.ofNullable(terminalsWithFictitiousSwitch).ifPresent(terminals -> terminals.add(cgmesTerminalId));
         }
     }
 
@@ -53,7 +53,7 @@ public final class TerminalConversion {
     }
 
     private static boolean createFictitiousSwitch(Network network, String cgmesTerminalId, boolean connected, Context context,
-                                                  Set<String> terminalsWithFictitiousSwitch) {
+                                                  Supplier<Set<String>> terminalsWithFictitiousSwitch) {
         // Terminal id shouldn't be null
         Objects.requireNonNull(cgmesTerminalId);
 
@@ -63,8 +63,8 @@ public final class TerminalConversion {
             return false;
         }
 
-        // Check if a fictitious switch has already been created (from a previous update).
-        if ((terminalsWithFictitiousSwitch != null ? terminalsWithFictitiousSwitch : terminalsWithFictitiousSwitch(network)).contains(cgmesTerminalId)) {
+        // Check if a fictitious switch has already been created (from a previous update), and record this terminal.
+        if (!terminalsWithFictitiousSwitch.get().add(cgmesTerminalId)) {
             return false;
         }
 

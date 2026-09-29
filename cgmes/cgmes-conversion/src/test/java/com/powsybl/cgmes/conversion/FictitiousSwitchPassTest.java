@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 /**
  * The pass that creates the fictitious switch of every disconnected terminal (powsybl-core #4085) scans the switches of
  * the network once, not once per disconnected terminal: on a large model the scan per terminal made the import 1.6 times
- * slower.
+ * slower. A pass without a disconnected terminal (an update of setpoints) does not scan them at all.
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
@@ -90,6 +90,22 @@ class FictitiousSwitchPassTest {
         Update.createFictitiousSwitchesForDisconnectedTerminalsDuringUpdate(counted, cgmes, context);
         assertEquals(1, scans[0]);
         assertEquals(TERMINALS, network.getSwitchStream().filter(Switch::isFictitious).count());
+    }
+
+    @Test
+    void aPassWithoutDisconnectedTerminalsDoesNotScanTheSwitches() {
+        Network network = network();
+        InMemoryCgmesModel cgmes = disconnectedTerminals();
+        cgmes.terminals().forEach(terminal -> terminal.put(CgmesNames.CONNECTED, "true"));
+        int[] scans = {0};
+        Network counted = counting(network, scans);
+        Context context = new Context(cgmes, new Conversion.Config()
+                .createFictitiousSwitchesForDisconnectedTerminalsMode(CgmesImport.FictitiousSwitchesCreationMode.ALWAYS),
+                counted);
+
+        Update.createFictitiousSwitchesForDisconnectedTerminalsDuringUpdate(counted, cgmes, context);
+        assertEquals(0, scans[0]);
+        assertEquals(0, network.getSwitchCount());
     }
 
     /**
