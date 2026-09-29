@@ -422,4 +422,46 @@ class VariantSafetyProbeTest {
                 DifferenceModelHeader.builder("urn:uuid:control-area", CgmesSubset.STEADY_STATE_HYPOTHESIS,
                         CgmesNamespace.CIM_100_NAMESPACE).build(), forward, reverse, List.of())));
     }
+
+    /**
+     * A variant that a refused variant-bound update leaves behind is removed, and the next clone takes its place in
+     * the variant arrays of IIDM. A voltage regulation changed in the removed variant must not reappear in that clone
+     * (review 21 M3, fixed in iidm-impl; round 2 r2-m6 asked for it on imported CGMES models, where the regulations of
+     * static var compensators and VSC converter stations come from the import).
+     */
+    @Test
+    void aRemovedVariantLeavesNoRegulationBehind() {
+        Network svcNetwork = ConversionUtil.readCgmesResources(new Properties(), "/update/static-var-compensator/",
+                new String[] {"staticVarCompensator_EQ.xml", "staticVarCompensator_SSH.xml"});
+        assertNothingLeaks(svcNetwork, network -> network.getStaticVarCompensator("StaticVarCompensator-V")
+                .getVoltageRegulation(), network -> network.getStaticVarCompensator("StaticVarCompensator-V")
+                .getVoltageRegulation().setRegulating(false).setTargetValue(Double.NaN));
+        Network hvdc = ConversionUtil.readCgmesResources(new Properties(), "/update/hvdc/",
+                new String[] {"hvdc_EQ.xml", "hvdc_SSH.xml"});
+        assertNothingLeaks(hvdc, network -> vscRegulation(network),
+            network -> vscRegulation(network).setRegulating(false));
+    }
+
+    private static com.powsybl.iidm.network.regulation.VoltageRegulation vscRegulation(Network network) {
+        return ((com.powsybl.iidm.network.VscConverterStation) network.getHvdcLine("DCLineSegment-Vsc")
+                .getConverterStation2()).getVoltageRegulation();
+    }
+
+    private static void assertNothingLeaks(Network network,
+                                           java.util.function.Function<Network, com.powsybl.iidm.network.regulation.VoltageRegulation> regulation,
+                                           java.util.function.Consumer<Network> change) {
+        var variants = network.getVariantManager();
+        boolean regulating = regulation.apply(network).isRegulating();
+        variants.cloneVariant(VariantManagerConstants.INITIAL_VARIANT_ID, "refused");
+        variants.setWorkingVariant("refused");
+        change.accept(network);
+        assertNotEquals(regulating, regulation.apply(network).isRegulating());
+        variants.setWorkingVariant(VariantManagerConstants.INITIAL_VARIANT_ID);
+        variants.removeVariant("refused");
+
+        variants.cloneVariant(VariantManagerConstants.INITIAL_VARIANT_ID, "next");
+        variants.setWorkingVariant("next");
+        assertEquals(regulating, regulation.apply(network).isRegulating());
+        variants.setWorkingVariant(VariantManagerConstants.INITIAL_VARIANT_ID);
+    }
 }
