@@ -509,6 +509,16 @@ public final class CgmesExportUtil {
         return terminalSign != null ? Integer.parseInt(terminalSign) : 1;
     }
 
+    /**
+     * The terminal sign an exported regulation target has to carry for its receiver: the recorded
+     * {@link #terminalSign} when the steady state hypothesis is read against the equipment model the network was
+     * imported from (an SSH exported alone, a partial SSH, a difference), and 1 when the export writes the equipment
+     * model as well, because that model names the IIDM regulating terminal itself and its import records a sign of 1.
+     */
+    static int exportedTerminalSign(Identifiable<?> identifiable, String endNumber, CgmesExportContext context) {
+        return context.isExportEquipment() ? 1 : terminalSign(identifiable, endNumber);
+    }
+
     public static String getDcTerminalId(DcTerminal dcTerminal, CgmesExportContext context) {
         String aliasType = getDcTerminalSequenceNumber(dcTerminal) == 1 ? ALIAS_DC_TERMINAL1 : ALIAS_DC_TERMINAL2;
         return context.getNamingStrategy().getCgmesIdFromAlias(dcTerminal.getDcConnectable(), aliasType);

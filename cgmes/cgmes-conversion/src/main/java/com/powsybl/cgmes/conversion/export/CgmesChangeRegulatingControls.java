@@ -282,7 +282,7 @@ class CgmesChangeRegulatingControls {
         }
         RegulatingControlView view = tapChanger instanceof RatioTapChanger
                 ? SteadyStateHypothesisExport.regulatingControlView(ref.regulation(), controlId, context, state)
-                : SteadyStateHypothesisExport.regulatingControlView((PhaseTapChanger) tapChanger, controlId, ref, state);
+                : SteadyStateHypothesisExport.regulatingControlView((PhaseTapChanger) tapChanger, controlId, ref, context, state);
         if (view == null) {
             return failure("tap changer " + controlId + " of " + transformer.getId()
                     + " has no regulation the steady state hypothesis profile can express");

@@ -1044,7 +1044,7 @@ class CgmesChangeTranslator {
         }
         CgmesPropertyBuffer control = vscControlModeUpdates(converter).object(CgmesNames.VS_CONVERTER, cgmesId(converter))
                 .value("VsConverter.targetUpcc", SteadyStateHypothesisExport.vscTargetUpcc(regulation, state))
-                .value("VsConverter.targetQpcc", SteadyStateHypothesisExport.vscTargetQpcc(regulation, state))
+                .value("VsConverter.targetQpcc", SteadyStateHypothesisExport.vscTargetQpcc(regulation, context, state))
                 .updates();
         if (!LOCAL_TARGET_Q.equals(attribute) || converter.getHvdcLine() == null) {
             return success(control);
