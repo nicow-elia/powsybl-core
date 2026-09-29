@@ -230,7 +230,12 @@ their historical name. The export treats that second event as an *echo*, with on
 3. any other echo is the only report of a change the `VoltageRegulation` did not report. That happens when the deprecated
    setter had to create the `VoltageRegulation` (IIDM reports no creation) or reported a wrong old value; the state
    before the change set cannot be told, so both change exports refuse it. The refusal says so and gives the remedy:
-   give the equipment its `VoltageRegulation` before recording, and change it through its own setters.
+   give the equipment its `VoltageRegulation` before recording, and change it through its own setters. A deprecated setter called with
+   the value the equipment already has can therefore be refused, when its echo reports a wrong old value
+   (`ShuntCompensator.setTargetDeadband` reports `NaN`, `StaticVarCompensator.setReactivePowerSetpoint` the voltage
+   target, `setRegulatingTerminal` the equipment's own terminal, and the two-argument `Generator.setTargetV` on a
+   remote regulation reports a local target in any case): the log cannot tell such a no-op from the creation of the
+   regulation. The setters of the `VoltageRegulation` report nothing for an unchanged value.
 
 A change made through a deprecated setter on equipment that has its `VoltageRegulation` therefore exports the same file
 as the same change made through the `VoltageRegulation`. Creating or removing a `VoltageRegulation` is not reported by
