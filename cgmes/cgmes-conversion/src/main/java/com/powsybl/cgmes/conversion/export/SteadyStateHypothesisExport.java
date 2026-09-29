@@ -844,15 +844,20 @@ public final class SteadyStateHypothesisExport {
     }
 
     /**
-     * The VsConverter.targetQpcc of a converter station of the simplified DC model: the reactive power target when
-     * the station regulates reactive power, zero otherwise.
+     * The VsConverter.targetQpcc of a converter station of the simplified DC model: the reactive power target whenever
+     * {@link #vscQpccControl} writes {@code reactivePcc}, that is whenever the station does not regulate voltage, and
+     * zero otherwise.
+     *
+     * <p>A station in voltage mode that does not regulate (the deprecated {@code setVoltageRegulatorOn(false)} since
+     * powsybl-core #3699) is written {@code reactivePcc}, and the import then reads this value as its reactive power
+     * target: it is the local reactive power target the station holds, not zero (review 21 round 2, R2-M4).</p>
      *
      * <p>Package private so that the change export writes the same value as the full export.</p>
      */
     static double vscTargetQpcc(RegulationRef regulation, CgmesExportContext context, IidmStateView state) {
         // To be consistent with the import, which reads the target as -terminalSign * targetQpcc
         // (HvdcConverterConversion#getValidTargetQ)
-        return regulation.isWithMode(RegulationMode.REACTIVE_POWER, state)
+        return !regulation.isRegulatingWithMode(RegulationMode.VOLTAGE, state)
                 ? -CgmesExportUtil.exportedTerminalSign(regulation.owner(), "", context) * regulation.regulatingTargetQ(state) : 0;
     }
 
