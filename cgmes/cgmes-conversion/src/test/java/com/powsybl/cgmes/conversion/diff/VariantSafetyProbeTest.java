@@ -98,7 +98,8 @@ class VariantSafetyProbeTest {
             "cim100VoltageLimitsMultiId", "cim100VoltageLimitSingleId", "wholeLimitsReplacedSameStructure",
             // The simplified DC model writes HvdcLine.maxP and the converter loss factor
             "hvdcActivePowerSetpoint", "hvdcActivePowerSetpointToZero", "hvdcConvertersMode", "lccPowerFactor",
-            "vscVoltageSetpoint", "vscReactivePowerSetpointAndRegulation",
+            "vscVoltageSetpoint", "vscReactivePowerSetpointAndRegulation", "vscLocalReactiveTargetInverter",
+            "vscLocalReactiveTargetRectifier",
             // A line commutated converter is refused whichever DC model is in use: the detailed one still writes
             // the power factor of the station, which is a plain field
             "detailedLccPowerFactor", "detailedConverterControlMode",
@@ -116,7 +117,8 @@ class VariantSafetyProbeTest {
      * right one; it is listed here so that it stays visible rather than being asserted away.</p>
      */
     private static final Set<String> CONSERVATIVELY_REFUSED = Set.of(
-            "vscVoltageSetpoint", "vscReactivePowerSetpointAndRegulation",
+            "vscVoltageSetpoint", "vscReactivePowerSetpointAndRegulation", "vscLocalReactiveTargetInverter",
+            "vscLocalReactiveTargetRectifier",
             // The same for a line commutated converter of the detailed model: only a difference that states the
             // power factor really writes the shared field, and the family is refused as a whole
             "detailedConverterControlMode");

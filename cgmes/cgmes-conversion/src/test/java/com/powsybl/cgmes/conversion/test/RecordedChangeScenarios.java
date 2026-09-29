@@ -512,6 +512,17 @@ public final class RecordedChangeScenarios {
         scenarios.add(scenario("vscVoltageSetpoint", HVDC_DIR, HVDC_FILES,
                 n -> vsc(n, 1).setVoltageSetpoint(396.54),
                 n -> vsc(n, 1).setVoltageSetpoint(392.54)));
+        // ACDCConverter.q is the local reactive power target of a station and travels in one block with targetPpcc,
+        // which the import takes as the power of the link from either side (powsybl-core #4057): both converters
+        // have to travel together, on both routes, whichever station changed (review 21 B1 and round 2 R2-B1)
+        scenarios.add(scenario("vscLocalReactiveTargetInverter", HVDC_DIR, HVDC_FILES,
+                n -> vsc(n, 1).setLocalTargetQ(10.0),
+                n -> vsc(n, 1).setLocalTargetQ(12.5),
+                n -> vsc(n, 1).setLocalTargetQ(10.0)));
+        scenarios.add(scenario("vscLocalReactiveTargetRectifier", HVDC_DIR, HVDC_FILES,
+                n -> vsc(n, 2).setLocalTargetQ(10.0),
+                n -> vsc(n, 2).setLocalTargetQ(12.5),
+                n -> vsc(n, 2).setLocalTargetQ(10.0)));
         // Switching a station from voltage to reactive power regulation is a change of the mode of its
         // VoltageRegulation since powsybl-core #3699 (the deprecated setVoltageRegulatorOn(false) now keeps the voltage
         // mode and only stops regulating). IIDM only accepts reactive power regulation with a regulating terminal,

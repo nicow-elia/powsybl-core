@@ -183,12 +183,10 @@ class RegulationSetterMatrixTest {
             r2-m3/r2-m4 | VSC converter station 1 | VoltageRegulation.setTargetDeadband | with regulation | change
             r2-m3/r2-m4 | VSC converter station 1 | VoltageRegulation.setRegulating | with regulation | change
             r2-m3/r2-m4 | VSC converter station 1 | setLocalTargetV | without regulation | change
-            R2-B1 | VSC converter station 1 | setLocalTargetQ | with regulation | change
             r2-m3/r2-m4 | VSC converter station 1 | setLocalTargetQ | without regulation | change
             r2-m3/r2-m4 | VSC converter station 1 | VscConverterStation.setVoltageRegulatorOn | with regulation | change
             R2-M1/R2-M2 | VSC converter station 1 | VscConverterStation.setVoltageRegulatorOn | without regulation | change
             r2-m3/r2-m4 | VSC converter station 1 | VscConverterStation.setVoltageSetpoint | without regulation | change
-            R2-B1 | VSC converter station 1 | VscConverterStation.setReactivePowerSetpoint | with regulation | change
             r2-m3/r2-m4 | VSC converter station 1 | VscConverterStation.setReactivePowerSetpoint | without regulation | change
             r2-m3/r2-m4 | VSC converter station 1 | VscConverterStation.setVoltageRegulatorOn(false) + setReactivePowerSetpoint | with regulation | change
             r2-m3/r2-m4 | VSC converter station 1 | VscConverterStation.setVoltageRegulatorOn(false) + setReactivePowerSetpoint | without regulation | change
@@ -216,12 +214,10 @@ class RegulationSetterMatrixTest {
             r2-m3/r2-m4 | VSC converter station 1 with its terminal set | VoltageRegulation.setRegulating | with regulation | change
             r2-m3/r2-m4 | VSC converter station 1 with its terminal set | VoltageRegulation.setTerminal | with regulation | change
             r2-m3/r2-m4 | VSC converter station 1 with its terminal set | setLocalTargetV | without regulation | change
-            R2-B1 | VSC converter station 1 with its terminal set | setLocalTargetQ | with regulation | change
             r2-m3/r2-m4 | VSC converter station 1 with its terminal set | setLocalTargetQ | without regulation | change
             r2-m3/r2-m4 | VSC converter station 1 with its terminal set | VscConverterStation.setVoltageRegulatorOn | with regulation | change
             R2-M1/R2-M2 | VSC converter station 1 with its terminal set | VscConverterStation.setVoltageRegulatorOn | without regulation | change
             r2-m3/r2-m4 | VSC converter station 1 with its terminal set | VscConverterStation.setVoltageSetpoint | without regulation | change
-            R2-B1 | VSC converter station 1 with its terminal set | VscConverterStation.setReactivePowerSetpoint | with regulation | change
             r2-m3/r2-m4 | VSC converter station 1 with its terminal set | VscConverterStation.setReactivePowerSetpoint | without regulation | change
             r2-m3/r2-m4 | VSC converter station 1 with its terminal set | VscConverterStation.setVoltageRegulatorOn(false) + setReactivePowerSetpoint | with regulation | change
             r2-m3/r2-m4 | VSC converter station 1 with its terminal set | VscConverterStation.setVoltageRegulatorOn(false) + setReactivePowerSetpoint | without regulation | change

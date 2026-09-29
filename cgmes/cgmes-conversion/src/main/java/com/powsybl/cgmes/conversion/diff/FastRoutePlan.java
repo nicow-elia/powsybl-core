@@ -25,6 +25,7 @@ import com.powsybl.cgmes.model.diff.DifferenceModelParser;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
 import com.powsybl.iidm.network.Connectable;
 import com.powsybl.iidm.network.Generator;
+import com.powsybl.iidm.network.HvdcLine;
 import com.powsybl.iidm.network.Identifiable;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.Switch;
@@ -109,6 +110,9 @@ final class FastRoutePlan {
      * @param rdfType    the CIM class to write, which is what the update queries select on
      * @param statements the complete forward statements of that object, type statements left out
      */
+    /** The property the setpoint block of a converter is recognised by. */
+    private static final String CONVERTER_TARGET_PPCC = "ACDCConverter.targetPpcc";
+
     record TypedObject(String about, String rdfType, List<CgmesStatement> statements) {
     }
 
@@ -246,6 +250,8 @@ final class FastRoutePlan {
         private final List<CgmesDiffImport.BlockingStatement> blocking = new ArrayList<>();
         private final List<DirectStatement> directs = new ArrayList<>();
         private final Set<String> touched = new LinkedHashSet<>();
+        /** The converters of an HVDC line whose setpoint block the model being planned states, by subject. */
+        private final Map<String, ResolvedSubject> linkedConverters = new LinkedHashMap<>();
 
         private Planner(Network network, DifferenceModelSet diffs, CgmesDiffImport.Options options, boolean inverted) {
             this.network = network;
@@ -315,13 +321,16 @@ final class FastRoutePlan {
             }
 
             int directsBefore = directs.size();
-            List<TypedObject> objects = new ArrayList<>(bySubject.size());
+            linkedConverters.clear();
+            Map<String, TypedObject> objectsBySubject = new LinkedHashMap<>();
             for (Map.Entry<String, List<CgmesStatement>> entry : bySubject.entrySet()) {
                 TypedObject object = planSubject(subset, entry.getKey(), entry.getValue(), hints.get(entry.getKey()));
                 if (object != null && !object.statements().isEmpty()) {
-                    objects.add(object);
+                    objectsBySubject.put(entry.getKey(), object);
                 }
             }
+            completeLinkedConverters(objectsBySubject);
+            List<TypedObject> objects = new ArrayList<>(objectsBySubject.values());
             checkReverse(subset, reverse, model.preconditions());
             if (objects.isEmpty() && directs.size() == directsBefore) {
                 return null;
@@ -362,7 +371,68 @@ final class FastRoutePlan {
                 return null;
             }
             List<CgmesStatement> complete = complete(subset, subject, subjectId, statements);
+            if (complete != null && subject.owner() instanceof HvdcLine
+                    && complete.stream().anyMatch(statement -> converterSetpoints(subject).contains(statement.property()))) {
+                linkedConverters.put(subjectId, subject);
+            }
             return complete == null ? null : new TypedObject(subject.about(), subject.rdfType(), complete);
+        }
+
+        /** The setpoint block of a converter: the properties the CGMES update reads with ACDCConverter.targetPpcc. */
+        private static Set<String> converterSetpoints(ResolvedSubject subject) {
+            return FastRouteCapabilities.spec(subject.family()).groups().stream()
+                    .map(PropertyGroup::properties)
+                    .filter(properties -> properties.contains(CONVERTER_TARGET_PPCC))
+                    .findFirst().orElse(Set.of());
+        }
+
+        /**
+         * Add the setpoint block of the other converter of every HVDC line one of whose converters states its own.
+         *
+         * <p>The CGMES update of the simplified DC model takes the power of the link from the {@code targetPpcc} of
+         * whichever converter states one ({@code DCLinkUpdate}, powsybl-core #4057), and the inverter states zero: its
+         * block alone brings the link down. The setpoint blocks of both converters of a line are therefore one
+         * consistency group, completed from the receiving network like any other (review 21 round 2, R2-B1). The
+         * probe of the line answers for both converters.</p>
+         */
+        private void completeLinkedConverters(Map<String, TypedObject> objectsBySubject) {
+            for (Map.Entry<String, ResolvedSubject> linked : linkedConverters.entrySet()) {
+                ResolvedSubject subject = linked.getValue();
+                Set<String> setpoints = converterSetpoints(subject);
+                Map<String, Map<String, CgmesStatement>> partners = new LinkedHashMap<>();
+                for (Identifiable<?> object : objectsOf(subject)) {
+                    for (String attributeKey : DiffProbes.probesFor(subject, object)) {
+                        for (CgmesStatement statement : dump.statementsFor(object.getId(), attributeKey)) {
+                            if (!statement.subjectId().equals(linked.getKey()) && !statement.isType()
+                                    && setpoints.contains(statement.property())) {
+                                partners.computeIfAbsent(statement.subjectId(), id -> new LinkedHashMap<>())
+                                        .putIfAbsent(statement.property(), statement);
+                            }
+                        }
+                    }
+                }
+                partners.forEach((partnerId, fromNetwork) -> completePartner(objectsBySubject, partnerId, fromNetwork,
+                        subject.rdfType()));
+            }
+        }
+
+        private void completePartner(Map<String, TypedObject> objectsBySubject, String partnerId,
+                                     Map<String, CgmesStatement> fromNetwork, String classNameHint) {
+            TypedObject planned = objectsBySubject.get(partnerId);
+            if (planned != null) {
+                // The difference states the partner itself: its statements win, the network fills in the rest
+                Map<String, CgmesStatement> byProperty = new LinkedHashMap<>();
+                planned.statements().forEach(statement -> byProperty.putIfAbsent(statement.property(), statement));
+                fromNetwork.values().forEach(statement -> byProperty.putIfAbsent(statement.property(), statement));
+                objectsBySubject.put(partnerId, new TypedObject(planned.about(), planned.rdfType(),
+                        List.copyOf(byProperty.values())));
+                return;
+            }
+            resolver.resolve(partnerId, fromNetwork.keySet(), classNameHint).ifPresent(partner -> {
+                touched.addAll(partner.iidmIds());
+                objectsBySubject.put(partnerId, new TypedObject(partner.about(), partner.rdfType(),
+                        List.copyOf(fromNetwork.values())));
+            });
         }
 
         /**
