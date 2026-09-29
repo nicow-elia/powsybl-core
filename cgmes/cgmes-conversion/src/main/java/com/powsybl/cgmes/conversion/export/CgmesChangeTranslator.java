@@ -144,6 +144,9 @@ class CgmesChangeTranslator {
     static final String POWER_FACTOR = "powerFactor";
     // The voltage regulation of IIDM (powsybl-core #3699): the local targets live on the holder, everything else on
     // its VoltageRegulation, whose changes are reported with the prefix "VoltageRegulation."
+    /** What a refusal says before the remedy, when it has one. */
+    static final String REMEDY = "Remedy: ";
+
     static final String LOCAL_TARGET_Q = "localTargetQ";
     static final String LOCAL_TARGET_V = "localTargetV";
     static final String VR_PREFIX = "VoltageRegulation.";
@@ -422,17 +425,14 @@ class CgmesChangeTranslator {
         if (identifiable == null) {
             return failure("the network has no identifiable with id " + event.id());
         }
+        // Every echo that survives the compaction is the sole carrier of a change (EventCompactor, rule 3)
+        if (LegacyRegulationKeys.isEcho(identifiable, event.attribute())) {
+            return failure(SOLE_ECHO);
+        }
         // The key rather than the plain attribute name, so that the operational limits group and the acceptable
         // duration a limit change carries in its payload select the right limit. For every other attribute the two
         // are the same string.
         String attribute = EventCompactor.attributeKey(event, identifiable);
-        if (attribute == null) {
-            // A target reported under its deprecated name only: the compaction drops the echoes that repeat a
-            // canonical event, the ones left are those of a deprecated setter that created the VoltageRegulation
-            return failure("the voltage regulation target is reported under its deprecated name only, which happens"
-                    + " when the deprecated setter created the VoltageRegulation (IIDM reports no creation); set the"
-                    + " target through the VoltageRegulation");
-        }
         TapChangerAttribute tapChangerAttribute = tapChangerAttribute(attribute);
         return switch (identifiable) {
             case Switch sw when OPEN.equals(attribute) -> switchUpdates(sw);
@@ -463,6 +463,13 @@ class CgmesChangeTranslator {
             default -> unmappedAttributeUpdates(identifiable, attribute);
         };
     }
+
+    /** The refusal of an echo that is the sole carrier of a change, see {@link EventCompactor}. */
+    static final String SOLE_ECHO = "the change is reported under the name of a deprecated voltage regulation setter"
+            + " only, which happens when that setter created the VoltageRegulation (IIDM reports no creation) or"
+            + " reported a value it did not change, so the state before the change set cannot be told. " + REMEDY
+            + "give the equipment its VoltageRegulation before recording the change set, and change it through the"
+            + " VoltageRegulation and the local target setters";
 
     private static String equipmentOnlyRegulation(String attribute) {
         return switch (attribute.substring(attribute.lastIndexOf('.') + 1)) {

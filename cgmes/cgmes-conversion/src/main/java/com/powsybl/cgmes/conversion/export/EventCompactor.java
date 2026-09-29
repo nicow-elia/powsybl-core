@@ -36,9 +36,35 @@ import java.util.Set;
  * that is what the <em>first</em> change of an attribute remembers: its old value. Compaction is therefore the one
  * place where both ends of a change log are collected.</p>
  *
+ * <h2>Echoes of the deprecated voltage regulation setters</h2>
+ *
+ * <p>An <em>echo</em> is the event a deprecated voltage regulation setter reports under the historical attribute
+ * name after writing through the {@code VoltageRegulation} API, which reports the same change under its own name
+ * first ({@link LegacyRegulationKeys} says which events are echoes and which canonical values they repeat). The old
+ * value of an echo is not reliable: {@code ShuntCompensator.setTargetDeadband} reports {@code NaN} whatever the
+ * deadband was, {@code StaticVarCompensator.setReactivePowerSetpoint} the voltage target, and
+ * {@code Generator.setTargetV(v, local)} the local target as the old value of the remote one. One rule decides what
+ * becomes of every echo:</p>
+ * <ol>
+ *     <li>An echo <b>repeats</b> a change when an earlier event of the same equipment in the log reported one of the
+ *     canonical values it stands for with the same new value. It is dropped: neither exported nor remembered.</li>
+ *     <li>An echo that sets the value it had (old value equal to the new one), or that reports no old value at all
+ *     (the {@code NaN} of a deadband echo), is a <b>no-op</b> and is dropped.</li>
+ *     <li>Any other echo is the <b>sole carrier</b> of a change the new model did not report. That happens when the
+ *     deprecated setter created the {@code VoltageRegulation}, which IIDM reports nowhere (gap G1), and when a
+ *     bridge reports a wrong old value for a value it did not change; the two cannot be told apart from the log.
+ *     The echo is kept under its own name, it never feeds the state before the change set, and both change exports
+ *     refuse it with the remedy (use the {@code VoltageRegulation} setters).</li>
+ * </ol>
+ * <p>No echo ever feeds the state before the change set: a repeated echo adds nothing to its canonical event, and
+ * the old value of a sole carrier is exactly what cannot be trusted.</p>
+ *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 final class EventCompactor {
+
+    /** The key of an echo that is dropped: compared by identity only, never looked up in a map. */
+    private static final UpdateKey DROPPED = new UpdateKey(null, null);
 
     private EventCompactor() {
     }
@@ -51,50 +77,50 @@ final class EventCompactor {
      *                         needs the compacted list. Changes recorded on another variant never feed the previous
      *                         values, because the state they describe is not the state of this variant
      * @param network          the network the changes were recorded on, which tells what kind of equipment a change
-     *                         belongs to: the echo of a deprecated voltage regulation setter is recognised by it,
-     *                         see {@link LegacyRegulationKeys}. {@code null} keeps the echoes of targets
+     *                         belongs to: an echo of a target is recognised by it. {@code null} keeps the echoes of
+     *                         targets as changes of their own
      */
     static CompactedChanges compact(Collection<NetworkEvent> events, String workingVariantId, Network network) {
         Objects.requireNonNull(events);
-
-        // One key per event, computed once: an echo of a voltage regulation target is marked DROPPED and is neither
-        // exported nor remembered, because the regulation reported the same change under its own name first
         List<NetworkEvent> eventList = new ArrayList<>(events);
         UpdateKey[] keys = new UpdateKey[eventList.size()];
-        boolean[] dropped = new boolean[eventList.size()];
-        boolean[] echo = new boolean[eventList.size()];
-        for (int i = 0; i < keys.length; i++) {
-            NetworkEvent event = Objects.requireNonNull(eventList.get(i));
-            keys[i] = updateKey(event, network);
-            dropped[i] = keys[i] != null && keys[i].attributeKey() == null;
-            if (dropped[i] && !repeatsTheTargetBefore(eventList, i) && !isNoOp(event)) {
-                // A target echo that repeats nothing: the deprecated setter created the VoltageRegulation, which IIDM
-                // does not report (gap G1). Kept under its own name, so that the export refuses it instead of losing it
-                dropped[i] = false;
-                keys[i] = new UpdateKey(keys[i].identifiableId(), ((UpdateNetworkEvent) event).attribute());
-            }
-            // An echo is a change whose key is the canonical name another attribute name was mapped onto
-            echo[i] = !dropped[i] && event instanceof UpdateNetworkEvent update && keys[i] != null
-                    && !keys[i].attributeKey().equals(update.attribute())
-                    && keys[i].attributeKey().indexOf(KEY_SEPARATOR.charAt(0)) < 0;
-        }
-
         Map<UpdateKey, FirstChange> firstChanges = new HashMap<>();
         Set<String> createdExtensions = new HashSet<>();
+        // The new values every canonical key was reported with so far, for rule 1
+        Map<UpdateKey, Set<Object>> reported = new HashMap<>();
         for (int index = 0; index < keys.length; index++) {
-            NetworkEvent event = eventList.get(index);
+            NetworkEvent event = Objects.requireNonNull(eventList.get(index));
             if (event instanceof ExtensionCreationNetworkEvent creation) {
                 createdExtensions.add(extensionKey(creation.id(), creation.extensionName()));
             }
-            // Every recorded change of this variant feeds the previous values, including the ones a mapping later
-            // rejects: whether a change can be exported is decided after the previous state is known. The position
-            // is kept with the previous value, so that a caller comparing two positions can always read the
-            // previous value of the earlier one. The old value of an echo of a deprecated voltage regulation setter is
-            // not reliable (ShuntCompensator.setTargetDeadband reports NaN whatever the deadband was) and is never
-            // the previous state: an attribute only an echo speaks about reads the live value, which is also what it
-            // was when the canonical event was suppressed because nothing changed.
-            if (keys[index] != null && !dropped[index] && !echo[index] && appliesTo(event, workingVariantId)) {
-                firstChanges.putIfAbsent(keys[index], new FirstChange(oldValue(event), index));
+            Identifiable<?> identifiable = event instanceof UpdateNetworkEvent update ? identifiableFor(update, network) : null;
+            Set<String> repeated = event instanceof UpdateNetworkEvent update
+                    ? LegacyRegulationKeys.repeatedKeys(identifiable, update.attribute()) : Set.of();
+            if (repeated.isEmpty()) {
+                keys[index] = event instanceof UpdateNetworkEvent update
+                        ? new UpdateKey(update.id(), attributeKey(update, identifiable))
+                        : updateKey(event, network);
+                if (keys[index] != null) {
+                    if (event instanceof UpdateNetworkEvent update
+                            && LegacyRegulationKeys.isRepeatable(keys[index].attributeKey())) {
+                        reported.computeIfAbsent(keys[index], key -> new HashSet<>()).add(update.newValue());
+                    }
+                    // Every recorded change of this variant feeds the previous values, including the ones a mapping
+                    // later rejects: whether a change can be exported is decided after the previous state is known.
+                    // The position is kept with the previous value, so that a caller comparing two positions can
+                    // always read the previous value of the earlier one
+                    if (appliesTo(event, workingVariantId)) {
+                        firstChanges.putIfAbsent(keys[index], new FirstChange(oldValue(event), index));
+                    }
+                }
+            } else {
+                UpdateNetworkEvent echo = (UpdateNetworkEvent) event;
+                boolean repeats = repeated.stream().anyMatch(key -> reported
+                        .getOrDefault(new UpdateKey(echo.id(), key), Set.of()).contains(echo.newValue()));
+                boolean noOp = Objects.equals(echo.oldValue(), echo.newValue())
+                        || LegacyRegulationKeys.reportsNoOldValue(echo.attribute(), echo.oldValue());
+                // Rule 3: a sole carrier is kept under its own name, so that the exports refuse it
+                keys[index] = repeats || noOp ? DROPPED : new UpdateKey(echo.id(), echo.attribute());
             }
         }
 
@@ -102,7 +128,7 @@ final class EventCompactor {
         List<NetworkEvent> compactedEvents = new ArrayList<>(eventList.size());
         Set<UpdateKey> retainedUpdates = new HashSet<>();
         for (int index = keys.length - 1; index >= 0; index--) {
-            if (!dropped[index] && (keys[index] == null || retainedUpdates.add(keys[index]))) {
+            if (keys[index] != DROPPED && (keys[index] == null || retainedUpdates.add(keys[index]))) {
                 compactedEvents.add(eventList.get(index));
             }
         }
@@ -112,23 +138,10 @@ final class EventCompactor {
                 Set.copyOf(createdExtensions));
     }
 
-    /** Whether the event before the given target echo is the canonical event of the same target, with the same value. */
-    private static boolean repeatsTheTargetBefore(List<NetworkEvent> events, int index) {
-        if (index == 0 || !(events.get(index - 1) instanceof UpdateNetworkEvent previous)) {
-            return false;
-        }
-        UpdateNetworkEvent echo = (UpdateNetworkEvent) events.get(index);
-        String attribute = previous.attribute();
-        boolean canonicalTarget = attribute.equals(CgmesChangeTranslator.LOCAL_TARGET_V)
-                || attribute.equals(CgmesChangeTranslator.LOCAL_TARGET_Q)
-                || attribute.equals(CgmesChangeTranslator.VR_TARGET_VALUE)
-                || attribute.endsWith("." + CgmesChangeTranslator.VR_TARGET_VALUE);
-        return canonicalTarget && previous.id().equals(echo.id()) && Objects.equals(previous.newValue(), echo.newValue());
-    }
-
-    /** Whether a change reports the value it already had: an echo of a setter that changed nothing. */
-    private static boolean isNoOp(NetworkEvent event) {
-        return event instanceof UpdateNetworkEvent update && Objects.equals(update.oldValue(), update.newValue());
+    /** The identifiable a change was reported on, looked up only when it decides whether the change is an echo. */
+    private static Identifiable<?> identifiableFor(UpdateNetworkEvent update, Network network) {
+        return network != null && LegacyRegulationKeys.needsIdentifiable(update.attribute())
+                ? network.getIdentifiable(update.id()) : null;
     }
 
     /** Whether a change describes the given variant, which a change belonging to every variant always does. */

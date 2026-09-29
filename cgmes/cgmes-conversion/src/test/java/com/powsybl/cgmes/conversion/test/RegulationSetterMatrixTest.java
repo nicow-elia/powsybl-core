@@ -100,10 +100,7 @@ class RegulationSetterMatrixTest {
             r2-m3/r2-m4 | generator regulating locally | VoltageRegulation.setTargetDeadband | with regulation | change
             r2-m3/r2-m4 | generator regulating locally | setLocalTargetV | without regulation | change
             r2-m3/r2-m4 | generator regulating locally | setLocalTargetQ | without regulation | change
-            R2-M1/R2-M2 | generator regulating locally | Generator.setVoltageRegulatorOn | without regulation | change
             r2-m3/r2-m4 | generator regulating locally | Generator.setTargetV | without regulation | change
-            R2-M1/R2-M2 | generator regulating locally | Generator.setTargetV(v, local) | without regulation | change
-            R2-M1/R2-M2 | generator regulating locally | Generator.setTargetV(v, same local) | without regulation | change
             r2-m3/r2-m4 | generator regulating locally | Generator.setTargetQ | without regulation | change
             r2-m3/r2-m4 | generator regulating locally | Generator.setRegulatingTerminal | with regulation | change
             r2-m3/r2-m4 | generator regulating locally | Generator.setRegulatingTerminal | with regulation | no-op
@@ -112,28 +109,21 @@ class RegulationSetterMatrixTest {
             r2-m3/r2-m4 | generator regulating remotely | VoltageRegulation.setTargetDeadband | with regulation | change
             r2-m3/r2-m4 | generator regulating remotely | VoltageRegulation.setMode | with regulation | change
             r2-m3/r2-m4 | generator regulating remotely | VoltageRegulation.setTerminal | with regulation | change
-            R2-M1/R2-M2 | generator regulating remotely | Generator.setTargetV(v, local) | with regulation | change
-            R2-M1/R2-M2 | generator regulating remotely | Generator.setTargetV(v, local) | with regulation | no-op
-            R2-M1/R2-M2 | generator regulating remotely | Generator.setTargetV(v, same local) | with regulation | change
-            R2-M1/R2-M2 | generator regulating remotely | Generator.setTargetV(v, same local) | with regulation | no-op
             r2-m3/r2-m4 | generator regulating remotely | Generator.setRegulatingTerminal | with regulation | change
             r2-m3/r2-m4 | generator without a CGMES regulating control | setLocalTargetV | without regulation | change
             r2-m3/r2-m4 | generator without a CGMES regulating control | Generator.setTargetV | without regulation | change
             r2-m3/r2-m4 | generator without a CGMES regulating control | Generator.setTargetV(v, local) | without regulation | change
-            R2-M1/R2-M2 | generator without a CGMES regulating control | Generator.setTargetV(v, same local) | without regulation | change
             r2-m3/r2-m4 | generator without a CGMES regulating control | Generator.setRegulatingTerminal | without regulation | change
             r2-m3/r2-m4 | generator without a CGMES regulating control | Generator.setRegulatingTerminal | without regulation | no-op
             r2-m3/r2-m4 | shunt compensator | VoltageRegulation.setTerminal | with regulation | change
             r2-m3/r2-m4 | shunt compensator | setLocalTargetV | without regulation | change
             r2-m3/r2-m4 | shunt compensator | ShuntCompensator.setTargetV | without regulation | change
-            R2-M1/R2-M2 | shunt compensator | ShuntCompensator.setTargetDeadband | without regulation | change
             r2-m3/r2-m4 | shunt compensator | ShuntCompensator.setRegulatingTerminal | with regulation | change
             r2-m3/r2-m4 | shunt compensator | ShuntCompensator.setRegulatingTerminal | with regulation | no-op
             r2-m3/r2-m4 | shunt compensator | ShuntCompensator.setRegulatingTerminal | without regulation | change
             r2-m3/r2-m4 | shunt compensator | ShuntCompensator.setRegulatingTerminal | without regulation | no-op
             r2-m3/r2-m4 | equivalent shunt | setLocalTargetV | without regulation | change
             r2-m3/r2-m4 | equivalent shunt | ShuntCompensator.setTargetV | without regulation | change
-            R2-M1/R2-M2 | equivalent shunt | ShuntCompensator.setTargetDeadband | without regulation | change
             r2-m3/r2-m4 | equivalent shunt | ShuntCompensator.setRegulatingTerminal | without regulation | change
             r2-m3/r2-m4 | equivalent shunt | ShuntCompensator.setRegulatingTerminal | without regulation | no-op
             r2-m3/r2-m4 | static var compensator | VoltageRegulation.setTargetDeadband | with regulation | change
@@ -141,12 +131,8 @@ class RegulationSetterMatrixTest {
             r2-m3/r2-m4 | static var compensator | setLocalTargetV | without regulation | change
             r2-m3/r2-m4 | static var compensator | setLocalTargetQ | without regulation | change
             r2-m3/r2-m4 | static var compensator | StaticVarCompensator.setVoltageSetpoint | without regulation | change
-            R2-M1/R2-M2 | static var compensator | StaticVarCompensator.setReactivePowerSetpoint | with regulation | no-op
             r2-m3/r2-m4 | static var compensator | StaticVarCompensator.setReactivePowerSetpoint | without regulation | change
-            R2-M1/R2-M2 | static var compensator | StaticVarCompensator.setReactivePowerSetpoint | without regulation | no-op
             r2-m3/r2-m4 | static var compensator | StaticVarCompensator.setRegulationMode | with regulation | change
-            R2-M1/R2-M2 | static var compensator | StaticVarCompensator.setRegulationMode | without regulation | change
-            R2-M1/R2-M2 | static var compensator | StaticVarCompensator.setRegulating | without regulation | change
             r2-m3/r2-m4 | static var compensator | StaticVarCompensator.setRegulatingTerminal | with regulation | change
             r2-m3/r2-m4 | static var compensator | StaticVarCompensator.setRegulatingTerminal | with regulation | no-op
             r2-m3/r2-m4 | static var compensator | StaticVarCompensator.setRegulatingTerminal | without regulation | change
@@ -157,35 +143,22 @@ class RegulationSetterMatrixTest {
             r2-m3/r2-m4 | static var compensator regulating reactive power | setLocalTargetV | without regulation | change
             r2-m3/r2-m4 | static var compensator regulating reactive power | setLocalTargetQ | without regulation | change
             r2-m3/r2-m4 | static var compensator regulating reactive power | StaticVarCompensator.setVoltageSetpoint | without regulation | change
-            R2-M1/R2-M2 | static var compensator regulating reactive power | StaticVarCompensator.setReactivePowerSetpoint | with regulation | no-op
             r2-m3/r2-m4 | static var compensator regulating reactive power | StaticVarCompensator.setReactivePowerSetpoint | without regulation | change
-            R2-M1/R2-M2 | static var compensator regulating reactive power | StaticVarCompensator.setReactivePowerSetpoint | without regulation | no-op
             r2-m3/r2-m4 | static var compensator regulating reactive power | StaticVarCompensator.setRegulationMode | with regulation | change
-            R2-M1/R2-M2 | static var compensator regulating reactive power | StaticVarCompensator.setRegulationMode | without regulation | change
-            R2-M1/R2-M2 | static var compensator regulating reactive power | StaticVarCompensator.setRegulating | without regulation | change
             r2-m3/r2-m4 | static var compensator regulating reactive power | StaticVarCompensator.setRegulatingTerminal | with regulation | change
             r2-m3/r2-m4 | static var compensator regulating reactive power | StaticVarCompensator.setRegulatingTerminal | without regulation | change
             r2-m3/r2-m4 | static var compensator regulating reactive power | StaticVarCompensator.setRegulatingTerminal | without regulation | no-op
             r2-m3/r2-m4 | ratio tap changer | VoltageRegulation.setMode | with regulation | change
             r2-m3/r2-m4 | ratio tap changer | VoltageRegulation.setTerminal | with regulation | change
             r2-m3/r2-m4 | ratio tap changer | RatioTapChanger.setRegulationMode | with regulation | change
-            R2-M1/R2-M2 | ratio tap changer | RatioTapChanger.setRegulationMode | without regulation | change
-            R2-M1/R2-M2 | ratio tap changer | RatioTapChanger.setRegulationValue | without regulation | change
-            R2-M1/R2-M2 | ratio tap changer | RatioTapChanger.setTargetV | without regulation | change
-            R2-M1/R2-M2 | ratio tap changer | RatioTapChanger.setTargetDeadband | without regulation | change
             r2-m3/r2-m4 | ratio tap changer | RatioTapChanger.setRegulationTerminal | with regulation | change
             r2-m3/r2-m4 | ratio tap changer | RatioTapChanger.setRegulationTerminal | without regulation | change
-            R2-M1/R2-M2 | ratio tap changer without a CGMES control | RatioTapChanger.setRegulationMode | without regulation | change
-            R2-M1/R2-M2 | ratio tap changer without a CGMES control | RatioTapChanger.setRegulationValue | without regulation | change
-            R2-M1/R2-M2 | ratio tap changer without a CGMES control | RatioTapChanger.setTargetV | without regulation | change
-            R2-M1/R2-M2 | ratio tap changer without a CGMES control | RatioTapChanger.setTargetDeadband | without regulation | change
             r2-m3/r2-m4 | ratio tap changer without a CGMES control | RatioTapChanger.setRegulationTerminal | without regulation | change
             r2-m3/r2-m4 | VSC converter station 1 | VoltageRegulation.setTargetDeadband | with regulation | change
             r2-m3/r2-m4 | VSC converter station 1 | VoltageRegulation.setRegulating | with regulation | change
             r2-m3/r2-m4 | VSC converter station 1 | setLocalTargetV | without regulation | change
             r2-m3/r2-m4 | VSC converter station 1 | setLocalTargetQ | without regulation | change
             r2-m3/r2-m4 | VSC converter station 1 | VscConverterStation.setVoltageRegulatorOn | with regulation | change
-            R2-M1/R2-M2 | VSC converter station 1 | VscConverterStation.setVoltageRegulatorOn | without regulation | change
             r2-m3/r2-m4 | VSC converter station 1 | VscConverterStation.setVoltageSetpoint | without regulation | change
             r2-m3/r2-m4 | VSC converter station 1 | VscConverterStation.setReactivePowerSetpoint | without regulation | change
             r2-m3/r2-m4 | VSC converter station 1 | VscConverterStation.setVoltageRegulatorOn(false) + setReactivePowerSetpoint | with regulation | change
@@ -200,7 +173,6 @@ class RegulationSetterMatrixTest {
             r2-m3/r2-m4 | VSC converter station 2 | setLocalTargetV | without regulation | change
             r2-m3/r2-m4 | VSC converter station 2 | setLocalTargetQ | without regulation | change
             r2-m3/r2-m4 | VSC converter station 2 | VscConverterStation.setVoltageRegulatorOn | with regulation | change
-            R2-M1/R2-M2 | VSC converter station 2 | VscConverterStation.setVoltageRegulatorOn | without regulation | change
             r2-m3/r2-m4 | VSC converter station 2 | VscConverterStation.setVoltageSetpoint | without regulation | change
             r2-m3/r2-m4 | VSC converter station 2 | VscConverterStation.setReactivePowerSetpoint | without regulation | change
             r2-m3/r2-m4 | VSC converter station 2 | VscConverterStation.setVoltageRegulatorOn(false) + setReactivePowerSetpoint | with regulation | change
@@ -216,7 +188,6 @@ class RegulationSetterMatrixTest {
             r2-m3/r2-m4 | VSC converter station 1 with its terminal set | setLocalTargetV | without regulation | change
             r2-m3/r2-m4 | VSC converter station 1 with its terminal set | setLocalTargetQ | without regulation | change
             r2-m3/r2-m4 | VSC converter station 1 with its terminal set | VscConverterStation.setVoltageRegulatorOn | with regulation | change
-            R2-M1/R2-M2 | VSC converter station 1 with its terminal set | VscConverterStation.setVoltageRegulatorOn | without regulation | change
             r2-m3/r2-m4 | VSC converter station 1 with its terminal set | VscConverterStation.setVoltageSetpoint | without regulation | change
             r2-m3/r2-m4 | VSC converter station 1 with its terminal set | VscConverterStation.setReactivePowerSetpoint | without regulation | change
             r2-m3/r2-m4 | VSC converter station 1 with its terminal set | VscConverterStation.setVoltageRegulatorOn(false) + setReactivePowerSetpoint | with regulation | change
@@ -231,7 +202,6 @@ class RegulationSetterMatrixTest {
             r2-m3/r2-m4 | VSC converter station 2 with its terminal set | setLocalTargetV | without regulation | change
             r2-m3/r2-m4 | VSC converter station 2 with its terminal set | setLocalTargetQ | without regulation | change
             r2-m3/r2-m4 | VSC converter station 2 with its terminal set | VscConverterStation.setVoltageRegulatorOn | with regulation | change
-            R2-M1/R2-M2 | VSC converter station 2 with its terminal set | VscConverterStation.setVoltageRegulatorOn | without regulation | change
             r2-m3/r2-m4 | VSC converter station 2 with its terminal set | VscConverterStation.setVoltageSetpoint | without regulation | change
             r2-m3/r2-m4 | VSC converter station 2 with its terminal set | VscConverterStation.setReactivePowerSetpoint | without regulation | change
             r2-m3/r2-m4 | VSC converter station 2 with its terminal set | VscConverterStation.setVoltageRegulatorOn(false) + setReactivePowerSetpoint | with regulation | change

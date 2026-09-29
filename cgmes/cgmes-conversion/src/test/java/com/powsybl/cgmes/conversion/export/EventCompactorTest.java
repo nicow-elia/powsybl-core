@@ -231,7 +231,10 @@ class EventCompactorTest {
         return List.copyOf(recorder.getEvents());
     }
 
-    /** The canonical event and its echo compact to one key, and the old value kept is the canonical one. */
+    /**
+     * Rule 1: an echo repeating its canonical event is dropped, whatever lies between them; the old value kept is the
+     * canonical one.
+     */
     @Test
     @SuppressWarnings("removal")
     void aFlagEchoCompactsWithItsCanonicalEvent() {
@@ -247,19 +250,19 @@ class EventCompactorTest {
         assertEquals(5, events.size());
         CompactedChanges changes = EventCompactor.compact(events, VARIANT, network);
 
-        assertEquals(List.of(events.get(4)), changes.events());
+        assertEquals(List.of(events.get(3)), changes.events());
         assertEquals(regulating, changes.firstOldValue("GEN", CgmesChangeTranslator.VR_REGULATING));
         assertFalse(changes.hasChange("GEN", "voltageRegulatorOn"));
     }
 
     /**
-     * An echo that is the only event of its key (the canonical event was suppressed, nothing changed) is still exported,
-     * but its old value is never the previous state: {@code ShuntCompensator.setTargetDeadband} reports NaN whatever the
-     * deadband was.
+     * Rule 2: an echo that is the only event of its key (the canonical event was suppressed, nothing changed) and
+     * reports no old value ({@code ShuntCompensator.setTargetDeadband} reports NaN whatever the deadband was) is a
+     * no-op: neither exported nor remembered.
      */
     @Test
     @SuppressWarnings("removal")
-    void anEchoOnlyChangeHasNoRecordedPreviousValue() {
+    void anEchoWithoutOldValueThatRepeatsNothingIsANoOp() {
         Network network = ShuntTestCaseFactory.create();
         ShuntCompensator shunt = network.getShuntCompensator("SHUNT");
         shunt.getVoltageRegulation().setTargetDeadband(1.0);
@@ -268,8 +271,61 @@ class EventCompactorTest {
         assertTrue(Double.isNaN((Double) ((UpdateNetworkEvent) events.get(0)).oldValue()));
         CompactedChanges changes = EventCompactor.compact(events, VARIANT, network);
 
-        assertEquals(events, changes.events());
+        assertEquals(List.of(), changes.events());
         assertFalse(changes.hasChange("SHUNT", CgmesChangeTranslator.VR_TARGET_DEADBAND));
+        assertFalse(changes.hasChange("SHUNT", "targetDeadband"));
+    }
+
+    /**
+     * Rule 1 looks at every earlier event of the equipment, not only at the one just before the echo:
+     * {@code Generator.setTargetV(v, local)} on a generator regulating a remote terminal reports the target of the
+     * regulation, then the local target again (with the old remote target as its old value, F3), then the echo
+     * (review 21 round 2, R2-M1).
+     */
+    @Test
+    void anEchoRepeatsAnEarlierCanonicalEventWhateverLiesBetween() {
+        List<NetworkEvent> events = List.of(
+                update("G", CgmesChangeTranslator.VR_TARGET_VALUE, 410.0, 411.0),
+                update("G", CgmesChangeTranslator.LOCAL_TARGET_V, 410.0, 405.0),
+                update("G", "targetV", 405.0, 411.0));
+        Network network = networkWithGenerator("G");
+        CompactedChanges changes = EventCompactor.compact(events, VARIANT, network);
+
+        assertEquals(events.subList(0, 2), changes.events());
+        assertFalse(changes.hasChange("G", "targetV"));
+    }
+
+    /**
+     * Rule 3: an echo that repeats nothing and changes something is the sole carrier of a change the new model did not
+     * report (the deprecated setter created the VoltageRegulation, gap G1). It is kept under its own name, so that the
+     * exports refuse it, and its old value never becomes the previous state (review 21 round 2, R2-M2).
+     */
+    @Test
+    void aSoleCarrierEchoIsKeptUnderItsOwnNameAndNotRemembered() {
+        List<NetworkEvent> events = List.of(update("G", "voltageRegulatorOn", false, true));
+        CompactedChanges changes = EventCompactor.compact(events, VARIANT, networkWithGenerator("G"));
+
+        assertEquals(events, changes.events());
+        assertFalse(changes.hasChange("G", CgmesChangeTranslator.VR_REGULATING));
+        assertFalse(changes.hasChange("G", "voltageRegulatorOn"));
+    }
+
+    /** A network answering every identifiable lookup with one generator. */
+    private static Network networkWithGenerator(String id) {
+        Generator generator = (Generator) java.lang.reflect.Proxy.newProxyInstance(Generator.class.getClassLoader(),
+                new Class<?>[] {Generator.class}, (proxy, method, args) -> {
+                    if ("getId".equals(method.getName())) {
+                        return id;
+                    }
+                    throw new UnsupportedOperationException(method.getName());
+                });
+        return (Network) java.lang.reflect.Proxy.newProxyInstance(Network.class.getClassLoader(),
+                new Class<?>[] {Network.class}, (proxy, method, args) -> {
+                    if ("getIdentifiable".equals(method.getName())) {
+                        return generator;
+                    }
+                    throw new UnsupportedOperationException(method.getName());
+                });
     }
 
     /** The echo of a target is dropped: the target was reported under its own name first. */

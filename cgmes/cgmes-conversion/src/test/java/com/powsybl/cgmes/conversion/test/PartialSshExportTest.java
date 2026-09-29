@@ -10,6 +10,7 @@ package com.powsybl.cgmes.conversion.test;
 import com.powsybl.cgmes.conformity.CgmesConformity3Catalog;
 import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.cgmes.conversion.Conversion;
+import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
 import com.powsybl.cgmes.conversion.export.CgmesExportUtil;
 import com.powsybl.cgmes.conversion.export.PartialSshExport;
 import com.powsybl.cgmes.conversion.export.PartialSshExport.UnsupportedChangeBehavior;
@@ -75,6 +76,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -82,6 +84,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 class PartialSshExportTest extends AbstractSerDeTest {
+
+    /** What the refusal of a change reported by a deprecated setter only says, see EventCompactor (rule 3). */
+    private static final String SOLE_ECHO = "reported under the name of a deprecated voltage regulation setter only";
 
     private static final double TOLERANCE = 1e-7;
 
@@ -359,15 +364,23 @@ class PartialSshExportTest extends AbstractSerDeTest {
     /**
      * An EquivalentInjection that the equipment model gives the capability to regulate carries its regulation
      * itself, on {@code regulationStatus} and {@code regulationTarget}. The fixture grants no capability, so it is
-     * granted here on both sides, as an equipment model that did would.
+     * granted here on both sides, as an equipment model that did would. The fixture also gives the injection no
+     * VoltageRegulation: it is created before the change set, switched off, since IIDM reports no creation (gap G1).
      */
     @Test
     void equivalentInjectionRegulationRoundTrip() throws IOException {
-        Consumer<Network> grantCapability = network -> network.getGenerator("EquivalentInjection")
-                .setProperty(Conversion.PROPERTY_REGULATION_CAPABILITY, "true");
+        Consumer<Network> grantCapability = network -> {
+            Generator injection = network.getGenerator("EquivalentInjection");
+            injection.setProperty(Conversion.PROPERTY_REGULATION_CAPABILITY, "true");
+            injection.newVoltageRegulation().withMode(RegulationMode.VOLTAGE).withRegulating(false).build();
+        };
 
         RoundTripResult switchedOn = roundTrip(GENERATOR_DIR, grantCapability,
-                sender -> sender.getGenerator("EquivalentInjection").setTargetV(401.0).setVoltageRegulatorOn(true),
+                sender -> {
+                    Generator injection = sender.getGenerator("EquivalentInjection");
+                    injection.setLocalTargetV(401.0);
+                    injection.getVoltageRegulation().setRegulating(true);
+                },
                 "generator_EQ.xml", "generator_SSH.xml");
 
         assertTrue(switchedOn.sshXml().contains("<cim:EquivalentInjection.regulationStatus>true</cim:EquivalentInjection.regulationStatus>"));
@@ -383,6 +396,34 @@ class PartialSshExportTest extends AbstractSerDeTest {
 
         assertFalse(switchedOff.sender().getGenerator("EquivalentInjection").isVoltageRegulatorOn());
         assertEquivalentInjectionRegulation(switchedOff);
+    }
+
+    /**
+     * The deprecated setter that switches the regulation of an EquivalentInjection on creates its VoltageRegulation
+     * and reports the change under its deprecated name only (gap G1): the state before cannot be told, and a
+     * difference could not undo the creation, so both change exports refuse it with the remedy (review 21 round 2,
+     * R2-M2).
+     */
+    @Test
+    @SuppressWarnings("removal")
+    void equivalentInjectionRegulationCreatedByADeprecatedSetterIsRejected() {
+        Network sender = readCgmesResources(GENERATOR_DIR, "generator_EQ.xml", "generator_SSH.xml");
+        Generator injection = sender.getGenerator("EquivalentInjection");
+        injection.setProperty(Conversion.PROPERTY_REGULATION_CAPABILITY, "true");
+        injection.setLocalTargetV(401.0);
+        assertNull(injection.getVoltageRegulation(), "the fixture is expected to give the injection no regulation");
+
+        List<NetworkEvent> events = RecordedChangeScenarios.record(sender,
+                n -> n.getGenerator("EquivalentInjection").setVoltageRegulatorOn(true));
+
+        PowsyblException partial = assertThrows(PowsyblException.class,
+                () -> PartialSshExport.toString(sender, events, UnsupportedChangeBehavior.FAIL));
+        assertTrue(partial.getMessage().contains(SOLE_ECHO) && partial.getMessage().contains("Remedy: "),
+                partial.getMessage());
+        PowsyblException difference = assertThrows(PowsyblException.class,
+                () -> CgmesDiffExport.toDifferences(sender, events, new CgmesDiffExport.ExportOptions()));
+        assertTrue(difference.getMessage().contains(SOLE_ECHO) && difference.getMessage().contains("Remedy: "),
+                difference.getMessage());
     }
 
     private static void assertEquivalentInjectionRegulation(RoundTripResult result) {
@@ -403,11 +444,12 @@ class PartialSshExportTest extends AbstractSerDeTest {
         Generator generator = sender.getGenerator("EquivalentInjection");
         assertEquals("false", generator.getProperty(Conversion.PROPERTY_REGULATION_CAPABILITY),
                 "the test model is expected to give the equivalent injection no regulation capability");
-        generator.setTargetV(400.0);
+        generator.setLocalTargetV(400.0);
+        generator.newVoltageRegulation().withMode(RegulationMode.VOLTAGE).withRegulating(false).build();
 
         NetworkEventRecorder recorder = new NetworkEventRecorder();
         sender.addListener(recorder);
-        generator.setVoltageRegulatorOn(true);
+        generator.getVoltageRegulation().setRegulating(true);
 
         PowsyblException exception = assertThrows(PowsyblException.class,
                 () -> PartialSshExport.toString(sender, recorder.getEvents(), UnsupportedChangeBehavior.FAIL));
@@ -1297,7 +1339,8 @@ class PartialSshExportTest extends AbstractSerDeTest {
     /**
      * A deprecated setter that has to create the VoltageRegulation reports the target under its deprecated name only
      * ({@code RatioTapChanger.setRegulationValue} on a tap changer without regulation). The echo repeats no canonical
-     * event, so it is not dropped as a repetition: the change is refused instead of silently lost (review 21 m4).
+     * event, so it is the sole carrier of the change: it is refused, with the remedy, instead of silently lost (review
+     * 21 m4, rule 3 of EventCompactor).
      */
     @Test
     @SuppressWarnings("removal")
@@ -1312,7 +1355,7 @@ class PartialSshExportTest extends AbstractSerDeTest {
 
         PowsyblException exception = assertThrows(PowsyblException.class,
                 () -> PartialSshExport.toString(sender, recorder.getEvents(), UnsupportedChangeBehavior.FAIL));
-        assertTrue(exception.getMessage().contains("deprecated name only"), exception.getMessage());
+        assertTrue(exception.getMessage().contains(SOLE_ECHO), exception.getMessage());
     }
 
     /**
