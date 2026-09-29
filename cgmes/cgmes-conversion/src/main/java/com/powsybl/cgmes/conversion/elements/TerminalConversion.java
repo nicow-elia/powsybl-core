@@ -28,16 +28,16 @@ public final class TerminalConversion {
     }
 
     public static void create(Network network, PropertyBag cgmesTerminal, Context context) {
-        create(network, cgmesTerminal, context, terminalsWithFictitiousSwitch(network));
+        create(network, cgmesTerminal, context, null);
     }
 
-    /** As above, with the terminals that have a fictitious switch built once per pass (and completed here). */
+    /** As above, with the terminals that have a fictitious switch built once per pass (completed here), or null. */
     public static void create(Network network, PropertyBag cgmesTerminal, Context context, Set<String> terminalsWithFictitiousSwitch) {
         String cgmesTerminalId = cgmesTerminal.getId(CgmesNames.TERMINAL);
         boolean connected = cgmesTerminal.asBoolean(CgmesNames.CONNECTED, true);
         if (createFictitiousSwitch(network, cgmesTerminalId, connected, context, terminalsWithFictitiousSwitch)) {
             create(network, cgmesTerminalId, context);
-            terminalsWithFictitiousSwitch.add(cgmesTerminalId);
+            Optional.ofNullable(terminalsWithFictitiousSwitch).ifPresent(terminals -> terminals.add(cgmesTerminalId));
         }
     }
 
@@ -64,7 +64,7 @@ public final class TerminalConversion {
         }
 
         // Check if a fictitious switch has already been created (from a previous update).
-        if (terminalsWithFictitiousSwitch.contains(cgmesTerminalId)) {
+        if ((terminalsWithFictitiousSwitch != null ? terminalsWithFictitiousSwitch : terminalsWithFictitiousSwitch(network)).contains(cgmesTerminalId)) {
             return false;
         }
 

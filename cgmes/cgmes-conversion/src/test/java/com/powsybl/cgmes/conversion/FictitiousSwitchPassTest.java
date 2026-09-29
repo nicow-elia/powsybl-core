@@ -14,6 +14,7 @@ import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.Switch;
 import com.powsybl.iidm.network.TopologyKind;
 import com.powsybl.iidm.network.VoltageLevel;
+import com.powsybl.triplestore.api.PropertyBag;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.InvocationTargetException;
@@ -89,5 +90,34 @@ class FictitiousSwitchPassTest {
         Update.createFictitiousSwitchesForDisconnectedTerminalsDuringUpdate(counted, cgmes, context);
         assertEquals(1, scans[0]);
         assertEquals(TERMINALS, network.getSwitchStream().filter(Switch::isFictitious).count());
+    }
+
+    /**
+     * The single-terminal overload keeps upstream's cost: the switches are scanned only for a disconnected terminal,
+     * after the early returns (review 21 closing, c-m7).
+     */
+    @Test
+    void theSingleTerminalOverloadScansOnlyForADisconnectedTerminal() {
+        Network network = network();
+        InMemoryCgmesModel cgmes = disconnectedTerminals();
+        int[] scans = {0};
+        Network counted = counting(network, scans);
+        Context context = new Context(cgmes, new Conversion.Config()
+                .createFictitiousSwitchesForDisconnectedTerminalsMode(CgmesImport.FictitiousSwitchesCreationMode.ALWAYS),
+                counted);
+        PropertyBag disconnected = cgmes.terminals().get(0);
+        PropertyBag connected = cgmes.terminals().get(1);
+        connected.put(CgmesNames.CONNECTED, "true");
+
+        TerminalConversion.create(counted, connected, context);
+        assertEquals(0, scans[0]);
+        TerminalConversion.create(counted, disconnected, context);
+        assertEquals(1, scans[0]);
+        assertEquals(1, network.getSwitchStream().filter(TerminalConversion::isFictitiousSwitchOfATerminal).count());
+
+        // A second call finds the switch it created and creates none
+        TerminalConversion.create(counted, disconnected, context);
+        assertEquals(2, scans[0]);
+        assertEquals(1, network.getSwitchStream().filter(TerminalConversion::isFictitiousSwitchOfATerminal).count());
     }
 }
