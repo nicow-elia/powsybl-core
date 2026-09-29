@@ -96,10 +96,10 @@ final class EventCompactor {
             Identifiable<?> identifiable = event instanceof UpdateNetworkEvent update ? identifiableFor(update, network) : null;
             Set<String> repeated = event instanceof UpdateNetworkEvent update
                     ? LegacyRegulationKeys.repeatedKeys(identifiable, update.attribute()) : Set.of();
-            if (repeated.isEmpty()) {
-                keys[index] = event instanceof UpdateNetworkEvent update
-                        ? new UpdateKey(update.id(), attributeKey(update, identifiable))
-                        : updateKey(event, network);
+            if (!repeated.isEmpty()) {
+                keys[index] = echoKey((UpdateNetworkEvent) event, repeated, reported);
+            } else {
+                keys[index] = keyOf(event, identifiable);
                 if (keys[index] != null) {
                     if (event instanceof UpdateNetworkEvent update
                             && LegacyRegulationKeys.isRepeatable(keys[index].attributeKey())) {
@@ -113,14 +113,6 @@ final class EventCompactor {
                         firstChanges.putIfAbsent(keys[index], new FirstChange(oldValue(event), index));
                     }
                 }
-            } else {
-                UpdateNetworkEvent echo = (UpdateNetworkEvent) event;
-                boolean repeats = repeated.stream().anyMatch(key -> reported
-                        .getOrDefault(new UpdateKey(echo.id(), key), Set.of()).contains(echo.newValue()));
-                boolean noOp = Objects.equals(echo.oldValue(), echo.newValue())
-                        || LegacyRegulationKeys.reportsNoOldValue(echo.attribute(), echo.oldValue());
-                // Rule 3: a sole carrier is kept under its own name, so that the exports refuse it
-                keys[index] = repeats || noOp ? DROPPED : new UpdateKey(echo.id(), echo.attribute());
             }
         }
 
@@ -136,6 +128,18 @@ final class EventCompactor {
 
         return new CompactedChanges(List.copyOf(compactedEvents), Map.copyOf(firstChanges),
                 Set.copyOf(createdExtensions));
+    }
+
+    /**
+     * The key of an echo: {@link #DROPPED} when it repeats a canonical value already reported with the same new value
+     * (rule 1) or changes nothing (rule 2), its own attribute name when it is the sole carrier of a change (rule 3).
+     */
+    private static UpdateKey echoKey(UpdateNetworkEvent echo, Set<String> repeated, Map<UpdateKey, Set<Object>> reported) {
+        boolean repeats = repeated.stream().anyMatch(key -> reported
+                .getOrDefault(new UpdateKey(echo.id(), key), Set.of()).contains(echo.newValue()));
+        boolean noOp = Objects.equals(echo.oldValue(), echo.newValue())
+                || LegacyRegulationKeys.reportsNoOldValue(echo.attribute(), echo.oldValue());
+        return repeats || noOp ? DROPPED : new UpdateKey(echo.id(), echo.attribute());
     }
 
     /** The identifiable a change was reported on, looked up only when it decides whether the change is an echo. */
@@ -191,10 +195,10 @@ final class EventCompactor {
         };
     }
 
-    /** The attribute a change describes, or {@code null} for a change that no attribute identifies. */
-    static UpdateKey updateKey(NetworkEvent event, Network network) {
+    /** The attribute a change that is not an echo describes, or {@code null} for a change no attribute identifies. */
+    private static UpdateKey keyOf(NetworkEvent event, Identifiable<?> identifiable) {
         return switch (event) {
-            case UpdateNetworkEvent update -> new UpdateKey(update.id(), attributeKey(update, network));
+            case UpdateNetworkEvent update -> new UpdateKey(update.id(), attributeKey(update, identifiable));
             // An extension attribute is namespaced by its extension: two extensions of the same object may well
             // both call an attribute "enabled" without describing the same value.
             case ExtensionUpdateNetworkEvent update ->
@@ -250,16 +254,6 @@ final class EventCompactor {
         // Only a target echo needs to know the equipment (a boundary line's targetV is a value of its own)
         boolean needsIdentifiable = network != null && LegacyRegulationKeys.needsIdentifiable(event.attribute());
         return attributeKey(event, needsIdentifiable ? network.getIdentifiable(event.id()) : null);
-    }
-
-    /** The key identifying the value a change describes, for any kind of event. */
-    static String attributeKey(NetworkEvent event, Network network) {
-        return switch (event) {
-            case UpdateNetworkEvent update -> attributeKey(update, network);
-            case ExtensionUpdateNetworkEvent update ->
-                extensionAttributeKey(update.extensionName(), update.attribute());
-            default -> null;
-        };
     }
 
     /** The attribute key of an extension attribute, which is namespaced by the name of its extension. */
