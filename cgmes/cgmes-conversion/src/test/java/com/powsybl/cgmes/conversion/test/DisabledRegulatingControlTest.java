@@ -18,13 +18,16 @@ import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelParser;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
 import com.powsybl.cgmes.model.diff.DifferenceModelWriter;
+import com.powsybl.commons.PowsyblException;
 import com.powsybl.commons.datasource.MemDataSource;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
+import com.powsybl.iidm.network.Generator;
 import com.powsybl.iidm.network.Identifiable;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.events.NetworkEvent;
 import com.powsybl.iidm.network.regulation.VoltageRegulationHolder;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -39,12 +42,13 @@ import java.util.stream.Stream;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Real CGMES data: a RegulatingControl that is disabled in the steady state hypothesis gives its equipment a
  * VoltageRegulation that does not regulate, so switching it on is an ordinary, exportable change on all three routes
- * (coordinator question, round 3: the refusal "has no CGMES regulating control to carry this change" is reachable only
+ * (coordinator question, round 3: the refusal "has no CGMES regulating control the import could use" is reachable only
  * for equipment without a RegulatingControl in its equipment model, e.g. an IIDM network exported by the full export,
  * issue R2-6 a).
  *
@@ -134,10 +138,10 @@ class DisabledRegulatingControlTest {
      * the IIDM networks exported by the full export (issue R2-6 a). No conformity fixture holds a generator with a
      * disabled RegulatingControl.
      */
-    @org.junit.jupiter.api.Test
+    @Test
     void aMachineWithoutRegulatingControlHasNoRegulationAndItsVoltageTargetIsRefused() {
         Network sender = Network.read(ReliCapGridCatalog.espheim().dataSource(), new Properties());
-        List<com.powsybl.iidm.network.Generator> withoutControl = sender.getGeneratorStream()
+        List<Generator> withoutControl = sender.getGeneratorStream()
                 .filter(g -> !g.hasProperty(Conversion.PROPERTY_REGULATING_CONTROL)
                         && "SynchronousMachine".equals(g.getProperty(Conversion.PROPERTY_CGMES_ORIGINAL_CLASS, "SynchronousMachine")))
                 .toList();
@@ -147,11 +151,11 @@ class DisabledRegulatingControlTest {
         List<NetworkEvent> events = RecordedChangeScenarios.record(sender,
                 n -> n.getGenerator(id).setLocalTargetV(Double.isNaN(n.getGenerator(id).getLocalTargetV())
                         ? 400.0 : n.getGenerator(id).getLocalTargetV() + 1.0));
-        org.junit.jupiter.api.Assertions.assertEquals(1, events.size());
-        com.powsybl.commons.PowsyblException refusal = org.junit.jupiter.api.Assertions.assertThrows(
-                com.powsybl.commons.PowsyblException.class,
+        assertEquals(1, events.size());
+        PowsyblException refusal = assertThrows(PowsyblException.class,
                 () -> PartialSshExport.toString(sender, events, PartialSshExport.UnsupportedChangeBehavior.FAIL));
-        assertTrue(refusal.getMessage().contains("has no CGMES regulating control to carry this change"),
+        assertTrue(refusal.getMessage().contains("has no CGMES regulating control the import could use")
+                        && refusal.getMessage().contains("give it a VoltageRegulation (not regulating) first"),
                 refusal.getMessage());
         System.out.println("DISABLED-RC generators of Espheim without RegulatingControl: " + withoutControl.size());
     }

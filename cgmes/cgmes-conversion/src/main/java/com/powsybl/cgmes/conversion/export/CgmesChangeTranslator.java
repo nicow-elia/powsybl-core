@@ -1814,8 +1814,12 @@ class CgmesChangeTranslator {
     private Result<String, String> regulatingControlId(Identifiable<?> identifiable) {
         if (!identifiable.hasProperty(PROPERTY_REGULATING_CONTROL)) {
             return failure(identifiable.getType() + " " + identifiable.getId()
-                    + " has no CGMES regulating control to carry this change. " + REMEDY + "keep its regulation as"
-                    + " the equipment model defines it, or export the equipment model with the change");
+                    + " has no CGMES regulating control the import could use: none in the equipment model, or one the"
+                    + " import ignored (a mode other than voltage or reactive power, a regulating terminal it could"
+                    + " not map, a control the model does not contain). " + REMEDY + "keep its regulation as the"
+                    + " import left it; to change it, give it a VoltageRegulation (not regulating) first and export"
+                    + " the full model (EQ and SSH): a full export writes a RegulatingControl only for equipment"
+                    + " that has a VoltageRegulation");
         }
         return success(context.getNamingStrategy().getCgmesIdFromProperty(identifiable, PROPERTY_REGULATING_CONTROL));
     }
