@@ -734,7 +734,10 @@ public final class EquipmentExport {
             String regulatingControlId = writeRegulatingControl(svc, regulatingControlsWritten, cimNamespace, writer, context);
             double inductiveRating = svc.getBmin() != 0 ? 1 / svc.getBmin() : 0;
             double capacitiveRating = svc.getBmax() != 0 ? 1 / svc.getBmax() : 0;
-            RegulationMode regulationMode = svc.getVoltageRegulation() != null ? svc.getVoltageRegulation().getMode() : null;
+            // Without a regulation the compensator holds its local reactive power target, which is what IIDM answers for
+            // it (isWithMode(REACTIVE_POWER) is true when there is no regulation)
+            RegulationMode regulationMode = svc.getVoltageRegulation() != null ? svc.getVoltageRegulation().getMode()
+                    : RegulationMode.REACTIVE_POWER;
             double slope = svc.getVoltageRegulation() != null ? svc.getVoltageRegulation().getSlope() : Double.NaN;
             StaticVarCompensatorEq.write(context.getNamingStrategy().getCgmesId(svc),
                 svc.getNameOrId(),
