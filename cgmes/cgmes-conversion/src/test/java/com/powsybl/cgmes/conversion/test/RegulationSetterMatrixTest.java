@@ -201,6 +201,12 @@ class RegulationSetterMatrixTest {
                 new Holder("VSC converter station 2 with its terminal set", noParameters(), HVDC_DIR, hvdcFiles,
                         n -> RecordedChangeScenarios.regulateOwnTerminal(vsc(n, 2)), n -> vsc(n, 2), n -> vsc(n, 2),
                         true),
+                new Holder("VSC converter station 2 regulating reactive power", noParameters(), HVDC_DIR, hvdcFiles,
+                        n -> {
+                            RecordedChangeScenarios.regulateOwnTerminal(vsc(n, 2));
+                            vsc(n, 2).getVoltageRegulation().setMode(RegulationMode.REACTIVE_POWER);
+                            vsc(n, 2).getVoltageRegulation().setTargetValue(30.0);
+                        }, n -> vsc(n, 2), n -> vsc(n, 2), true),
                 new Holder("detailed voltage source converter", detailedDcModel(), "/issues/hvdc/",
                         new String[] {"mixed_bipole_EQ.xml", "mixed_bipole_SSH.xml"}, nothing,
                         n -> n.getVoltageSourceConverter("VSC_1_2"), n -> n.getVoltageSourceConverter("VSC_1_2"),
@@ -442,6 +448,8 @@ class RegulationSetterMatrixTest {
     private static void check(Case c) {
         Network sender = c.holder().load(c.withRegulation());
         SortedMap<String, String> original = SteadyStateFingerprint.of(sender);
+        // What the regulation does not use in the original state, for the comparison after a revert
+        Set<String> inactiveBefore = inactiveLocalTargets(c, sender);
         List<NetworkEvent> events;
         try {
             events = RecordedChangeScenarios.record(sender,
@@ -509,7 +517,7 @@ class RegulationSetterMatrixTest {
             }
             assertSameState(c, route, changed, SteadyStateFingerprint.of(receiver), inactive, events);
             CgmesDiffImport.revert(receiver, parsed, parameters, ReportNode.NO_OP);
-            assertSameState(c, route + " reverted", original, SteadyStateFingerprint.of(receiver), inactive, events);
+            assertSameState(c, route + " reverted", original, SteadyStateFingerprint.of(receiver), inactiveBefore, events);
         }
     }
 
@@ -529,7 +537,8 @@ class RegulationSetterMatrixTest {
     }
 
     /**
-     * The local voltage target of the holder when its regulation does not use it at the end of the change set, with
+     * The local voltage target of the holder when its regulation does not use it in the state compared (the end of the
+     * change set after an apply, the original state after a revert), with
      * the regulating voltage target derived from it: the regulation has a regulating terminal (it then regulates to the
      * target of the regulation) or another mode than voltage. The steady state hypothesis has no property for such a
      * value (the full export writes none either), so a receiver keeps what its equipment model gave it, exactly as for

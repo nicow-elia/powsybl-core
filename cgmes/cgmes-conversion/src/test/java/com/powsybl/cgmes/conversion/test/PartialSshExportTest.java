@@ -1325,6 +1325,36 @@ class PartialSshExportTest extends AbstractSerDeTest {
     }
 
     /**
+     * The voltage target of a station regulating reactive power is not represented in the steady state hypothesis:
+     * the import rebuilds a reactive power regulation from {@code qPccControl} and its target, and keeps the local
+     * voltage target it had, whatever {@code targetUpcc} says. A change of it alone is therefore not a change of the
+     * SSH: nothing to refuse and nothing to carry, the difference is empty and a receiver keeps its own value, as for
+     * the voltage target of a compensator regulating reactive power (pypowsybl review round 2, R2-6 b).
+     */
+    @Test
+    void theVoltageTargetOfAStationRegulatingReactivePowerIsNotAChangeOfTheSsh() throws IOException {
+        Consumer<Network> reactiveMode = network -> {
+            VscConverterStation station = converter(network, 2);
+            RecordedChangeScenarios.regulateOwnTerminal(station);
+            station.getVoltageRegulation().setMode(RegulationMode.REACTIVE_POWER);
+            station.getVoltageRegulation().setTargetValue(30.0);
+        };
+        Network sender = readCgmesResources(HVDC_DIR, "hvdc_EQ.xml", "hvdc_SSH.xml");
+        reactiveMode.accept(sender);
+        double before = converter(sender, 2).getLocalTargetV();
+        List<NetworkEvent> events = RecordedChangeScenarios.record(sender,
+                n -> converter(n, 2).setLocalTargetV(before + 5.0));
+        assertEquals(1, events.size());
+
+        assertTrue(CgmesDiffExport.toDifferences(sender, events, new CgmesDiffExport.ExportOptions())
+                .differences().models().isEmpty());
+        RoundTripResult result = roundTrip(HVDC_DIR, reactiveMode,
+                n -> converter(n, 2).setLocalTargetV(before + 5.0), "hvdc_EQ.xml", "hvdc_SSH.xml");
+        assertEquals(before, converter(result.receiver(), 2).getLocalTargetV(), TOLERANCE);
+        assertEquals(30.0, converter(result.receiver(), 2).getRegulatingTargetQ(), TOLERANCE);
+    }
+
+    /**
      * A station without VoltageRegulation cannot be described: the CGMES import gives every VsConverter one, from
      * {@code qPccControl}, so the receiver would gain a regulation the sender does not have. A power change of its line
      * is refused with the remedy (review 21 round 2, r2-m3).

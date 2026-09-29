@@ -276,7 +276,7 @@ Equipment that has no `RegulatingControl` in the model both sides share cannot c
 Some changes are accepted but are not observable in the file, because CGMES holds a single value where IIDM holds two:
 
 * A `StaticVarCompensator` carries one target on its `RegulatingControl`, the one matching the mode it is in. A change of the local voltage target of a compensator regulating reactive power is exported as the currently active value. (Its local reactive power target is `StaticVarCompensator.q` and does travel.)
-* A VSC converter holds a single regulation target and a mode. The export writes the target of the mode it is in and `0` for the other one, as the full export does; the import rebuilds the `VoltageRegulation` from `qPccControl` and that target.
+* A VSC converter holds a single regulation target and a mode. The export writes the target of the mode it is in and `0` for the other one, as the full export does; the import rebuilds the `VoltageRegulation` from `qPccControl` and that target. The local voltage target of a station regulating reactive power is therefore not represented in the SSH: the import keeps the value the receiver has, and a change of it alone gives an empty difference.
 
 Other changes are reported as unsupported, because the SSH profile cannot express them:
 
