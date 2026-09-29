@@ -37,6 +37,7 @@ import com.powsybl.iidm.network.Switch;
 import com.powsybl.iidm.network.TapChanger;
 import com.powsybl.iidm.network.ThreeWindingsTransformer;
 import com.powsybl.iidm.network.TwoWindingsTransformer;
+import com.powsybl.iidm.network.ValidationException;
 import com.powsybl.iidm.network.VariantManagerConstants;
 import com.powsybl.iidm.network.VscConverterStation;
 import com.powsybl.iidm.network.events.ExtensionUpdateNetworkEvent;
@@ -1267,6 +1268,53 @@ class PartialSshExportTest extends AbstractSerDeTest {
         PowsyblException detailedRefusal = assertThrows(PowsyblException.class,
                 () -> PartialSshExport.toString(detailed, detailedRecorder.getEvents(), UnsupportedChangeBehavior.FAIL));
         assertTrue(detailedRefusal.getMessage().contains("has no control flag"), detailedRefusal.getMessage());
+    }
+
+    /**
+     * Open problem O1 of report 21: IIDM accepts reactive power regulation of a station only with a regulating terminal,
+     * and the regulating terminal is equipment data, not stored per variant. Setting it while recording is refused;
+     * it has to be set before (as {@code RecordedChangeScenarios.regulateOwnTerminal} does).
+     */
+    @Test
+    void vscRegulatingTerminalChangeIsRejected() {
+        Network sender = readCgmesResources(HVDC_DIR, "hvdc_EQ.xml", "hvdc_SSH.xml");
+        VscConverterStation station = converter(sender, 2);
+        assertThrows(ValidationException.class,
+                () -> station.getVoltageRegulation().setMode(RegulationMode.REACTIVE_POWER));
+
+        NetworkEventRecorder recorder = new NetworkEventRecorder();
+        sender.addListener(recorder);
+        RecordedChangeScenarios.regulateOwnTerminal(station);
+        station.getVoltageRegulation().setMode(RegulationMode.REACTIVE_POWER);
+
+        PowsyblException exception = assertThrows(PowsyblException.class,
+                () -> PartialSshExport.toString(sender, recorder.getEvents(), UnsupportedChangeBehavior.FAIL));
+        assertTrue(exception.getMessage().contains("the regulating terminal is RegulatingControl.Terminal"),
+                exception.getMessage());
+    }
+
+    /**
+     * Open problem O2 of report 21: the change export writes the voltage regulation of ratio tap changers only; a
+     * target of a ratio tap changer regulating reactive power is refused.
+     */
+    @Test
+    void ratioTapChangerReactivePowerRegulationIsRejected() {
+        Network sender = readCgmesResources(TRANSFORMER_DIR, "transformer_EQ.xml", "transformer_SSH.xml");
+        VoltageRegulation regulation = sender.getThreeWindingsTransformer("T3W").getLeg2().getRatioTapChanger()
+                .getVoltageRegulation();
+        assertNotNull(regulation.getTerminal(), "the fixture is expected to regulate a remote terminal");
+        regulation.setRegulating(false);
+        regulation.setTargetValue(10.0);
+        regulation.setMode(RegulationMode.REACTIVE_POWER);
+
+        NetworkEventRecorder recorder = new NetworkEventRecorder();
+        sender.addListener(recorder);
+        regulation.setTargetValue(12.0);
+
+        PowsyblException exception = assertThrows(PowsyblException.class,
+                () -> PartialSshExport.toString(sender, recorder.getEvents(), UnsupportedChangeBehavior.FAIL));
+        assertTrue(exception.getMessage().contains("only writes the voltage regulation of ratio tap changers"),
+                exception.getMessage());
     }
 
     /** Whether a converter controls the power at its connection point or the DC voltage is a steady state choice. */
