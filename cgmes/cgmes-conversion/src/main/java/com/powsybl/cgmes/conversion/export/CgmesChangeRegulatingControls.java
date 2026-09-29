@@ -280,9 +280,12 @@ class CgmesChangeRegulatingControls {
                         == PhaseTapChanger.RegulationMode.CURRENT_LIMITER) {
             return success(currentLimiterView(phaseTapChanger, controlId, ref, state));
         }
-        RegulatingControlView view = tapChanger instanceof RatioTapChanger
-                ? SteadyStateHypothesisExport.regulatingControlView(ref.regulation(), controlId, context, state)
-                : SteadyStateHypothesisExport.regulatingControlView((PhaseTapChanger) tapChanger, controlId, ref, context, state);
+        if (tapChanger instanceof RatioTapChanger) {
+            // The same guards as any other holder: no regulation, or a regulation without a mode in this variant
+            return holderView(ref.regulation(), controlId, state);
+        }
+        RegulatingControlView view =
+                SteadyStateHypothesisExport.regulatingControlView((PhaseTapChanger) tapChanger, controlId, ref, context, state);
         if (view == null) {
             return failure("tap changer " + controlId + " of " + transformer.getId()
                     + " has no regulation the steady state hypothesis profile can express");
