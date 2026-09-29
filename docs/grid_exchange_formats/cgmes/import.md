@@ -289,6 +289,11 @@ There is no import parameter for it: it is set by the layer that binds a variant
 [the RDF database](rdf_database.md), and `Network.update(dataSource)` has no variant to name. The authoritative
 table of what is and is not per variant is in that document.
 
+Reverting a difference that closed a branch CGMES models as a switch states `connected = false` for its terminals,
+and since powsybl-core #4085 the update then creates the fictitious switch of each node/breaker terminal that has none:
+the reverted network holds one more, open, fictitious switch than it held before, exactly as after a partial SSH update
+of the undo.
+
 ### Performance
 
 Measured on the CGMES 3 `svedala` model (2342 switches), best of ten runs after warm up, 8 cores. One run is one

@@ -178,6 +178,15 @@ class CgmesDiffRoundTripTest {
         assertEquals(CgmesDiffImport.Route.FAST,
                 CgmesDiffImport.revert(receiver, parsed, parameters, ReportNode.NO_OP).route());
         updateWithPartialSsh(sshReceiver, sender, undoEvents, scenario);
+        if ("branchModelledAsSwitchClosing".equals(scenario.name())) {
+            // Undoing the closing of a branch CGMES models as a switch disconnects its terminals, and since
+            // powsybl-core #4085 the update creates the fictitious switch of a disconnected node/breaker terminal: it
+            // is left behind, open, exactly as the partial SSH of the undo leaves it (open problem O6 of report 21)
+            for (Network reverted : List.of(receiver, sshReceiver)) {
+                assertTrue(reverted.getSwitch("SeriesCompensator-T2_SW_fict") != null
+                        && reverted.getSwitch("SeriesCompensator-T2_SW_fict").isOpen(), scenario.name());
+            }
+        }
         SortedMap<String, String> revertedViaDifference = SteadyStateFingerprint.of(receiver);
         SortedMap<String, String> revertedViaPartialSsh = SteadyStateFingerprint.of(sshReceiver);
         Map<String, String[]> undoDifferences =
