@@ -788,6 +788,41 @@ class EquipmentExportTest extends AbstractSerDeTest {
     }
 
     @Test
+    void ratioTapChangerWithoutRegulatingTerminalIsControlledAtItsOwnEnd() throws IOException {
+        // A ratio tap changer whose voltage regulation has no terminal, as the IEEE CDF importer creates for a
+        // transformer without a controlled bus: not regulating, no target
+        Network network = EurostagTutorialExample1Factory.create();
+        TwoWindingsTransformer twt = network.getTwoWindingsTransformer("NHV2_NLOAD");
+        twt.getRatioTapChanger().remove();
+        twt.newRatioTapChanger()
+                .setLowTapPosition(0)
+                .setTapPosition(0)
+                .beginStep()
+                .setRho(1.0)
+                .endStep()
+                .setLoadTapChangingCapabilities(true)
+                .newVoltageRegulation()
+                    .withMode(RegulationMode.VOLTAGE)
+                    .withTargetValue(Double.NaN)
+                    .withTargetDeadband(Double.NaN)
+                    .withRegulating(false)
+                    .add()
+                .add();
+        assertNull(twt.getRatioTapChanger().getRegulatingTerminal());
+
+        Path outputPath = tmpDir.resolve("rtcWithoutRegulatingTerminal");
+        Files.createDirectories(outputPath);
+        String baseName = "rtcWithoutRegulatingTerminal";
+        network.write("CGMES", null, new DirectoryDataSource(outputPath, baseName));
+
+        // The tap changer control is written at the terminal of the transformer end that holds the tap changer
+        Network actual = new CgmesImport().importData(new DirectoryDataSource(outputPath, baseName), NetworkFactory.findDefault(), importParams);
+        TwoWindingsTransformer twtActual = actual.getTwoWindingsTransformer("NHV2_NLOAD");
+        assertEquals(twtActual.getTerminal1(), twtActual.getRatioTapChanger().getRegulatingTerminal());
+        assertFalse(twtActual.getRatioTapChanger().getVoltageRegulation().isRegulating());
+    }
+
+    @Test
     void tapChangerControlDefineRatioTapChangerAndPhaseTapChangerTest() throws IOException {
         ReadOnlyDataSource ds = Cgmes3Catalog.miniGrid().dataSource();
         Network network = Network.read(ds, importParams);
