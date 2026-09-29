@@ -30,6 +30,7 @@ import com.powsybl.iidm.network.extensions.ActivePowerControl;
 import com.powsybl.iidm.network.extensions.ReferencePriority;
 import com.powsybl.iidm.network.regulation.RegulationMode;
 import com.powsybl.iidm.network.regulation.VoltageRegulation;
+import com.powsybl.iidm.network.regulation.VoltageRegulationHolder;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -200,6 +201,48 @@ public final class RecordedChangeScenarios {
     private static void svcQTargets(Network network, double targetQ, double localTargetV) {
         svcQRegulation(network).setTargetValue(targetQ);
         network.getStaticVarCompensator("StaticVarCompensator-Q").setLocalTargetV(localTargetV);
+    }
+
+    /**
+     * One change of every supported type a model holds, for the export benchmarks: an injection setpoint, a generator
+     * target (and, with {@code toggleRegulation}, its regulation switched once, so that the change is a real one), a
+     * tap position, a shunt section count and a static var compensator voltage target. Through the VoltageRegulation
+     * API: a deprecated bridge reports an echo on top, which would weigh on what is measured.
+     */
+    public static List<Runnable> mixedEquipmentChanges(Network network, boolean toggleRegulation) {
+        List<Runnable> changes = new ArrayList<>();
+        network.getLoadStream().forEach(l -> changes.add(() -> l.setP0(l.getP0() + 1.0)));
+        network.getGeneratorStream().forEach(g -> {
+            changes.add(() -> g.setTargetP(g.getTargetP() + 1.0));
+            if (g.hasProperty(Conversion.PROPERTY_REGULATING_CONTROL)) {
+                changes.add(() -> setVoltageTarget(g, g.getRegulatingTargetV() + 1.0));
+                if (toggleRegulation) {
+                    changes.add(() -> g.getVoltageRegulation().setRegulating(!g.getVoltageRegulation().isRegulating()));
+                }
+            }
+        });
+        network.getTwoWindingsTransformerStream()
+                .filter(t -> t.hasRatioTapChanger() && t.getRatioTapChanger().getTapPosition() < t.getRatioTapChanger().getHighTapPosition())
+                .forEach(t -> changes.add(() -> t.getRatioTapChanger().setTapPosition(t.getRatioTapChanger().getTapPosition() + 1)));
+        network.getShuntCompensatorStream()
+                .filter(s -> s.getSectionCount() < s.getMaximumSectionCount())
+                .forEach(s -> changes.add(() -> s.setSectionCount(s.getSectionCount() + 1)));
+        network.getStaticVarCompensatorStream()
+                .forEach(s -> changes.add(() -> setVoltageTarget(s, s.getRegulatingTargetV() + 1.0)));
+        return changes;
+    }
+
+    /**
+     * Set the voltage target a holder regulates to, through the VoltageRegulation API: the target of its regulation
+     * when it regulates voltage at a terminal the regulation names, its local target otherwise.
+     */
+    public static void setVoltageTarget(VoltageRegulationHolder<?> holder, double value) {
+        VoltageRegulation regulation = holder.getVoltageRegulation();
+        if (regulation != null && regulation.isWithTerminal() && regulation.getMode() == RegulationMode.VOLTAGE) {
+            regulation.setTargetValue(value);
+        } else {
+            holder.setLocalTargetV(value);
+        }
     }
 
     private static BoundaryLine.Generation generation(Network network) {

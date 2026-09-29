@@ -199,7 +199,7 @@ class CgmesDiffExportBenchmarkTest {
         Network network = Network.read(Cgmes3Catalog.svedala().dataSource(), new Properties());
 
         List<NetworkEvent> events = record(network, () -> {
-            List<Runnable> changes = mixedEquipmentChanges(network);
+            List<Runnable> changes = RecordedChangeScenarios.mixedEquipmentChanges(network, false);
             assertTrue(changes.size() >= MANY_CHANGES / 10,
                     () -> "the model is expected to exercise many equipment types, it produced " + changes.size() + " changes");
             changes.stream().limit(MANY_CHANGES).forEach(Runnable::run);
@@ -222,26 +222,6 @@ class CgmesDiffExportBenchmarkTest {
         assertTrue(mixed < MAX_RATIO_TO_PARTIAL_SSH * partialSsh,
                 () -> "a difference of " + events.size() + " mixed changes took " + millis(mixed) + " ms, more than "
                         + MAX_RATIO_TO_PARTIAL_SSH + " times the " + millis(partialSsh) + " ms of a partial SSH file");
-    }
-
-    private static List<Runnable> mixedEquipmentChanges(Network network) {
-        List<Runnable> changes = new ArrayList<>();
-        network.getLoadStream().forEach(l -> changes.add(() -> l.setP0(l.getP0() + 1.0)));
-        network.getGeneratorStream().forEach(g -> {
-            changes.add(() -> g.setTargetP(g.getTargetP() + 1.0));
-            if (g.hasProperty(REGULATING_CONTROL_PROPERTY)) {
-                changes.add(() -> g.setTargetV(g.getTargetV() + 1.0));
-            }
-        });
-        network.getTwoWindingsTransformerStream()
-                .filter(t -> t.hasRatioTapChanger() && t.getRatioTapChanger().getTapPosition() < t.getRatioTapChanger().getHighTapPosition())
-                .forEach(t -> changes.add(() -> t.getRatioTapChanger().setTapPosition(t.getRatioTapChanger().getTapPosition() + 1)));
-        network.getShuntCompensatorStream()
-                .filter(s -> s.getSectionCount() < s.getMaximumSectionCount())
-                .forEach(s -> changes.add(() -> s.setSectionCount(s.getSectionCount() + 1)));
-        network.getStaticVarCompensatorStream()
-                .forEach(s -> changes.add(() -> s.setVoltageSetpoint(s.getVoltageSetpoint() + 1.0)));
-        return changes;
     }
 
     /**
@@ -295,7 +275,7 @@ class CgmesDiffExportBenchmarkTest {
     void mixedEqAndSshDiffStaysWithinBudget() {
         Network network = Network.read(Cgmes3Catalog.svedala().dataSource(), new Properties());
         List<NetworkEvent> events = record(network, () -> {
-            mixedEquipmentChanges(network).stream().limit(MANY_CHANGES).forEach(Runnable::run);
+            RecordedChangeScenarios.mixedEquipmentChanges(network, false).stream().limit(MANY_CHANGES).forEach(Runnable::run);
             network.getLineStream().forEach(line -> line.setR(line.getR() + 0.01));
             network.getVoltageLevelStream().limit(10).forEach(voltageLevel -> {
                 double low = voltageLevel.getLowVoltageLimit();
