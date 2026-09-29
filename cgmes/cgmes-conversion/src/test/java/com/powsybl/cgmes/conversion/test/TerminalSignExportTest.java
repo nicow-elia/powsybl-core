@@ -133,6 +133,51 @@ class TerminalSignExportTest {
         assertEquals(family.target().applyAsDouble(sender), family.target().applyAsDouble(receiver), TOLERANCE);
     }
 
+    /**
+     * A common grid model export never writes the equipment model (review 21 round 2, r2-m5): the steady state
+     * hypothesis of each individual grid model is read against its original equipment model, so the sign travels, as
+     * for an SSH exported alone.
+     */
+    @org.junit.jupiter.api.Test
+    void aCommonGridModelExportKeepsTheTarget() throws java.io.IOException {
+        Family family = (Family) families().findFirst().orElseThrow().get()[0];
+        Network igm = readCgmesResources(family.dir(), family.files());
+        family.reverseAndChange().accept(igm);
+        Network other = com.powsybl.iidm.network.test.EurostagTutorialExample1Factory.create();
+        Network cgm = Network.merge("cgm", igm, other);
+        Properties export = new Properties();
+        export.put(CgmesExport.CGM_EXPORT, true);
+        cgm.write("CGMES", export, tmpDir.resolve("cgm"));
+
+        java.nio.file.Path igmSsh;
+        try (Stream<java.nio.file.Path> files = java.nio.file.Files.list(tmpDir)) {
+            igmSsh = files.filter(file -> file.getFileName().toString().endsWith("_SSH.xml"))
+                    .filter(file -> readString(file).contains("StaticVarCompensator-Q"))
+                    .findFirst().orElseThrow();
+        }
+        java.nio.file.Path single = tmpDir.resolve("single");
+        java.nio.file.Files.createDirectories(single);
+        java.nio.file.Files.copy(igmSsh, single.resolve("igm_SSH.xml"));
+
+        Network receiver = readCgmesResources(family.dir(), family.files());
+        family.reverseAndChange().accept(receiver);
+        receiverOriginalTarget(receiver, family);
+        Properties update = new Properties();
+        update.put(CgmesImport.USE_PREVIOUS_VALUES_DURING_UPDATE, "true");
+        receiver.update(new GenericReadOnlyDataSource(single, "igm"), update);
+
+        assertEquals(family.target().applyAsDouble(cgm.getSubnetwork(igm.getId())),
+                family.target().applyAsDouble(receiver), TOLERANCE);
+    }
+
+    private static String readString(java.nio.file.Path file) {
+        try {
+            return java.nio.file.Files.readString(file);
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
+    }
+
     /** Put the receiver back to the value of the base files, so that only the file can bring the change. */
     private static void receiverOriginalTarget(Network receiver, Family family) {
         Network original = readCgmesResources(family.dir(), family.files());
