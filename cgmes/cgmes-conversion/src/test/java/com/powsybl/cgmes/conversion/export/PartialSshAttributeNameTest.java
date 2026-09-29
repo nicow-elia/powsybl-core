@@ -178,12 +178,77 @@ class PartialSshAttributeNameTest {
 
         Network detailed = DcDetailedNetworkFactory.createVscSymmetricalMonopole();
         VoltageSourceConverter vsc = detailed.getVoltageSourceConverterStream().findFirst().orElseThrow();
-        // The converter already regulates (reactive power): switching the voltage regulator on changes the mode
-        // without a canonical event and reports the echo alone, with the old value of the voltage kind of flag (F2, F3)
+        // This converter has NO VoltageRegulation: the bridge creates one, which IIDM does not report (gap G1, issue
+        // draft voltage-regulation-creation-fires-no-event.md), and reports its own echo alone (review 21 round 2,
+        // R2-M3). A converter that has a regulation reports the canonical events first, see below
+        assertNull(vsc.getVoltageRegulation());
         assertEquals(List.of("voltageRegulatorOn"),
                 attributesUpdatedBy(detailed, () -> vsc.setVoltageRegulatorOn(!vsc.isVoltageRegulatorOn())));
+        assertNotNull(vsc.getVoltageRegulation());
         assertEquals(List.of(LOCAL_TARGET_V, "voltageSetpoint"),
                 attributesUpdatedBy(detailed, () -> vsc.setVoltageSetpoint(vsc.getVoltageSetpoint() + 1.0)));
+    }
+
+    /**
+     * A detailed voltage source converter that has a VoltageRegulation (regulating reactive power, as imported from
+     * CGMES) reports the canonical events of the deprecated flag before its echo: the mode, then the flag (review 21
+     * round 2, R2-M3).
+     */
+    @Test
+    @SuppressWarnings("removal")
+    void aDetailedConverterWithARegulationReportsTheCanonicalEventsOfTheFlag() {
+        java.util.Properties parameters = new java.util.Properties();
+        parameters.put(com.powsybl.cgmes.conversion.CgmesImport.USE_DETAILED_DC_MODEL, "true");
+        Network detailed = com.powsybl.cgmes.conversion.test.ConversionUtil.readCgmesResources(parameters,
+                "/issues/hvdc/", "mixed_bipole_EQ.xml", "mixed_bipole_SSH.xml");
+        VoltageSourceConverter vsc = detailed.getVoltageSourceConverter("VSC_1_2");
+        assertEquals(RegulationMode.REACTIVE_POWER, vsc.getVoltageRegulation().getMode());
+        assertEquals(List.of("VoltageRegulation.RegulationMode REACTIVE_POWER->VOLTAGE",
+                        "VoltageRegulation.isRegulating true->false", "voltageRegulatorOn true->false"),
+                describedBy(detailed, () -> vsc.setVoltageRegulatorOn(false)));
+    }
+
+    /**
+     * Upstream defect F3 (issue draft {@code generator-two-argument-target-v-reports-wrong-values.md}):
+     * {@code Generator.setTargetV(v, local)} reports what it did with wrong old and new values. The export does not
+     * depend on them (EventCompactor, rule 1; the translator reads the live state), this pins what IIDM reports.
+     */
+    @Test
+    @SuppressWarnings("removal")
+    void twoArgumentTargetVReportsWrongValues() {
+        Network network = com.powsybl.cgmes.conversion.test.ConversionUtil.readCgmesResources("/update/generator/",
+                "generator_EQ.xml", "generator_SSH.xml");
+        Generator generator = network.getGenerator("SynchronousMachine");
+        assertEquals(405.0, generator.getLocalTargetV());
+
+        // Remote regulation (remote target 410, local 405), local target unchanged: the second localTargetV event
+        // carries the old REMOTE target as its old value, the echo the old LOCAL target
+        generator.getVoltageRegulation().setTerminal(network.getGenerator("ExternalNetworkInjection").getTerminal(), 410.0);
+        assertEquals(List.of("VoltageRegulation.TargetValue 410.0->411.0", "localTargetV 410.0->405.0",
+                        "targetV 405.0->411.0"),
+                describedBy(network, () -> generator.setTargetV(411.0, 405.0)));
+        // Remote regulation, local target changed: the real change of the local target comes first
+        assertEquals(List.of("localTargetV 405.0->407.0", "VoltageRegulation.TargetValue 411.0->412.0",
+                        "localTargetV 411.0->407.0", "targetV 405.0->412.0"),
+                describedBy(network, () -> generator.setTargetV(412.0, 407.0)));
+
+        // Local regulation: the local target is set to v, and then reported once more as the equivalent local target,
+        // a value it does not have
+        Network local = com.powsybl.cgmes.conversion.test.ConversionUtil.readCgmesResources("/update/generator/",
+                "generator_EQ.xml", "generator_SSH.xml");
+        Generator localGenerator = local.getGenerator("SynchronousMachine");
+        assertEquals(List.of("localTargetV 405.0->406.0", "localTargetV 405.0->300.0"),
+                describedBy(local, () -> localGenerator.setTargetV(406.0, 300.0)));
+        assertEquals(406.0, localGenerator.getLocalTargetV());
+    }
+
+    /** The update events a change causes, as {@code attribute old->new}. */
+    private static List<String> describedBy(Network network, Runnable change) {
+        return eventsRecordedBy(network, change).stream()
+                .filter(UpdateNetworkEvent.class::isInstance)
+                .map(UpdateNetworkEvent.class::cast)
+                .map(event -> event.attribute() + " " + event.oldValue() + "->" + event.newValue())
+                .toList();
     }
 
     /**
