@@ -134,8 +134,9 @@ final class EventCompactor {
      * (rule 1) or changes nothing (rule 2), its own attribute name when it is the sole carrier of a change (rule 3).
      */
     private static UpdateKey echoKey(UpdateNetworkEvent echo, Set<String> repeated, Map<UpdateKey, Set<Object>> reported) {
+        // The reported values may hold null (a regulating terminal removed): an immutable empty set would throw on it
         boolean repeats = repeated.stream().anyMatch(key -> reported
-                .getOrDefault(new UpdateKey(echo.id(), key), Set.of()).contains(echo.newValue()));
+                .getOrDefault(new UpdateKey(echo.id(), key), Collections.emptySet()).contains(echo.newValue()));
         boolean noOp = Objects.equals(echo.oldValue(), echo.newValue());
         return repeats || noOp ? DROPPED : new UpdateKey(echo.id(), echo.attribute());
     }

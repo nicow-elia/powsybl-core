@@ -303,6 +303,18 @@ class EventCompactorTest {
         assertFalse(changes.hasChange("G", "voltageRegulatorOn"));
     }
 
+    /**
+     * An echo whose new value is {@code null} (the deprecated setRegulatingTerminal(null) removing a terminal) is
+     * compacted like any other: the lookup of the reported values must not throw (review 21 closing, found by the
+     * no-op rows of c-m11).
+     */
+    @Test
+    void anEchoWithANullNewValueIsCompacted() {
+        List<NetworkEvent> events = List.of(update("G", "regulatingTerminal", "T", null));
+        CompactedChanges changes = EventCompactor.compact(events, VARIANT, networkWithGenerator("G"));
+        assertEquals(events, changes.events());
+    }
+
     /** A network answering every identifiable lookup with one generator. */
     private static Network networkWithGenerator(String id) {
         Generator generator = (Generator) java.lang.reflect.Proxy.newProxyInstance(Generator.class.getClassLoader(),
