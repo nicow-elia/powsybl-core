@@ -187,7 +187,8 @@ public final class FastRouteCapabilities {
             Family.APPARENT_POWER_LIMIT, Family.VOLTAGE_LIMIT);
 
     /** The group every AC/DC converter query reads, whatever kind of converter it is. */
-    private static final PropertyGroup AC_DC_CONVERTER_SETPOINTS = PropertyGroup.of(
+    /** The setpoint block of a converter: the CGMES update reads these four together (and of both converters of a line). */
+    static final PropertyGroup AC_DC_CONVERTER_SETPOINTS = PropertyGroup.of(
             ACDC_CONVERTER_TARGET_PPCC, ACDC_CONVERTER_TARGET_UDC, ACDC_CONVERTER_P, ACDC_CONVERTER_Q);
 
     /**

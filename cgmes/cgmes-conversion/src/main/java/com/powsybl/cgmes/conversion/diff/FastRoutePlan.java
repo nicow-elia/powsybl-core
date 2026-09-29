@@ -101,10 +101,36 @@ final class FastRoutePlan {
      * @param rdfType    the CIM class to write, which is what the update queries select on
      * @param statements the complete forward statements of that object, type statements left out
      */
-    /** The property the setpoint block of a converter is recognised by. */
-    private static final String CONVERTER_TARGET_PPCC = "ACDCConverter.targetPpcc";
-
     record TypedObject(String about, String rdfType, List<CgmesStatement> statements) {
+    }
+
+    /**
+     * Complete the setpoint block of the other converter of a line from the receiving network: merged into its own
+     * statements when the difference states it (they win), added as an object of its own otherwise.
+     *
+     * @param partner the partner resolved on the receiving network, empty when the difference states it already or
+     *                when it cannot be resolved
+     * @return whether the partner is complete now; {@code false} when it cannot be resolved (review 21 round 3, r3-m4)
+     */
+    static boolean completePartner(Map<String, TypedObject> objectsBySubject, String partnerId,
+                                   Map<String, CgmesStatement> fromNetwork, Optional<ResolvedSubject> partner,
+                                   Set<String> touched) {
+        TypedObject planned = objectsBySubject.get(partnerId);
+        if (planned != null) {
+            Map<String, CgmesStatement> byProperty = new LinkedHashMap<>();
+            planned.statements().forEach(statement -> byProperty.putIfAbsent(statement.property(), statement));
+            fromNetwork.values().forEach(statement -> byProperty.putIfAbsent(statement.property(), statement));
+            objectsBySubject.put(partnerId, new TypedObject(planned.about(), planned.rdfType(),
+                    List.copyOf(byProperty.values())));
+            return true;
+        }
+        if (partner.isEmpty()) {
+            return false;
+        }
+        touched.addAll(partner.get().iidmIds());
+        objectsBySubject.put(partnerId, new TypedObject(partner.get().about(), partner.get().rdfType(),
+                List.copyOf(fromNetwork.values())));
+        return true;
     }
 
     /**
@@ -320,7 +346,7 @@ final class FastRoutePlan {
                     objectsBySubject.put(entry.getKey(), object);
                 }
             }
-            completeLinkedConverters(objectsBySubject);
+            completeLinkedConverters(subset, objectsBySubject);
             List<TypedObject> objects = new ArrayList<>(objectsBySubject.values());
             checkReverse(subset, reverse, model.preconditions());
             if (objects.isEmpty() && directs.size() == directsBefore) {
@@ -362,19 +388,11 @@ final class FastRoutePlan {
                 return null;
             }
             List<CgmesStatement> complete = complete(subset, subject, subjectId, statements);
-            if (complete != null && subject.owner() instanceof HvdcLine
-                    && complete.stream().anyMatch(statement -> converterSetpoints(subject).contains(statement.property()))) {
+            if (complete != null && subject.owner() instanceof HvdcLine && complete.stream()
+                    .anyMatch(statement -> FastRouteCapabilities.AC_DC_CONVERTER_SETPOINTS.properties().contains(statement.property()))) {
                 linkedConverters.put(subjectId, subject);
             }
             return complete == null ? null : new TypedObject(subject.about(), subject.rdfType(), complete);
-        }
-
-        /** The setpoint block of a converter: the properties the CGMES update reads with ACDCConverter.targetPpcc. */
-        private static Set<String> converterSetpoints(ResolvedSubject subject) {
-            return FastRouteCapabilities.spec(subject.family()).groups().stream()
-                    .map(PropertyGroup::properties)
-                    .filter(properties -> properties.contains(CONVERTER_TARGET_PPCC))
-                    .findFirst().orElse(Set.of());
         }
 
         /**
@@ -386,10 +404,10 @@ final class FastRoutePlan {
          * consistency group, completed from the receiving network like any other (review 21 round 2, R2-B1). The
          * probe of the line answers for both converters.</p>
          */
-        private void completeLinkedConverters(Map<String, TypedObject> objectsBySubject) {
+        private void completeLinkedConverters(CgmesSubset subset, Map<String, TypedObject> objectsBySubject) {
             for (Map.Entry<String, ResolvedSubject> linked : linkedConverters.entrySet()) {
                 ResolvedSubject subject = linked.getValue();
-                Set<String> setpoints = converterSetpoints(subject);
+                Set<String> setpoints = FastRouteCapabilities.AC_DC_CONVERTER_SETPOINTS.properties();
                 Map<String, Map<String, CgmesStatement>> partners = new LinkedHashMap<>();
                 for (Identifiable<?> object : objectsOf(subject)) {
                     for (String attributeKey : DiffProbes.probesFor(subject, object)) {
@@ -402,28 +420,17 @@ final class FastRoutePlan {
                         }
                     }
                 }
-                partners.forEach((partnerId, fromNetwork) -> completePartner(objectsBySubject, partnerId, fromNetwork,
-                        subject.rdfType()));
+                partners.forEach((partnerId, fromNetwork) -> {
+                    Optional<ResolvedSubject> partner = objectsBySubject.containsKey(partnerId) ? Optional.empty()
+                            : resolver.resolve(partnerId, fromNetwork.keySet(), subject.rdfType());
+                    if (!completePartner(objectsBySubject, partnerId, fromNetwork, partner, touched)) {
+                        // A converter block alone takes the power of the link to zero: leave it to the slow route
+                        blocking.add(new CgmesDiffImport.BlockingStatement(subset, fromNetwork.values().iterator().next(),
+                                "the other converter " + partnerId + " of the HVDC line cannot be resolved, and the"
+                                        + " block of one converter alone would take the power of the link to zero"));
+                    }
+                });
             }
-        }
-
-        private void completePartner(Map<String, TypedObject> objectsBySubject, String partnerId,
-                                     Map<String, CgmesStatement> fromNetwork, String classNameHint) {
-            TypedObject planned = objectsBySubject.get(partnerId);
-            if (planned != null) {
-                // The difference states the partner itself: its statements win, the network fills in the rest
-                Map<String, CgmesStatement> byProperty = new LinkedHashMap<>();
-                planned.statements().forEach(statement -> byProperty.putIfAbsent(statement.property(), statement));
-                fromNetwork.values().forEach(statement -> byProperty.putIfAbsent(statement.property(), statement));
-                objectsBySubject.put(partnerId, new TypedObject(planned.about(), planned.rdfType(),
-                        List.copyOf(byProperty.values())));
-                return;
-            }
-            resolver.resolve(partnerId, fromNetwork.keySet(), classNameHint).ifPresent(partner -> {
-                touched.addAll(partner.iidmIds());
-                objectsBySubject.put(partnerId, new TypedObject(partner.about(), partner.rdfType(),
-                        List.copyOf(fromNetwork.values())));
-            });
         }
 
         /**
