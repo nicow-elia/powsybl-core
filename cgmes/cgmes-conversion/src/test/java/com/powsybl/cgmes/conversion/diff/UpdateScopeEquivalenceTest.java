@@ -148,6 +148,19 @@ class UpdateScopeEquivalenceTest {
                 .getAliasFromType(Conversion.ALIAS_TERMINAL1).orElseThrow();
     }
 
+    /** Re-create the fictitious switch of the terminal under another identifier, with the properties the import sets. */
+    private static void renameTheFictitiousSwitch(Network network, String terminalId) {
+        Switch created = network.getSwitch(terminalId + "_SW_fict");
+        VoltageLevel.NodeBreakerView view = created.getVoltageLevel().getNodeBreakerView();
+        int node1 = view.getNode1(created.getId());
+        int node2 = view.getNode2(created.getId());
+        view.removeSwitch(created.getId());
+        Switch renamed = view.newSwitch().setId("renamed-fictitious-switch").setNode1(node1).setNode2(node2)
+                .setKind(SwitchKind.BREAKER).setOpen(true).setFictitious(true).add();
+        renamed.setProperty(Conversion.PROPERTY_IS_CREATED_FOR_DISCONNECTED_TERMINAL, "true");
+        renamed.setProperty(Conversion.PROPERTY_TERMINAL, terminalId);
+    }
+
     private static long fictitiousSwitchesOf(Network network, String terminalId) {
         return network.getSwitchStream()
                 .filter(s -> "true".equals(s.getProperty(Conversion.PROPERTY_IS_CREATED_FOR_DISCONNECTED_TERMINAL)))
@@ -202,21 +215,33 @@ class UpdateScopeEquivalenceTest {
         CgmesDiffImport.apply(network, set, config(parameters), new CgmesDiffImport.Options().setScopedUpdate(false),
                 ReportNode.NO_OP);
         assertEquals(1, fictitiousSwitchesOf(network, terminalId));
-        Switch created = network.getSwitch(terminalId + "_SW_fict");
-        VoltageLevel.NodeBreakerView view = created.getVoltageLevel().getNodeBreakerView();
-        int node1 = view.getNode1(created.getId());
-        int node2 = view.getNode2(created.getId());
-        view.removeSwitch(created.getId());
-        Switch renamed = view.newSwitch().setId("renamed-fictitious-switch").setNode1(node1).setNode2(node2)
-                .setKind(SwitchKind.BREAKER).setOpen(true).setFictitious(true).add();
-        renamed.setProperty(Conversion.PROPERTY_IS_CREATED_FOR_DISCONNECTED_TERMINAL, "true");
-        renamed.setProperty(Conversion.PROPERTY_TERMINAL, terminalId);
+        renameTheFictitiousSwitch(network, terminalId);
 
         CgmesDiffImport.apply(network, disconnecting(network, terminalId), config(parameters),
                 new CgmesDiffImport.Options().setScopedUpdate(false).setCheckSupersedes(false), ReportNode.NO_OP);
 
         assertEquals(1, fictitiousSwitchesOf(network, terminalId));
         assertNull(network.getSwitch(terminalId + "_SW_fict"));
+    }
+
+    /**
+     * The variant-safe gate of a terminal (a disconnection creates the fictitious switch, which exists in every
+     * variant) looks for an existing switch by its properties, as the import does, not by its usual identifier
+     * (review 21 finding m10).
+     */
+    @Test
+    void aRenamedFictitiousSwitchIsFoundByTheVariantSafeGate() {
+        Properties parameters = new Properties();
+        parameters.put(CgmesImport.USE_PREVIOUS_VALUES_DURING_UPDATE, "true");
+        Network network = miniNodeBreaker(parameters);
+        String terminalId = connectedNodeBreakerLoadTerminal(network);
+        CgmesDiffImport.apply(network, disconnecting(network, terminalId), config(parameters),
+                new CgmesDiffImport.Options().setScopedUpdate(false), ReportNode.NO_OP);
+        renameTheFictitiousSwitch(network, terminalId);
+
+        CgmesDiffImport.apply(network, disconnecting(network, terminalId), config(parameters),
+                new CgmesDiffImport.Options().setVariantSafeOnly(true).setCheckSupersedes(false), ReportNode.NO_OP);
+        assertEquals(1, fictitiousSwitchesOf(network, terminalId));
     }
 
     private static com.powsybl.cgmes.conversion.Conversion.Config config(Properties parameters) {

@@ -274,7 +274,8 @@ public final class FastRouteCapabilities {
         // powsybl-core #4085
         reasons.put(Family.TERMINAL, "disconnecting a terminal of a node/breaker voltage level creates the"
                 + " fictitious switch of that terminal when it does not exist yet; the switch is created in every"
-                + " variant");
+                + " variant (for a terminal of a switch, the switch itself is re-created with the open state of the"
+                + " working variant in all variants)");
         return Map.copyOf(reasons);
     }
 

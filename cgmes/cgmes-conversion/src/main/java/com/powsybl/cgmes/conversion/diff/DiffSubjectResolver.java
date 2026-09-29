@@ -117,6 +117,12 @@ final class DiffSubjectResolver {
     private Map<String, ResolvedSubject> secondaryIndex;
     /** The index of the CGMES limit identifiers, built with the secondary index and shared with the applier. */
     private CgmesLimitIndex limitIndex;
+    /**
+     * The fictitious switch of every CGMES terminal that has one, by terminal, built on the first terminal whose switch
+     * does not carry the usual identifier: the importer identifies these switches by their properties, and the
+     * identifier may differ when identifier unicity is ensured.
+     */
+    private Map<String, String> fictitiousSwitchByTerminal;
 
     DiffSubjectResolver(Network network) {
         this.network = Objects.requireNonNull(network);
@@ -362,11 +368,23 @@ final class DiffSubjectResolver {
     private Set<String> terminalUsers(Identifiable<?> owner, String cgmesTerminalId) {
         Set<String> ids = new LinkedHashSet<>();
         ids.add(owner.getId());
-        String fictitiousSwitchId = cgmesTerminalId + FICTITIOUS_SWITCH_SUFFIX;
-        if (network.getIdentifiable(fictitiousSwitchId) != null) {
-            ids.add(fictitiousSwitchId);
+        Switch usual = network.getSwitch(cgmesTerminalId + FICTITIOUS_SWITCH_SUFFIX);
+        if (FastRoutePlan.isFictitiousSwitchOfATerminal(usual) && cgmesTerminalId.equals(usual.getProperty(Conversion.PROPERTY_TERMINAL))) {
+            ids.add(usual.getId());
+        } else {
+            Optional.ofNullable(fictitiousSwitchByTerminal().get(cgmesTerminalId)).ifPresent(ids::add);
         }
         return Set.copyOf(ids);
+    }
+
+    private Map<String, String> fictitiousSwitchByTerminal() {
+        if (fictitiousSwitchByTerminal == null) {
+            fictitiousSwitchByTerminal = new HashMap<>();
+            network.getSwitchStream()
+                    .filter(FastRoutePlan::isFictitiousSwitchOfATerminal)
+                    .forEach(sw -> fictitiousSwitchByTerminal.put(sw.getProperty(Conversion.PROPERTY_TERMINAL), sw.getId()));
+        }
+        return fictitiousSwitchByTerminal;
     }
 
     private static ResolvedSubject of(Family family, String rdfType, String about, Identifiable<?> owner,
