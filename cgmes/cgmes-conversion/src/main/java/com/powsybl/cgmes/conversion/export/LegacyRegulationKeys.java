@@ -36,9 +36,9 @@ import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.VR_TERMI
  * <p>So every echo is either mapped onto the name of the value it repeats, when that is unambiguous (a flag, a mode,
  * a deadband, the regulating terminal), or dropped, when the value it repeats depends on the state (a target that is
  * the local one or the remote one depending on whether a regulating terminal is set): the setter always reported the
- * target under its own name first. The canonical event comes first, so the old value a compaction keeps for the key
- * is the canonical one. When the deprecated setter had to create the regulation, the echo is the only event, and the
- * mapping keeps the change.</p>
+ * target under its own name first. The old value of an echo never becomes the state before a change set (it is not
+ * reliable, and the canonical event is suppressed when nothing changed); when the deprecated setter had to create the
+ * regulation, the echo is the only event, and the mapping keeps the change, with the live value as the state before.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */

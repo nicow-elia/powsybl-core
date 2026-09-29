@@ -592,6 +592,26 @@ class CgmesDiffExportTest extends AbstractSerDeTest {
         assertTrue(exception.getMessage().contains("was created by this change set"), exception.getMessage());
     }
 
+    /**
+     * A deprecated setter that does not change the value still fires its echo, and the echo of
+     * {@code ShuntCompensator.setTargetDeadband} reports NaN as the old value whatever the deadband was. The canonical
+     * event is suppressed (old value equals new value), so the echo is the only event of its key: it must not be read
+     * as the state before the change set, which would describe a deadband that was added (review 21 finding M5).
+     */
+    @Test
+    @SuppressWarnings("removal")
+    void anEchoOldValueIsNotThePreviousState() {
+        Network network = readCgmesResources(SHUNT_DIR, "shuntCompensator_EQ.xml", "shuntCompensator_SSH.xml");
+        network.getShuntCompensator("LinearShuntCompensator").getVoltageRegulation().setTargetDeadband(1.0);
+        List<NetworkEvent> events = RecordedChangeScenarios.record(network,
+                n -> n.getShuntCompensator("LinearShuntCompensator").setTargetDeadband(1.0));
+        assertEquals(List.of("targetDeadband"), events.stream().map(e -> ((UpdateNetworkEvent) e).attribute()).toList());
+
+        CgmesDiffExport.Result result = CgmesDiffExport.toDifferences(network, events, new ExportOptions());
+        assertTrue(result.differences().isEmpty(), () -> "a change that changed nothing has no difference, got "
+                + result.differences());
+    }
+
     @Test
     void unrecordedOldValueIsUnsupported() {
         Network network = readCgmesResources(SHUNT_DIR, "shuntCompensator_EQ.xml", "shuntCompensator_SSH.xml");

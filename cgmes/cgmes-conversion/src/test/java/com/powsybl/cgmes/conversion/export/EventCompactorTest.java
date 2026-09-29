@@ -12,6 +12,7 @@ import com.powsybl.iidm.network.BoundaryLine;
 import com.powsybl.iidm.network.Generator;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.NetworkEventRecorder;
+import com.powsybl.iidm.network.ShuntCompensator;
 import com.powsybl.iidm.network.StaticVarCompensator;
 import com.powsybl.iidm.network.events.CreationNetworkEvent;
 import com.powsybl.iidm.network.events.ExtensionCreationNetworkEvent;
@@ -24,6 +25,7 @@ import com.powsybl.iidm.network.events.TemporaryLimitInfo;
 import com.powsybl.iidm.network.events.UpdateNetworkEvent;
 import com.powsybl.iidm.network.test.BoundaryLineNetworkFactory;
 import com.powsybl.iidm.network.test.EurostagTutorialExample1Factory;
+import com.powsybl.iidm.network.test.ShuntTestCaseFactory;
 import com.powsybl.iidm.network.test.SvcTestCaseFactory;
 import org.junit.jupiter.api.Test;
 
@@ -248,6 +250,26 @@ class EventCompactorTest {
         assertEquals(List.of(events.get(4)), changes.events());
         assertEquals(regulating, changes.firstOldValue("GEN", CgmesChangeTranslator.VR_REGULATING));
         assertFalse(changes.hasChange("GEN", "voltageRegulatorOn"));
+    }
+
+    /**
+     * An echo that is the only event of its key (the canonical event was suppressed, nothing changed) is still exported,
+     * but its old value is never the previous state: {@code ShuntCompensator.setTargetDeadband} reports NaN whatever the
+     * deadband was.
+     */
+    @Test
+    @SuppressWarnings("removal")
+    void anEchoOnlyChangeHasNoRecordedPreviousValue() {
+        Network network = ShuntTestCaseFactory.create();
+        ShuntCompensator shunt = network.getShuntCompensator("SHUNT");
+        shunt.getVoltageRegulation().setTargetDeadband(1.0);
+        List<NetworkEvent> events = recordedBy(network, () -> shunt.setTargetDeadband(1.0));
+        assertEquals(1, events.size());
+        assertTrue(Double.isNaN((Double) ((UpdateNetworkEvent) events.get(0)).oldValue()));
+        CompactedChanges changes = EventCompactor.compact(events, VARIANT, network);
+
+        assertEquals(events, changes.events());
+        assertFalse(changes.hasChange("SHUNT", CgmesChangeTranslator.VR_TARGET_DEADBAND));
     }
 
     /** The echo of a target is dropped: the target was reported under its own name first. */

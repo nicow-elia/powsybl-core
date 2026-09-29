@@ -62,10 +62,15 @@ final class EventCompactor {
         List<NetworkEvent> eventList = new ArrayList<>(events);
         UpdateKey[] keys = new UpdateKey[eventList.size()];
         boolean[] dropped = new boolean[eventList.size()];
+        boolean[] echo = new boolean[eventList.size()];
         for (int i = 0; i < keys.length; i++) {
             NetworkEvent event = Objects.requireNonNull(eventList.get(i));
             keys[i] = updateKey(event, network);
             dropped[i] = keys[i] != null && keys[i].attributeKey() == null;
+            // An echo is a change whose key is the canonical name another attribute name was mapped onto
+            echo[i] = !dropped[i] && event instanceof UpdateNetworkEvent update && keys[i] != null
+                    && !keys[i].attributeKey().equals(update.attribute())
+                    && keys[i].attributeKey().indexOf(KEY_SEPARATOR.charAt(0)) < 0;
         }
 
         Map<UpdateKey, FirstChange> firstChanges = new HashMap<>();
@@ -78,8 +83,11 @@ final class EventCompactor {
             // Every recorded change of this variant feeds the previous values, including the ones a mapping later
             // rejects: whether a change can be exported is decided after the previous state is known. The position
             // is kept with the previous value, so that a caller comparing two positions can always read the
-            // previous value of the earlier one.
-            if (keys[index] != null && !dropped[index] && appliesTo(event, workingVariantId)) {
+            // previous value of the earlier one. The old value of an echo of a deprecated voltage regulation setter is
+            // not reliable (ShuntCompensator.setTargetDeadband reports NaN whatever the deadband was) and is never
+            // the previous state: an attribute only an echo speaks about reads the live value, which is also what it
+            // was when the canonical event was suppressed because nothing changed.
+            if (keys[index] != null && !dropped[index] && !echo[index] && appliesTo(event, workingVariantId)) {
                 firstChanges.putIfAbsent(keys[index], new FirstChange(oldValue(event), index));
             }
         }
