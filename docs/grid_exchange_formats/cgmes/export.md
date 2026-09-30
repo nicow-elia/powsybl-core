@@ -332,6 +332,41 @@ The full SSH export also writes what the change export writes, where the two use
 * A `RegulatingControl` some of whose users have a `VoltageRegulation` without a mode in the working variant (created while another variant was the working one): it is written from its other users, and left out when it has none; the export used to fail. A change export refuses such a change.
 * The `EquivalentInjection` of a boundary line with a generation: the import puts the whole injection into the generation of the boundary line, so `EquivalentInjection.p` and `q` are `p0 - targetP` and `q0 - targetQ` (a value that is not a number counts as 0); the full export used to write `p0` and `q0` alone, and the generation was lost.
 
+### One mapping for every SSH export
+
+The partial SSH export, the difference model export, the database sink and the object dump describe an object through one mapping, which a change export asks about the objects a change touches. The full SSH export keeps its own writers, section by section, but every value that the two can both write goes through the same helpers (the view of a regulating control, the state of a converter, the targets of a VSC converter), and a test compares the full export with the mapping object by object on every fixture: where they differ, the difference is listed and explained, and each value that goes through a shared helper is also checked against the IIDM object itself. The mapping can also describe every object for a full model; it is not the full export's writer, because that made the full export slower on small networks (about 15 % at 1× Svedala), for the same output byte by byte.
+
+The mapping reads the network for one of two receivers, which only decides *which objects it may name* and *which refusals it honours*, never a value:
+
+* A receiver of changes (partial SSH, difference model, database) holds a state already and applies the file on top of it. An object the import did not record, or a change the receiver would not end up with, is refused, with a remedy.
+* The reader of a full model reads the whole state against the equipment model. It names objects under the identifiers the export generates (a `RegulatingControl` the import did not record, the `EquivalentInjection` of a boundary line without one, a `GeneratingUnit`), and it does not honour the refusals that only protect a receiver of changes: it writes a `RegulatingControl` from the users it can describe and leaves out a control none of whose users can be described.
+
+The refusals, with the rule the tests name them by (`Refusal` in the code):
+
+| Rule | Refused change | Remedy | Honoured by a full model |
+| --- | --- | --- | --- |
+| `echo-3` | a change reported only under the name of a deprecated voltage regulation setter | give the equipment its `VoltageRegulation` before recording, and use the `VoltageRegulation` and local target setters | – (no change) |
+| `local-target` | the local voltage target of a holder regulating voltage at a terminal elsewhere | export the equipment model, or change the target of the regulation only | – |
+| `own-terminal` | a regulating terminal of a VSC converter station other than its own | regulate the converter's own terminal, or none | – |
+| `terminal-eq` | a regulating terminal (`RegulatingControl.Terminal`, `ACDCConverter.PccTerminal`) | export the equipment model, or keep the terminal the import set | – |
+| `mode-eq` | a regulation mode (`RegulatingControl.mode`) | export the equipment model, or keep the mode the import set | – |
+| `slope-no-property` | a slope | leave the slope as the import set it | – |
+| `deadband-not-read` | the deadband of a generator, a static var compensator or a converter | leave the deadband as the import set it | – |
+| `import-gives-regulation` | any change of a holder without `VoltageRegulation` whose CGMES equipment gives it one on every update | give it a `VoltageRegulation`, not regulating if it must not regulate, before recording | no |
+| `vsc-no-control-flag` | any change of a VSC converter (either DC model) that does not regulate, or of its HVDC line | let it regulate, in reactive power mode with its reactive power target | no |
+| `no-control` | the regulation of a holder whose `RegulatingControl` the import did not record | keep the regulation as the import left it; give it a `VoltageRegulation` first and export the full model | no (a generated identifier) |
+| `no-tap-changer-control` | the regulation of a tap changer whose `TapChangerControl` the import did not record | keep the regulation as the equipment model defines it, or export the equipment model | no (a generated identifier) |
+| `equivalent-shunt` | a shunt compensator the import made an `EquivalentShunt` | keep it as the equipment model defines it | yes |
+| `no-mode` | a regulation without a mode in the working variant | set the mode of its `VoltageRegulation` in this variant | yes (the user is left out of its control) |
+| `cgmes-mode` | any change of a generator whose `VoltageRegulation` mode disagrees with the CGMES mode its import recorded | keep the mode the import set, or export the equipment model | no |
+| `rtc-reactive-power` | the regulation of a ratio tap changer that does not regulate voltage | export the full steady state hypothesis | no |
+| `tap-changers-disagree` | tap changers sharing a `TapChangerControl` that disagree on whether they regulate | switch the regulation of every tap changer of the control together | no |
+| `no-regulation-capability` | an `EquivalentInjection` switched to regulate without regulation capability | keep its regulation off, or export the equipment model with a regulation capability | no |
+| `ptc-no-terminal` | the regulation of a phase tap changer that regulates no terminal | give it a regulation terminal before recording, or keep its regulation as the import left it | no |
+| `undescribed-user` | a shared control one of whose users cannot be described (the message is that user's refusal) | the remedy of that user's refusal | no |
+
+What the full SSH export writes differently from upstream powsybl-core, each a correction to what the import reads back (see [Fixed import and export defects](#fixed-import-and-export-defects)): the injection of a boundary line with a generation, the `TapChangerControl` of a phase tap changer limiting current in an SSH exported alone, a `RegulatingControl` some of whose users have no mode, the local reactive power target of a VSC station in voltage mode that does not regulate (`targetQpcc`), the terminal sign of regulation targets, and the control mode of a static var compensator without regulation in the EQ export. The change exports write an `EquivalentInjection.regulationTarget` that is not a usable voltage as `0`, as the full export always did; a receiver reads `0` where it used to keep its previous target (see [Supported changes](#supported-changes)).
+
 (cgmes-difference-model-export)=
 ## Difference model export from recorded changes
 
