@@ -216,6 +216,11 @@ class ExportMappingEquivalenceTest {
             "regulates no terminal, so its regulation has no target the receiving side could read",
             "has no CGMES regulating control the import could use");
 
+    /** The classes a generator refused for its CGMES mode is written with: control, machine, GeneratingUnit. */
+    private static final Set<String> CGMES_MODE_CLASSES = Set.of("RegulatingControl", CgmesNames.SYNCHRONOUS_MACHINE,
+            CgmesNames.EXTERNAL_NETWORK_INJECTION, "GeneratingUnit", "ThermalGeneratingUnit", "HydroGeneratingUnit",
+            "WindGeneratingUnit", "SolarGeneratingUnit", "NuclearGeneratingUnit");
+
     /** The classes of the block of a voltage regulation holder in the steady state hypothesis. */
     private static final Set<String> HOLDER_CLASSES = Set.of(CgmesNames.SYNCHRONOUS_MACHINE,
             CgmesNames.EXTERNAL_NETWORK_INJECTION, "LinearShuntCompensator", "NonlinearShuntCompensator",
@@ -273,13 +278,14 @@ class ExportMappingEquivalenceTest {
             "the shared mapping writes a regulation target only when it is a usable voltage (> 0,"
                 + " CgmesChangeTranslator.equivalentInjectionBlock); the full export writes 0 for none or NaN. Only"
                 + " where the IIDM target really is not a usable voltage"),
-        new OnlyInFull("CGMES_MODE_MISMATCH", Set.of("RegulatingControl"), Set.of(),
+        new OnlyInFull("CGMES_MODE_MISMATCH", CGMES_MODE_CLASSES, Set.of(),
             row -> row.facts().cgmesModeMismatchControls().containsKey(row.key().subject())
                 && row.facts().refusedFor(row.facts().cgmesModeMismatchControls().get(row.key().subject()),
                     "recorded at import"),
             "the regulation of the generator is in another mode than the CGMES mode its import recorded, by which the"
-                + " CGMES update reads the RegulatingControl: the shared mapping refuses the control (rule cgmes-mode,"
-                + " the receiver would read the target as the other quantity), the full export writes it from the IIDM"
+                + " CGMES update reads the RegulatingControl on every update of the machine: the shared mapping refuses"
+                + " the control, the machine and its GeneratingUnit (rule cgmes-mode, a changesOnly refusal: the"
+                + " receiver would read the target as the other quantity), the full export writes them from the IIDM"
                 + " mode (docs: Partial SSH export / Limitations)"),
         new OnlyInFull("BRANCH_CLASS_SWITCH_IMPEDANCE", BRANCH_CLASSES,
             Set.of("ACLineSegment.r", "ACLineSegment.x", "ACLineSegment.gch", "ACLineSegment.bch"),
@@ -1175,8 +1181,9 @@ class ExportMappingEquivalenceTest {
      * @param boundaryInjections            the EquivalentInjection of every boundary line with a Generation
      * @param detailedLccs                  the line commutated converters of the detailed DC model
      * @param currentLimiterControls        tap changer controls of phase tap changers in current limiter mode
-     * @param cgmesModeMismatchControls     the regulating controls of generators whose regulation is in another mode
-     *                                      than the CGMES mode the import recorded, with the generator
+     * @param cgmesModeMismatchControls     the regulating controls, machines and GeneratingUnits of generators whose
+     *                                      regulation is in another mode than the CGMES mode the import recorded, with
+     *                                      the generator
      * @param unrecordedControls            the controls the full export writes under a generated identifier because the
      *                                      import recorded none (and the compensator blocks written with them), with the
      *                                      CGMES subject of the object whose refusal explains them
@@ -1379,9 +1386,15 @@ class ExportMappingEquivalenceTest {
                         && (regulation.getMode() == RegulationMode.REACTIVE_POWER
                             ? !RegulatingControlMapping.isControlModeReactivePower(cgmesMode)
                             : !RegulatingControlMapping.isControlModeVoltage(cgmesMode))) {
+                    String subject = id(naming.getCgmesId(generator), context);
                     cgmesModeMismatchControls.put(
                             id(naming.getCgmesIdFromProperty(generator, Conversion.PROPERTY_REGULATING_CONTROL), context),
-                            id(naming.getCgmesId(generator), context));
+                            subject);
+                    cgmesModeMismatchControls.put(subject, subject);
+                    if (generator.hasProperty(Conversion.PROPERTY_GENERATING_UNIT)) {
+                        cgmesModeMismatchControls.put(id(naming.getCgmesIdFromProperty(generator,
+                                Conversion.PROPERTY_GENERATING_UNIT), context), subject);
+                    }
                 }
             }
             Set<String> currentLimiterControls = new HashSet<>();

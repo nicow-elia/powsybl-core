@@ -286,13 +286,27 @@ class CgmesChangeRegulatingControls {
             return failure(Refusal.NO_MODE.message("the voltage regulation of " + owner.getType() + " "
                     + owner.getId() + " has no mode in this variant."));
         }
-        if (regulation.holder() instanceof Generator generator && scope.honours(Refusal.CGMES_MODE)
-                && !agreesWithCgmesMode(generator, mode)) {
-            return failure(Refusal.CGMES_MODE.message("the voltage regulation of generator " + generator.getId()
-                    + " is in mode " + mode + ", but the CGMES update reads its RegulatingControl in the mode "
-                    + generator.getProperty(PROPERTY_MODE) + " recorded at import."));
+        if (regulation.holder() instanceof Generator generator && scope.honours(Refusal.CGMES_MODE)) {
+            Optional<String> refusal = cgmesModeRefusal(generator, mode);
+            if (refusal.isPresent()) {
+                return failure(refusal.get());
+            }
         }
         return success(SteadyStateHypothesisExport.regulatingControlView(regulation, controlId, context, state));
+    }
+
+    /**
+     * The refusal of a generator whose regulation is in another mode than the CGMES mode its import recorded, empty
+     * when they agree (or the mode is undefined): the CGMES update dispatches the regulation on the recorded mode on
+     * every update of the machine, so a receiver would read the target as the other quantity (D14).
+     */
+    static Optional<String> cgmesModeRefusal(Generator generator, RegulationMode mode) {
+        if (mode == null || agreesWithCgmesMode(generator, mode)) {
+            return Optional.empty();
+        }
+        return Optional.of(Refusal.CGMES_MODE.message("the voltage regulation of generator " + generator.getId()
+                + " is in mode " + mode + ", but the CGMES update reads its RegulatingControl in the mode "
+                + generator.getProperty(PROPERTY_MODE) + " recorded at import."));
     }
 
     private static boolean agreesWithCgmesMode(Generator generator, RegulationMode mode) {

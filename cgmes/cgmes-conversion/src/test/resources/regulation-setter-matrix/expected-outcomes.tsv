@@ -93,12 +93,16 @@ generator whose mode was changed after the import | removeVoltageRegulation | wi
 generator whose mode was changed after the import | removeVoltageRegulation | with regulation | no-op	UNCHANGED	no-change
 generator whose mode was changed after the import | setLocalTargetV | with regulation | change	NOT_REPRESENTED	local-target
 generator whose mode was changed after the import | setLocalTargetV | with regulation | no-op	UNCHANGED	no-change
+generator whose mode was changed after the import | setLocalTargetQ | with regulation | change	REFUSED	cgmes-mode
+generator whose mode was changed after the import | setLocalTargetQ | with regulation | no-op	UNCHANGED	no-change
 generator whose mode was changed after the import | Generator.setTargetV | with regulation | change	NOT_REPRESENTED	local-target
 generator whose mode was changed after the import | Generator.setTargetV | with regulation | no-op	UNCHANGED	no-change
 generator whose mode was changed after the import | Generator.setTargetV(v, local) | with regulation | change	NOT_REPRESENTED	local-target
 generator whose mode was changed after the import | Generator.setTargetV(v, local) | with regulation | no-op	UNCHANGED	no-change
 generator whose mode was changed after the import | Generator.setTargetV(v, same local) | with regulation | change	NOT_REPRESENTED	local-target
 generator whose mode was changed after the import | Generator.setTargetV(v, same local) | with regulation | no-op	UNCHANGED	no-change
+generator whose mode was changed after the import | Generator.setTargetQ | with regulation | change	REFUSED	cgmes-mode
+generator whose mode was changed after the import | Generator.setTargetQ | with regulation | no-op	UNCHANGED	no-change
 generator whose mode was changed after the import | Generator.setRegulatingTerminal | with regulation | change	REFUSED	terminal-eq
 generator whose mode was changed after the import | Generator.setRegulatingTerminal | with regulation | no-op	UNCHANGED	no-change
 generator without a CGMES regulating control | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT	G1

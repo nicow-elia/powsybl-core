@@ -114,7 +114,6 @@ class RegulationSetterMatrixTest {
     private static final String SYNCHRONOUS_MACHINE = "SynchronousMachine";
     private static final String SHUNT_DIR = "/update/shunt-compensator/";
     private static final String HVDC_DIR = "/update/hvdc/";
-    private static final String MODE_CHANGED_AFTER_IMPORT = "generator whose mode was changed after the import";
 
     /**
      * A kind of regulation holder in a fixture.
@@ -217,7 +216,7 @@ class RegulationSetterMatrixTest {
                         n -> n.getGenerator(SYNCHRONOUS_MACHINE), n -> n.getGenerator(SYNCHRONOUS_MACHINE), true, true),
                 // The import records the CGMES mode of the machine's control, voltage; the regulation is switched to
                 // reactive power at the machine's own terminal, which the update would read as the other quantity
-                new Holder(MODE_CHANGED_AFTER_IMPORT, noParameters(), GENERATOR_DIR,
+                new Holder("generator whose mode was changed after the import", noParameters(), GENERATOR_DIR,
                         GENERATOR_FILES, n -> {
                             Generator g = n.getGenerator(SYNCHRONOUS_MACHINE);
                             g.getVoltageRegulation().setTerminal(g.getTerminal(), g.getRegulatingTargetV());
@@ -581,13 +580,6 @@ class RegulationSetterMatrixTest {
                         // flag: on a generator regulating reactive power its change sets the flag it already has
                         if (change && withRegulation && setter.name().equals("Generator.setVoltageRegulatorOn")
                                 && mode == RegulationMode.REACTIVE_POWER) {
-                            continue;
-                        }
-                        // A receiver whose generator is in another mode than the CGMES mode its import recorded leaves
-                        // that state on ANY CGMES update, which dispatches the regulation on the recorded mode: a change
-                        // that writes the machine block only would test the receiver, not the export
-                        if (holder.name().equals(MODE_CHANGED_AFTER_IMPORT)
-                                && (setter.name().equals("setLocalTargetQ") || setter.name().equals("Generator.setTargetQ"))) {
                             continue;
                         }
                         cases.add(new Case(holder, setter, withRegulation, change));

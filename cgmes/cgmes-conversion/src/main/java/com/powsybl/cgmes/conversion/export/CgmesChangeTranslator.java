@@ -886,7 +886,7 @@ class CgmesChangeTranslator {
                 || !generator.hasProperty(PROPERTY_GENERATING_UNIT)) {
             return failure("generator " + generator.getId() + " has no CGMES GeneratingUnit");
         }
-        Optional<String> refusal = objectRefusal(generator);
+        Optional<String> refusal = generatorRefusal(generator);
         if (refusal.isPresent()) {
             return failure(refusal.get());
         }
@@ -1845,8 +1845,20 @@ class CgmesChangeTranslator {
      * the generator cannot be described.
      */
     Result<CgmesPropertyBuffer, String> describeGenerator(Generator generator) {
-        return objectRefusal(generator).<Result<CgmesPropertyBuffer, String>>map(Result::failure)
+        return generatorRefusal(generator).<Result<CgmesPropertyBuffer, String>>map(Result::failure)
                 .orElseGet(() -> generatorMachineUpdates(generator));
+    }
+
+    /**
+     * The object refusals of a generator, which every block of it honours (machine, GeneratingUnit; its control
+     * honours the same in {@link CgmesChangeRegulatingControls}): the import would give it a regulation, or it is in
+     * another mode than the CGMES mode its import recorded, by which every update of the machine re-reads its
+     * regulation.
+     */
+    private Optional<String> generatorRefusal(Generator generator) {
+        return objectRefusal(generator).or(() -> scope.honours(Refusal.CGMES_MODE)
+                ? CgmesChangeRegulatingControls.cgmesModeRefusal(generator, RegulationRef.of(generator).mode(state))
+                : Optional.empty());
     }
 
     /** The GeneratingUnit of a generator, which carries its participation factor. */
