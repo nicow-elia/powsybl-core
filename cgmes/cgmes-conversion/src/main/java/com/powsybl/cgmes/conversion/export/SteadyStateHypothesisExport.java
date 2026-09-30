@@ -123,12 +123,9 @@ public final class SteadyStateHypothesisExport {
      */
     private static void write(Result<CgmesPropertyBuffer, String> description, String cimNamespace, XMLStreamWriter writer,
                               CgmesExportContext context) throws XMLStreamException {
-        // instanceof rather than a pattern switch: this runs once per object, and a pattern switch is linked through
-        // an invokedynamic bootstrap that stays slow until the JIT compiles it
-        if (description instanceof Result.Success<CgmesPropertyBuffer, String> success) {
-            success.value().write(cimNamespace, writer, context);
-        } else {
-            throw new PowsyblException(((Result.Failure<CgmesPropertyBuffer, String>) description).reason());
+        switch (description) {
+            case Result.Success(CgmesPropertyBuffer buffer) -> buffer.write(cimNamespace, writer, context);
+            case Result.Failure(String reason) -> throw new PowsyblException(reason);
         }
     }
 
@@ -258,14 +255,13 @@ public final class SteadyStateHypothesisExport {
                 : CgmesChangeTranslator.PHASE_TAP_CHANGER_PREFIX;
         TapChangerRef ref = new TapChangerRef(twt, prefix + end, tc);
         mapping.describeTapChanger(twt, aliasType, defaultType, ref).write(cimNamespace, writer, context);
-        boolean hasView;
-        if (tc instanceof RatioTapChanger rtc) {
-            hasView = rtc.getVoltageRegulation() != null && rtc.getVoltageRegulation().getMode() != null;
-        } else {
-            hasView = phaseTapChangerView((PhaseTapChanger) tc, tapChangerControlId,
+        boolean hasView = switch (tc) {
+            case RatioTapChanger rtc -> rtc.getVoltageRegulation() != null && rtc.getVoltageRegulation().getMode() != null;
+            case PhaseTapChanger ptc -> phaseTapChangerView(ptc, tapChangerControlId,
                     getCgmesTapChanger(twt, cgmesTapChangerId).map(CgmesTapChanger::getControlId).isPresent(), ref, context,
                     IidmStateView.LIVE) != null;
-        }
+            default -> false;
+        };
         if (hasView) {
             addRegulatingControlId(tapChangerControlId, regulatingControlIds);
         }
@@ -765,8 +761,8 @@ public final class SteadyStateHypothesisExport {
 
     private static void addGeneratingUnit(Injection<?> injection, Result<CgmesPropertyBuffer, String> description,
                                           Map<String, CgmesPropertyBuffer> generatingUnits, CgmesExportContext context) {
-        if (description instanceof Result.Success<CgmesPropertyBuffer, String> success) {
-            generatingUnits.put(context.getNamingStrategy().getCgmesIdFromProperty(injection, PROPERTY_GENERATING_UNIT), success.value());
+        if (description instanceof Result.Success(CgmesPropertyBuffer buffer)) {
+            generatingUnits.put(context.getNamingStrategy().getCgmesIdFromProperty(injection, PROPERTY_GENERATING_UNIT), buffer);
         }
     }
 
