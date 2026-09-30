@@ -1920,25 +1920,29 @@ class CgmesChangeTranslator {
         if (voltageLevel.getTopologyKind() == TopologyKind.NODE_BREAKER && !context.isBusBranchExport()) {
             VoltageLevel.NodeBreakerView view = voltageLevel.getNodeBreakerView();
             for (int node : view.getNodes()) {
-                fictitiousInjection(buffer,
-                        naming.getCgmesId(refTyped(voltageLevel), Part.FICTITIOUS, ref("NCL"), ref(node)),
-                        naming.getCgmesId(refTyped(voltageLevel), Part.FICTITIOUS, Part.TERMINAL, ref(node)),
-                        view.getFictitiousP0(node), view.getFictitiousQ0(node));
+                double p = view.getFictitiousP0(node);
+                double q = view.getFictitiousQ0(node);
+                // Named only when there is one: naming every node of the network costs more than the export
+                if (p != 0.0 || q != 0.0) {
+                    fictitiousInjection(buffer,
+                            naming.getCgmesId(refTyped(voltageLevel), Part.FICTITIOUS, ref("NCL"), ref(node)),
+                            naming.getCgmesId(refTyped(voltageLevel), Part.FICTITIOUS, Part.TERMINAL, ref(node)), p, q);
+                }
             }
         } else {
             for (Bus bus : voltageLevel.getBusBreakerView().getBuses()) {
-                fictitiousInjection(buffer, naming.getCgmesId(refTyped(bus), Part.FICTITIOUS, ref("NCL")),
-                        naming.getCgmesId(refTyped(bus), Part.FICTITIOUS, Part.TERMINAL),
-                        bus.getFictitiousP0(), bus.getFictitiousQ0());
+                double p = bus.getFictitiousP0();
+                double q = bus.getFictitiousQ0();
+                if (p != 0.0 || q != 0.0) {
+                    fictitiousInjection(buffer, naming.getCgmesId(refTyped(bus), Part.FICTITIOUS, ref("NCL")),
+                            naming.getCgmesId(refTyped(bus), Part.FICTITIOUS, Part.TERMINAL), p, q);
+                }
             }
         }
         return buffer;
     }
 
     private static void fictitiousInjection(CgmesPropertyBuffer buffer, String loadId, String terminalId, double p, double q) {
-        if (p == 0.0 && q == 0.0) {
-            return;
-        }
         if (p <= 0) {
             buffer.object(CgmesNames.ENERGY_SOURCE, loadId).value("EnergySource.activePower", p).value("EnergySource.reactivePower", q);
         } else {
