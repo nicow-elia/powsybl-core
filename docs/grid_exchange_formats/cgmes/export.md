@@ -324,6 +324,10 @@ Five defects of the CGMES import and of the full SSH export had to be fixed for 
 * [#4034](https://github.com/powsybl/powsybl-core/issues/4034) (fixed upstream by #4107): the update query did not select `PhaseTapChangerSymmetrical`, so a position written for one was silently dropped on import.
 * Terminal sign of regulation targets (not fixed upstream): the import multiplies the target of a generator or compensator regulating reactive power, the `targetQpcc` of a VSC converter station and the active power target of a phase tap changer by the recorded `CGMES.terminalSign`; the export applies the same sign, and to the reactive power target of a ratio tap changer, when the SSH is exported without its equipment model (read against the original EQ); with its EQ the regulating terminal is the IIDM one and the sign is +1. A common grid model export never writes the EQ, so it applies the sign. The sender keeps its `CGMES.terminalSign` after an EQ and SSH export: a later SSH exported alone is signed for the original equipment model, so a receiver that loaded the exported EQ has to be sent the EQ and the SSH together again.
 
+The full SSH export also writes what the change export writes, where the two used to differ and the import reads the change export's value (not fixed upstream):
+
+* The `EquivalentInjection` of a boundary line with a generation: the import puts the whole injection into the generation of the boundary line, so `EquivalentInjection.p` and `q` are `p0 - targetP` and `q0 - targetQ` (a value that is not a number counts as 0); the full export used to write `p0` and `q0` alone, and the generation was lost.
+
 (cgmes-difference-model-export)=
 ## Difference model export from recorded changes
 

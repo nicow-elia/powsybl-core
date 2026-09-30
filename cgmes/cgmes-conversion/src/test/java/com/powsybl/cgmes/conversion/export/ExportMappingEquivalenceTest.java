@@ -366,13 +366,6 @@ class ExportMappingEquivalenceTest {
                 && CURRENT_LIMITER_ZEROS.get(row.key().property()).equals(comparable(row.full()))
                 && row.facts().sharedAsExpected(row),
             "docs/grid_exchange_formats/cgmes/export.md, Partial SSH export / Regulating controls, first bullet"),
-        new Deliberate("BOUNDARY_GENERATION_OMITTED", FULL_EXPORT_DEFECT,
-            row -> row.both() && row.facts().boundaryInjections().containsKey(row.key().subject())
-                && Set.of("EquivalentInjection.p", "EquivalentInjection.q").contains(row.key().property())
-                && row.fullNumber() == row.facts().boundaryInjections().get(row.key().subject()).p0OrQ0(row.key().property())
-                && row.facts().sharedAsExpected(row),
-            "the full export writes EquivalentInjection.p/q = p0/q0 of the boundary line and ignores its Generation,"
-                + " into which the import puts the whole injection (EquivalentInjectionConversion.update)"),
         new Deliberate("DETAILED_LCC_POWER_FACTOR", FULL_EXPORT_DEFECT,
             row -> row.both() && row.facts().detailedLccs().contains(row.key().subject())
                 && Set.of("ACDCConverter.p", "ACDCConverter.q").contains(row.key().property())
@@ -1178,7 +1171,6 @@ class ExportMappingEquivalenceTest {
      * @param dcSwitchTerminals             the two terminals of every DcSwitch
      * @param generatedEquivalentInjections the EquivalentInjection identifiers the full export generates for boundary
      *                                      lines that carry none
-     * @param boundaryInjections            the EquivalentInjection of every boundary line with a Generation
      * @param detailedLccs                  the line commutated converters of the detailed DC model
      * @param currentLimiterControls        tap changer controls of phase tap changers in current limiter mode
      * @param cgmesModeMismatchControls     the regulating controls, machines and GeneratingUnits of generators whose
@@ -1209,7 +1201,7 @@ class ExportMappingEquivalenceTest {
      *                                      write, derived from the IIDM objects without the seams
      */
     private record Facts(Set<String> branchSwitches, Set<String> branchSwitchTerminals, Set<String> dcSwitchTerminals,
-                         Set<String> generatedEquivalentInjections, Map<String, BoundaryInjection> boundaryInjections,
+                         Set<String> generatedEquivalentInjections,
                          Set<String> detailedLccs, Set<String> currentLimiterControls,
                          Map<String, String> cgmesModeMismatchControls, Map<String, String> unrecordedControls,
                          Map<String, String> holdersWithoutRegulation, Map<String, String> unregulatedConverters,
@@ -1221,12 +1213,6 @@ class ExportMappingEquivalenceTest {
                          Map<Key, String> seam) {
 
         record VoltageLimitRef(String voltageLevelId, boolean high) {
-        }
-
-        record BoundaryInjection(double p0, double q0) {
-            double p0OrQ0(String property) {
-                return property.endsWith(".p") ? p0 : q0;
-            }
         }
 
         /**
@@ -1270,19 +1256,12 @@ class ExportMappingEquivalenceTest {
         private static void expectations(Network network, CgmesExportContext context, Map<Key, String> expected,
                                          Set<Key> omissions) {
             NamingStrategy naming = context.getNamingStrategy();
-            // The import puts the whole boundary injection into the generation: targetP = -p, p0 = 0
             for (BoundaryLine boundaryLine : network.getBoundaryLines(BoundaryLineFilter.ALL)) {
                 if (!boundaryLine.hasProperty(Conversion.PROPERTY_EQUIVALENT_INJECTION)) {
                     continue;
                 }
                 String injection = id(naming.getCgmesIdFromProperty(boundaryLine, Conversion.PROPERTY_EQUIVALENT_INJECTION), context);
                 BoundaryLine.Generation generation = boundaryLine.getGeneration();
-                if (generation != null) {
-                    expected.put(new Key(injection, "EquivalentInjection.p"),
-                            String.valueOf(zeroIfNaN(boundaryLine.getP0()) - zeroIfNaN(generation.getTargetP())));
-                    expected.put(new Key(injection, "EquivalentInjection.q"),
-                            String.valueOf(zeroIfNaN(boundaryLine.getQ0()) - zeroIfNaN(generation.getTargetQ())));
-                }
                 if (generation == null || !(generation.getTargetV() > 0)) {
                     omissions.add(new Key(injection, "EquivalentInjection.regulationTarget"));
                 }
@@ -1326,10 +1305,6 @@ class ExportMappingEquivalenceTest {
             }
         }
 
-        private static double zeroIfNaN(double value) {
-            return Double.isNaN(value) ? 0.0 : value;
-        }
-
         private static void currentLimiterValues(PhaseTapChanger ptc, String controlId, Map<Key, String> expected) {
             if (controlId != null) {
                 expected.put(new Key(controlId, "RegulatingControl.enabled"), String.valueOf(ptc.isRegulating()));
@@ -1366,13 +1341,10 @@ class ExportMappingEquivalenceTest {
                 dcSwitchTerminals.add(id(naming.getCgmesIdFromAlias(dcSwitch, Conversion.ALIAS_DC_TERMINAL2), context));
             }
             Set<String> generatedEquivalentInjections = new HashSet<>();
-            Map<String, BoundaryInjection> boundaryInjections = new HashMap<>();
             for (BoundaryLine boundaryLine : network.getBoundaryLines(BoundaryLineFilter.ALL)) {
                 String injection = id(naming.getCgmesIdFromProperty(boundaryLine, Conversion.PROPERTY_EQUIVALENT_INJECTION), context);
                 if (!boundaryLine.hasProperty(Conversion.PROPERTY_EQUIVALENT_INJECTION)) {
                     generatedEquivalentInjections.add(injection);
-                } else if (boundaryLine.getGeneration() != null) {
-                    boundaryInjections.put(injection, new BoundaryInjection(boundaryLine.getP0(), boundaryLine.getQ0()));
                 }
             }
             Set<String> detailedLccs = new HashSet<>();
@@ -1430,7 +1402,7 @@ class ExportMappingEquivalenceTest {
             shared.refusals().forEach((iidmId, reasons) ->
                     refusals.put(id(naming.getCgmesId(network.getIdentifiable(iidmId)), context), reasons));
             return new Facts(branchSwitches, branchSwitchTerminals, dcSwitchTerminals, generatedEquivalentInjections,
-                    boundaryInjections, detailedLccs, currentLimiterControls,
+                    detailedLccs, currentLimiterControls,
                     cgmesModeMismatchControls, unrecordedControls(network, context), holdersWithoutRegulation(network, context),
                     unregulatedConverters(network, context), reactivePowerTapChangerControls(network, context),
                     batteries(network, context), fictitiousInjections(network, context), hiddenTapChangers(network, context),

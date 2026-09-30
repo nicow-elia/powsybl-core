@@ -232,14 +232,24 @@ public final class SteadyStateHypothesisExport {
                 // but test cases contain the attributes with disabled and 0
                 boolean regulationStatus = false;
                 double regulationTarget = 0;
+                double p = bl.getP0();
+                double q = bl.getQ0();
                 if (bl.getGeneration() != null) {
                     regulationStatus = bl.getGeneration().isVoltageRegulationOn();
                     regulationTarget = bl.getGeneration().getTargetV();
+                    // The import puts the whole injection into the generation (EquivalentInjectionConversion#update):
+                    // the injection is the load of the boundary line less its generation, as the change mapping writes it
+                    p = zeroIfNaN(p) - zeroIfNaN(bl.getGeneration().getTargetP());
+                    q = zeroIfNaN(q) - zeroIfNaN(bl.getGeneration().getTargetQ());
                 }
-                writeEquivalentInjection(equivalentInjectionId, bl.getP0(), bl.getQ0(), regulationStatus, regulationTarget, cimNamespace, writer, context);
+                writeEquivalentInjection(equivalentInjectionId, p, q, regulationStatus, regulationTarget, cimNamespace, writer, context);
                 exported.add(equivalentInjectionId);
             }
         }
+    }
+
+    private static double zeroIfNaN(double value) {
+        return Double.isNaN(value) ? 0.0 : value;
     }
 
     private static void writeTapChangers(Network network, String cimNamespace,
