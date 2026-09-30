@@ -153,9 +153,6 @@ class CgmesChangeTranslator {
     static final String POWER_FACTOR = "powerFactor";
     // The voltage regulation of IIDM (powsybl-core #3699): the local targets live on the holder, everything else on
     // its VoltageRegulation, whose changes are reported with the prefix "VoltageRegulation."
-    /** What a refusal says before the remedy, when it has one. */
-    static final String REMEDY = "Remedy: ";
-
     static final String LOCAL_TARGET_Q = "localTargetQ";
     static final String LOCAL_TARGET_V = "localTargetV";
     static final String VR_PREFIX = "VoltageRegulation.";
@@ -457,12 +454,10 @@ class CgmesChangeTranslator {
                 return success(new CgmesPropertyBuffer());
             }
             if (regulation.isWithTerminal()) {
-                return failure(identifiable.getType() + " " + identifiable.getId() + " regulates voltage at a"
-                        + " regulating terminal, so its local voltage target is the target a load flow falls back to"
-                        + " when it switches to local control, and the steady state hypothesis has no property for it."
-                        + " " + REMEDY + "export the equipment model with the change, or change the target of the"
-                        + " regulation only (VoltageRegulation.setTargetValue; Generator.setTargetV(v, local) reports a"
-                        + " local target in any case)");
+                return failure(Refusal.LOCAL_TARGET.message(identifiable.getType() + " " + identifiable.getId()
+                        + " regulates voltage at a regulating terminal, so its local voltage target is the target a"
+                        + " load flow falls back to when it switches to local control, and the steady state hypothesis"
+                        + " has no property for it."));
             }
         }
         TapChangerAttribute tapChangerAttribute = tapChangerAttribute(attribute);
@@ -485,10 +480,9 @@ class CgmesChangeTranslator {
             case VscConverterStation converter when VR_TERMINAL.equals(attribute) ->
                 RegulationRef.isOwnTerminalSwitch(converter.getTerminal(), event.oldValue(), event.newValue())
                         ? vscStationUpdates(converter, attribute)
-                        : failure("the regulating terminal of converter " + converter.getId() + " is not its own"
-                                + " terminal, and a VsConverter has no property for another one: the import makes it"
-                                + " regulate its own terminal. " + REMEDY + "regulate the converter's own terminal"
-                                + " (VoltageRegulation.setTerminal(converter terminal, target)), or none");
+                        : failure(Refusal.OWN_TERMINAL.message("the regulating terminal of converter "
+                                + converter.getId() + " is not its own terminal, and a VsConverter has no property for"
+                                + " another one: the import makes it regulate its own terminal."));
             case VoltageLevel voltageLevel when VOLTAGE_LIMIT_ATTRIBUTES.contains(attribute) ->
                 voltageLimitUpdates(voltageLevel, attribute);
             case Line line when LINE_IMPEDANCE_ATTRIBUTES.contains(attribute) -> lineImpedanceUpdates(line, attribute);
@@ -506,24 +500,19 @@ class CgmesChangeTranslator {
     }
 
     /** The refusal of an echo that is the sole carrier of a change, see {@link EventCompactor}. */
-    static final String SOLE_ECHO = "the change is reported under the name of a deprecated voltage regulation setter"
-            + " only, which happens when that setter created the VoltageRegulation (IIDM reports no creation) or"
-            + " reported a value it did not change, so the state before the change set cannot be told. " + REMEDY
-            + "give the equipment its VoltageRegulation before recording the change set, and change it through the"
-            + " VoltageRegulation and the local target setters";
+    static final String SOLE_ECHO = Refusal.ECHO_3.message("the change is reported under the name of a deprecated"
+            + " voltage regulation setter only, which happens when that setter created the VoltageRegulation (IIDM"
+            + " reports no creation) or reported a value it did not change, so the state before the change set cannot"
+            + " be told.");
 
     private static String equipmentOnlyRegulation(String attribute) {
         return switch (attribute.substring(attribute.lastIndexOf('.') + 1)) {
-            case "RegulationMode", "regulationMode" ->
-                "the regulation mode is RegulatingControl.mode, which belongs to the EQ profile. " + REMEDY
-                        + "export the equipment model with the change (a full CGMES export), or keep the mode the"
-                        + " import set";
-            case "Terminal", "regulationTerminal" ->
-                "the regulating terminal is RegulatingControl.Terminal, which belongs to the EQ profile. " + REMEDY
-                        + "export the equipment model with the change (a full CGMES export), or keep the regulating"
-                        + " terminal the import set";
-            default -> "a CGMES RegulatingControl has no slope, the " + attribute + " has no CGMES property. "
-                    + REMEDY + "leave the slope as the import set it";
+            case "RegulationMode", "regulationMode" -> Refusal.MODE_EQ.message(
+                    "the regulation mode is RegulatingControl.mode, which belongs to the EQ profile.");
+            case "Terminal", "regulationTerminal" -> Refusal.TERMINAL_EQ.message(
+                    "the regulating terminal is RegulatingControl.Terminal, which belongs to the EQ profile.");
+            default -> Refusal.SLOPE_NO_PROPERTY.message(
+                    "a CGMES RegulatingControl has no slope, the " + attribute + " has no CGMES property.");
         };
     }
 
@@ -555,9 +544,9 @@ class CgmesChangeTranslator {
 
     /** The refusal of a holder without VoltageRegulation whose CGMES equipment makes the import give it one. */
     static String noVoltageRegulation(Identifiable<?> holder, String source) {
-        return holder.getType() + " " + holder.getId() + " has no VoltageRegulation, but the CGMES update gives it one"
-                + " from its " + source + ", so the receiver would not end in this state. " + REMEDY + "give it a"
-                + " VoltageRegulation (not regulating, if it must not regulate) before recording the change set";
+        return Refusal.IMPORT_GIVES_REGULATION.message(holder.getType() + " " + holder.getId() + " has no"
+                + " VoltageRegulation, but the CGMES update gives it one from its " + source + ", so the receiver would"
+                + " not end in this state.");
     }
 
     /** No mapping claimed the change: no CGMES profile this export writes has a property for it. */
@@ -571,13 +560,12 @@ class CgmesChangeTranslator {
         }
         if ("pccTerminal".equals(attribute)) {
             // The regulating terminal of a voltage source converter of the detailed model is its point of common coupling
-            return failure("the point of common coupling of a converter is ACDCConverter.PccTerminal, which belongs to"
-                    + " the EQ profile. " + REMEDY + "export the equipment model with the change (a full CGMES export)");
+            return failure(Refusal.TERMINAL_EQ.message("the point of common coupling of a converter is"
+                    + " ACDCConverter.PccTerminal, which belongs to the EQ profile."));
         }
         if (attribute.endsWith(VR_TARGET_DEADBAND)) {
-            return failure("the CGMES update reads the deadband of a RegulatingControl for shunt compensators and tap"
-                    + " changers only, not for a " + identifiable.getType() + ". " + REMEDY + "leave the deadband"
-                    + " of this regulation as the import set it");
+            return failure(Refusal.DEADBAND_NOT_READ.message("the CGMES update reads the deadband of a RegulatingControl"
+                    + " for shunt compensators and tap changers only, not for a " + identifiable.getType() + "."));
         }
         return failure("no CGMES steady state property corresponds to " + identifiable.getType() + "." + attribute);
     }
@@ -828,8 +816,8 @@ class CgmesChangeTranslator {
         RegulationRef regulation = RegulationRef.of(generator);
         boolean regulating = regulation.isRegulating(state);
         if (regulating && !hasRegulationCapability(generator)) {
-            return failure("the EquivalentInjection has no regulation capability, the CGMES update keeps its"
-                    + " regulation off");
+            return failure(Refusal.NO_REGULATION_CAPABILITY.message("the EquivalentInjection has no regulation"
+                    + " capability, the CGMES update keeps its regulation off."));
         }
         // The regulation target of an EquivalentInjection is the local voltage target, as the full export writes it
         return success(equivalentInjectionBlock(cgmesId(generator),
@@ -985,25 +973,22 @@ class CgmesChangeTranslator {
         if (tapChanger instanceof RatioTapChanger) {
             RegulationRef regulation = ref.regulation();
             if (regulation.regulation() == null) {
-                return failure("tap changer " + aliasType + " of " + transformer.getId()
-                        + " has no voltage regulation the receiving side could read. " + REMEDY + "give it a"
-                        + " VoltageRegulation (not regulating, if it must not regulate) before recording the change"
-                        + " set");
+                return failure(Refusal.IMPORT_GIVES_REGULATION.message("tap changer " + aliasType + " of "
+                        + transformer.getId() + " has no voltage regulation the receiving side could read."));
             }
             if (regulation.mode(state) != RegulationMode.VOLTAGE) {
-                return failure("the change export only writes the voltage regulation of ratio tap changers. " + REMEDY
-                        + "export the full steady state hypothesis instead");
+                return failure(Refusal.RTC_REACTIVE_POWER.message(
+                        "the change export only writes the voltage regulation of ratio tap changers."));
             }
         } else if (tapChanger instanceof PhaseTapChanger phaseTapChanger && phaseTapChanger.getRegulationTerminal() == null) {
-            return failure("tap changer " + aliasType + " of " + transformer.getId()
-                    + " regulates no terminal, so its regulation has no target the receiving side could read");
+            return failure(Refusal.PTC_NO_TERMINAL.message("tap changer " + aliasType + " of " + transformer.getId()
+                    + " regulates no terminal, so its regulation has no target the receiving side could read."));
         }
         return regulatingControls.controlId(transformer, aliasType)
                 .map(controlId -> regulatingControls.updatesFor(controlId, state)
                         .map(regulatingControl -> merge(tapChangerBlock, regulatingControl)))
-                .orElseGet(() -> failure("tap changer " + aliasType + " of " + transformer.getId()
-                        + " has no CGMES tap changer control to carry this change. " + REMEDY + "keep its regulation"
-                        + " as the equipment model defines it, or export the equipment model with the change"));
+                .orElseGet(() -> failure(Refusal.NO_TAP_CHANGER_CONTROL.message("tap changer " + aliasType + " of "
+                        + transformer.getId() + " has no CGMES tap changer control to carry this change.")));
     }
 
     private <C extends Connectable<C>> CgmesPropertyBuffer tapChangerBlock(C transformer, String aliasType, String defaultClassName,
@@ -1026,9 +1011,8 @@ class CgmesChangeTranslator {
 
     private Result<CgmesPropertyBuffer, String> shuntCompensatorUpdates(ShuntCompensator shunt, String attribute) {
         if (Boolean.parseBoolean(shunt.getProperty(PROPERTY_IS_EQUIVALENT_SHUNT))) {
-            return failure("shunt compensator " + shunt.getId()
-                    + " is exported as an EquivalentShunt, which has no steady state properties. " + REMEDY
-                    + "keep it as the equipment model defines it, or export the equipment model with the change");
+            return failure(Refusal.EQUIVALENT_SHUNT.message("shunt compensator " + shunt.getId()
+                    + " is exported as an EquivalentShunt, which has no steady state properties."));
         }
         // The CGMES update reads the section count and the control flag of a shunt as one block, so every change
         // of either writes both. Only a change of the regulation itself also describes the RegulatingControl.
@@ -1095,10 +1079,9 @@ class CgmesChangeTranslator {
     private Optional<String> unregulatedConverter(Identifiable<?> converter) {
         if (converter instanceof VoltageRegulationHolder<?> holder && holder.getVoltageRegulation() != null
                 && !new RegulationRef(converter, "", holder).isRegulating(state)) {
-            return Optional.of("converter " + converter.getId() + " does not regulate, and a VsConverter has no control"
-                    + " flag: the CGMES import always makes it regulate in the mode qPccControl names. " + REMEDY
-                    + "let it regulate, in REACTIVE_POWER mode with its reactive power target for a converter that"
-                    + " must not regulate voltage");
+            return Optional.of(Refusal.VSC_NO_CONTROL_FLAG.message("converter " + converter.getId() + " does not"
+                    + " regulate, and a VsConverter has no control flag: the CGMES import always makes it regulate in"
+                    + " the mode qPccControl names."));
         }
         if (converter instanceof VoltageRegulationHolder<?> holder && holder.getVoltageRegulation() == null) {
             return Optional.of(noVoltageRegulation(converter, "VsConverter.qPccControl"));
@@ -1175,9 +1158,8 @@ class CgmesChangeTranslator {
             return failure(unregulated.get());
         }
         if (regulation.regulation() != null && regulation.mode(state) == null) {
-            return failure("the voltage regulation of converter " + converter.getId() + " has no mode in this"
-                    + " variant, so qPccControl cannot be written. " + REMEDY + "set the mode of its"
-                    + " VoltageRegulation in this variant");
+            return failure(Refusal.NO_MODE.message("the voltage regulation of converter " + converter.getId()
+                    + " has no mode in this variant, so qPccControl cannot be written."));
         }
         CgmesPropertyBuffer control = vscControlModeUpdates(converter).object(CgmesNames.VS_CONVERTER, cgmesId(converter))
                 .value("VsConverter.targetUpcc", SteadyStateHypothesisExport.vscTargetUpcc(regulation, state))
@@ -1813,13 +1795,10 @@ class CgmesChangeTranslator {
      */
     private Result<String, String> regulatingControlId(Identifiable<?> identifiable) {
         if (!identifiable.hasProperty(PROPERTY_REGULATING_CONTROL)) {
-            return failure(identifiable.getType() + " " + identifiable.getId()
+            return failure(Refusal.NO_CONTROL.message(identifiable.getType() + " " + identifiable.getId()
                     + " has no CGMES regulating control the import could use: none in the equipment model, or one the"
                     + " import ignored (a mode other than voltage or reactive power, a regulating terminal it could"
-                    + " not map, a control the model does not contain). " + REMEDY + "keep its regulation as the"
-                    + " import left it; to change it, give it a VoltageRegulation (not regulating) first and export"
-                    + " the full model (EQ and SSH): a full export writes a RegulatingControl only for equipment"
-                    + " that has a VoltageRegulation");
+                    + " not map, a control the model does not contain)."));
         }
         return success(context.getNamingStrategy().getCgmesIdFromProperty(identifiable, PROPERTY_REGULATING_CONTROL));
     }

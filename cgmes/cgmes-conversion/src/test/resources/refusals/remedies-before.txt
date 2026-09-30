@@ -1,0 +1,18 @@
+# The remedy sentences of the refusals of the change export before they became Refusal constants (harvested once
+# from every refusal message of the setter matrix and of the probes of ExportMappingEquivalenceTest at 45ebbe0cfb).
+export the equipment model with the change (a full CGMES export)
+export the equipment model with the change (a full CGMES export), or keep the mode the import set
+export the equipment model with the change (a full CGMES export), or keep the regulating terminal the import set
+export the equipment model with the change, or change the target of the regulation only (VoltageRegulation.setTargetValue; Generator.setTargetV(v, local) reports a local target in any case)
+export the full steady state hypothesis instead
+give it a VoltageRegulation (not regulating, if it must not regulate) before recording the change set
+give the equipment its VoltageRegulation before recording the change set, and change it through the VoltageRegulation and the local target setters
+keep it as the equipment model defines it, or export the equipment model with the change
+keep its regulation as the equipment model defines it, or export the equipment model with the change
+keep its regulation as the import left it; to change it, give it a VoltageRegulation (not regulating) first and export the full model (EQ and SSH): a full export writes a RegulatingControl only for equipment that has a VoltageRegulation
+keep the mode the import set, or export the equipment model with the change
+leave the deadband of this regulation as the import set it
+leave the slope as the import set it
+let it regulate, in REACTIVE_POWER mode with its reactive power target for a converter that must not regulate voltage
+regulate the converter's own terminal (VoltageRegulation.setTerminal(converter terminal, target)), or none
+set the mode of its VoltageRegulation in this variant

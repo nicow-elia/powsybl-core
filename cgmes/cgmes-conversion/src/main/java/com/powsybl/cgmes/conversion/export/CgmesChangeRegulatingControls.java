@@ -89,9 +89,9 @@ class CgmesChangeRegulatingControls {
             return failure("no equipment of the network regulates through CGMES regulating control " + regulatingControlId);
         }
         if (tapChangersDisagree(users, state)) {
-            return failure("tap changers sharing CGMES tap changer control " + regulatingControlId
-                    + " do not agree on whether they regulate, and the CGMES update gives them all the state of"
-                    + " the shared control");
+            return failure(Refusal.TAP_CHANGERS_DISAGREE.message("tap changers sharing CGMES tap changer control "
+                    + regulatingControlId + " do not agree on whether they regulate, and the CGMES update gives them"
+                    + " all the state of the shared control."));
         }
 
         List<RegulatingControlView> views = new ArrayList<>(users.size());
@@ -243,15 +243,13 @@ class CgmesChangeRegulatingControls {
         }
         RegulationMode mode = regulation.mode(state);
         if (mode == null) {
-            return failure("the voltage regulation of " + owner.getType() + " " + owner.getId()
-                    + " has no mode in this variant. " + CgmesChangeTranslator.REMEDY + "set the mode of its"
-                    + " VoltageRegulation in this variant");
+            return failure(Refusal.NO_MODE.message("the voltage regulation of " + owner.getType() + " "
+                    + owner.getId() + " has no mode in this variant."));
         }
         if (regulation.holder() instanceof Generator generator && !agreesWithCgmesMode(generator, mode)) {
-            return failure("the voltage regulation of generator " + generator.getId() + " is in mode " + mode
-                    + ", but the CGMES update reads its RegulatingControl in the mode "
-                    + generator.getProperty(PROPERTY_MODE) + " recorded at import. " + CgmesChangeTranslator.REMEDY
-                    + "keep the mode the import set, or export the equipment model with the change");
+            return failure(Refusal.CGMES_MODE.message("the voltage regulation of generator " + generator.getId()
+                    + " is in mode " + mode + ", but the CGMES update reads its RegulatingControl in the mode "
+                    + generator.getProperty(PROPERTY_MODE) + " recorded at import."));
         }
         return success(SteadyStateHypothesisExport.regulatingControlView(regulation, controlId, context, state));
     }

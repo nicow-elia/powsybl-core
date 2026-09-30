@@ -12,6 +12,7 @@ import com.powsybl.cgmes.conversion.diff.CgmesDiffImport;
 import com.powsybl.cgmes.conversion.diff.CgmesDiffNotApplicableException;
 import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
 import com.powsybl.cgmes.conversion.export.PartialSshExport;
+import com.powsybl.cgmes.conversion.export.Refusal;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelParser;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
@@ -53,6 +54,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -66,6 +68,7 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static com.powsybl.cgmes.conversion.test.ConversionUtil.readCgmesResources;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -104,7 +107,7 @@ import static org.junit.jupiter.api.Assertions.fail;
 class RegulationSetterMatrixTest {
 
     /** What a refusal of a regulation change says before its remedy. */
-    static final String REMEDY = "Remedy: ";
+    static final String REMEDY = Refusal.REMEDY;
 
     private static final String GENERATOR_DIR = "/update/generator/";
     private static final String[] GENERATOR_FILES = {"generator_EQ.xml", "generator_SSH.xml"};
@@ -625,12 +628,13 @@ class RegulationSetterMatrixTest {
      * {@code echo-1}, {@code echo-2}, {@code echo-3}: the three rules of {@code EventCompactor} for the echoes of the
      * deprecated setters; {@code local-target}: the local voltage target (R3-M3); {@code own-terminal}: a converter
      * station regulating its own terminal or none (R3-M4); {@code G1}: IIDM reports nothing; {@code iidm-validation}:
-     * IIDM refuses the setter; {@code no-change}: nothing changed. The others name the refusal of export.md.
+     * IIDM refuses the setter; {@code no-change}: nothing changed. The others, {@code echo-3}, {@code local-target} and
+     * {@code own-terminal} included, are the rules of the refusals ({@link Refusal#rule}), which a refused row reads
+     * from the message ({@link Refusal#of}).
      */
-    static final Set<String> RULES = Set.of("steady-state", "echo-1", "echo-2", "echo-3", "local-target",
-            "own-terminal", "G1", "iidm-validation", "no-change", "terminal-eq", "mode-eq", "vsc-no-control-flag",
-            "import-gives-regulation", "deadband-not-read", "no-control", "equivalent-shunt", "no-mode",
-            "rtc-reactive-power", "cgmes-mode", "slope-no-property");
+    static final Set<String> RULES = Stream.concat(Stream.of("steady-state", "echo-1", "echo-2", "G1",
+            "iidm-validation", "no-change"), Arrays.stream(Refusal.values()).map(r -> r.rule))
+            .collect(Collectors.toUnmodifiableSet());
 
     /** The outcome of a case and the rule it follows. */
     record Observed(Outcome outcome, String rule) {
@@ -712,29 +716,9 @@ class RegulationSetterMatrixTest {
         return events.stream().anyMatch(e -> e instanceof UpdateNetworkEvent u && ECHO.matcher(u.attribute()).matches());
     }
 
-    /** The refusals, by a phrase of their message, and the rule each follows. */
-    private static final List<String[]> REFUSAL_RULES = List.of(
-            new String[] {"deprecated voltage regulation setter only", "echo-3"},
-            new String[] {"falls back to", "local-target"},
-            new String[] {"is not its own terminal", "own-terminal"},
-            new String[] {"RegulatingControl.Terminal", "terminal-eq"},
-            new String[] {"ACDCConverter.PccTerminal", "terminal-eq"},
-            new String[] {"RegulatingControl.mode", "mode-eq"},
-            new String[] {"does not regulate, and a VsConverter has no control flag", "vsc-no-control-flag"},
-            new String[] {"has no VoltageRegulation, but the CGMES update gives it one", "import-gives-regulation"},
-            new String[] {"the deadband of a RegulatingControl", "deadband-not-read"},
-            new String[] {"a CGMES RegulatingControl has no slope", "slope-no-property"},
-            new String[] {"regulating control", "no-control"},
-            new String[] {"tap changer control", "no-control"},
-            new String[] {"EquivalentShunt", "equivalent-shunt"},
-            new String[] {"no mode in this variant", "no-mode"},
-            new String[] {"voltage regulation of ratio tap changers", "rtc-reactive-power"},
-            new String[] {"recorded at import", "cgmes-mode"});
-
     private static String rule(Outcome outcome, String refusal, List<NetworkEvent> events, boolean terminalChanged) {
         return switch (outcome) {
-            case REFUSED -> REFUSAL_RULES.stream().filter(r -> refusal.contains(r[0])).map(r -> r[1]).findFirst()
-                    .orElse("unknown refusal: " + refusal);
+            case REFUSED -> Refusal.of(refusal).map(r -> r.rule).orElse("unknown refusal: " + refusal);
             case EXPORTED -> terminalChanged ? "own-terminal" : hasEcho(events) ? "echo-1" : "steady-state";
             case NOT_REPRESENTED -> "local-target";
             case IIDM_SILENT -> "G1";
