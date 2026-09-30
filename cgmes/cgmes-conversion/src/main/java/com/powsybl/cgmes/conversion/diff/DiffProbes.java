@@ -54,7 +54,7 @@ final class DiffProbes {
     private static final String VR_MODE = "VoltageRegulation.RegulationMode";
 
     private static final List<String> GENERATOR = List.of("targetP", LOCAL_TARGET_Q, LOCAL_TARGET_V, VR_TARGET_VALUE,
-            VR_REGULATING, "activePowerControl#participationFactor", "referencePriority#referencePriority");
+            VR_REGULATING, "activePowerControl#participationFactor", "referencePriorities#referencePriority");
     private static final List<String> BOUNDARY_LINE = List.of("p0", "q0", "targetP", "targetQ", "targetV",
             "voltageRegulationOn");
     private static final List<String> SHUNT = List.of("sectionCount", LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING,

@@ -7,12 +7,18 @@
  */
 package com.powsybl.cgmes.conversion.export;
 
+import com.powsybl.cgmes.conversion.test.ConversionUtil;
+import com.powsybl.commons.util.Result;
+import com.powsybl.iidm.network.Network;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * {@code DiffProbes} (package {@code diff}) re-declares six attribute keys of {@link CgmesChangeTranslator}, which is
@@ -36,6 +42,27 @@ class DiffProbesKeysTest {
             Field field = probes.getDeclaredField(key.getKey());
             field.setAccessible(true);
             assertEquals(key.getValue(), field.get(null), key.getKey());
+        }
+    }
+
+    /**
+     * Every extension probe of a generator names an extension the translator maps: a probe under another name is
+     * refused whatever the state, so the group it should complete would silently lose it.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void everyExtensionProbeOfAGeneratorIsMapped() throws ReflectiveOperationException {
+        Class<?> probes = Class.forName("com.powsybl.cgmes.conversion.diff.DiffProbes");
+        Field field = probes.getDeclaredField("GENERATOR");
+        field.setAccessible(true);
+        List<String> extensionProbes = ((List<String>) field.get(null)).stream().filter(p -> p.contains("#")).toList();
+        assertEquals(2, extensionProbes.size(), extensionProbes::toString);
+        Network network = ConversionUtil.readCgmesResources("/update/generator/", "generator_EQ.xml", "generator_SSH.xml");
+        CgmesObjectDump dump = new CgmesObjectDump(network);
+        for (String probe : extensionProbes) {
+            Result<?, String> result = dump.dump("SynchronousMachine", probe);
+            assertInstanceOf(Result.Success.class, result, () -> probe + ": " + result);
+            assertTrue(!dump.statementsFor("SynchronousMachine", probe).isEmpty(), probe);
         }
     }
 }
