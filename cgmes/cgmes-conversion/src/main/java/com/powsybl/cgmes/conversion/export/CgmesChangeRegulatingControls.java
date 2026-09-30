@@ -8,7 +8,6 @@
 package com.powsybl.cgmes.conversion.export;
 
 import com.powsybl.cgmes.conversion.RegulatingControlMapping;
-import com.powsybl.cgmes.conversion.export.SteadyStateHypothesisExport.RegulatingControlType;
 import com.powsybl.cgmes.conversion.export.SteadyStateHypothesisExport.RegulatingControlView;
 import com.powsybl.cgmes.conversion.naming.CgmesObjectReference.Part;
 import com.powsybl.cgmes.extensions.CgmesTapChanger;
@@ -215,8 +214,9 @@ class CgmesChangeRegulatingControls {
         Predicate<IidmStateView> regulatesIn = tapChanger instanceof RatioTapChanger
                 ? ref.regulation()::isRegulating
                 : state -> ref.getBoolean(state, CgmesChangeTranslator.REGULATING_SUFFIX, tapChanger::isRegulating);
+        boolean recorded = controlId(transformer, aliasType).isPresent();
         indexedControlId(transformer, aliasType, tapChanger, end).ifPresent(id -> add(index, id, new User(regulatesIn, true,
-                state -> tapChangerView(transformer, end, ref, id, state))));
+                state -> tapChangerView(transformer, ref, id, recorded, state))));
     }
 
     private static void add(Map<String, List<User>> index, String controlId, User user) {
@@ -325,36 +325,21 @@ class CgmesChangeRegulatingControls {
      * where the full export writes zeros: a partial file is applied on top of a state the receiver already holds, so
      * writing zeros would reset a regulation that did not change.
      */
-    private Result<RegulatingControlView, String> tapChangerView(Connectable<?> transformer, String end,
-                                                                 TapChangerRef ref, String controlId, IidmStateView state) {
+    private Result<RegulatingControlView, String> tapChangerView(Connectable<?> transformer, TapChangerRef ref,
+                                                                 String controlId, boolean recordedControl,
+                                                                 IidmStateView state) {
         TapChanger<?, ?, ?, ?> tapChanger = ref.tapChanger();
-        if (tapChanger instanceof PhaseTapChanger phaseTapChanger
-                && ref.getEnum(state, CgmesChangeTranslator.REGULATION_MODE_SUFFIX,
-                        PhaseTapChanger.RegulationMode.class, phaseTapChanger::getRegulationMode)
-                        == PhaseTapChanger.RegulationMode.CURRENT_LIMITER) {
-            return success(currentLimiterView(phaseTapChanger, controlId, ref, state));
-        }
         if (tapChanger instanceof RatioTapChanger) {
             // The same guards as any other holder: no regulation, or a regulation without a mode in this variant
             return holderView(ref.regulation(), controlId, state);
         }
-        RegulatingControlView view =
-                SteadyStateHypothesisExport.regulatingControlView((PhaseTapChanger) tapChanger, controlId, ref, context, state);
+        RegulatingControlView view = SteadyStateHypothesisExport.phaseTapChangerView((PhaseTapChanger) tapChanger,
+                controlId, recordedControl, ref, context, state);
         if (view == null) {
             return failure("tap changer " + controlId + " of " + transformer.getId()
                     + " has no regulation the steady state hypothesis profile can express");
         }
         return success(view);
-    }
-
-    private static RegulatingControlView currentLimiterView(PhaseTapChanger phaseTapChanger, String controlId,
-                                                           TapChangerRef ref, IidmStateView state) {
-        // Unit multiplier is none (multiply by 1), the regulation value is a current in Amperes and carries no sign
-        return new RegulatingControlView(controlId, RegulatingControlType.TAP_CHANGER_CONTROL, true,
-                ref.getBoolean(state, CgmesChangeTranslator.REGULATING_SUFFIX, phaseTapChanger::isRegulating),
-                ref.getDouble(state, CgmesChangeTranslator.TARGET_DEADBAND_SUFFIX, phaseTapChanger::getTargetDeadband),
-                ref.getDouble(state, CgmesChangeTranslator.REGULATION_VALUE_SUFFIX, phaseTapChanger::getRegulationValue),
-                "none");
     }
 
     /**

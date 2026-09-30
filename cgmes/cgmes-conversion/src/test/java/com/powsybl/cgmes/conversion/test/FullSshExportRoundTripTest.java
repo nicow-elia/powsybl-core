@@ -14,6 +14,7 @@ import com.powsybl.commons.exceptions.UncheckedXmlStreamException;
 import com.powsybl.commons.xml.XmlUtil;
 import com.powsybl.iidm.network.BoundaryLine;
 import com.powsybl.iidm.network.Network;
+import com.powsybl.iidm.network.PhaseTapChanger;
 import org.junit.jupiter.api.Test;
 
 import javax.xml.stream.XMLStreamException;
@@ -24,6 +25,8 @@ import java.util.function.Supplier;
 
 import static com.powsybl.cgmes.conversion.test.ConversionUtil.readCgmesResources;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * The full steady state hypothesis export, read back through the CGMES update of a receiver that holds the same
@@ -39,9 +42,15 @@ class FullSshExportRoundTripTest {
 
     /** The full SSH export of the sender, written alone (the equipment model is the one both sides hold). */
     static String fullSsh(Network sender) {
+        return fullSsh(sender, false);
+    }
+
+    /** The full SSH export of the sender, as written alone or together with its equipment model. */
+    static String fullSsh(Network sender, boolean withEquipment) {
         StringWriter out = new StringWriter();
         try {
-            SteadyStateHypothesisExport.write(sender, XmlUtil.initializeWriter(true, "    ", out), new CgmesExportContext(sender));
+            SteadyStateHypothesisExport.write(sender, XmlUtil.initializeWriter(true, "    ", out),
+                    new CgmesExportContext(sender).setExportEquipment(withEquipment));
         } catch (XMLStreamException e) {
             throw new UncheckedXmlStreamException(e);
         }
@@ -79,5 +88,57 @@ class FullSshExportRoundTripTest {
         assertEquals(-45.0, received.getGeneration().getTargetQ(), TOLERANCE);
         assertEquals(0.0, received.getP0(), TOLERANCE);
         assertEquals(0.0, received.getQ0(), TOLERANCE);
+    }
+
+    private static Network transformers() {
+        return readCgmesResources("/update/transformer/", "transformer_EQ.xml", "transformer_SSH.xml");
+    }
+
+    private static Network currentLimiter() {
+        Network network = transformers();
+        network.getTwoWindingsTransformer("T2W").getPhaseTapChanger().setRegulating(false)
+                .setRegulationMode(PhaseTapChanger.RegulationMode.CURRENT_LIMITER)
+                .setRegulationValue(800.0)
+                .setTargetDeadband(10.0);
+        return network;
+    }
+
+    /**
+     * B3: the TapChangerControl the import recorded for a phase tap changer limiting current is written with the
+     * values the tap changer has (a current in Amperes, multiplier none) in an SSH read against that equipment model,
+     * as the change export writes it; the update reads them back.
+     */
+    @Test
+    void aCurrentLimiterKeepsItsValuesThroughAnSshAlone() {
+        Network sender = currentLimiter();
+        String ssh = fullSsh(sender);
+        String control = ssh.substring(ssh.indexOf("\"#_T2W-PhaseTapChanger-Control\""));
+        control = control.substring(0, control.indexOf("</cim:TapChangerControl>"));
+        assertTrue(control.contains("<cim:RegulatingControl.targetValue>800</cim:RegulatingControl.targetValue>"), control);
+        assertTrue(control.contains("UnitMultiplier.none"), control);
+
+        Network receiver = roundTrip(sender, () -> {
+            Network network = transformers();
+            network.getTwoWindingsTransformer("T2W").getPhaseTapChanger()
+                    .setRegulationMode(PhaseTapChanger.RegulationMode.CURRENT_LIMITER);
+            return network;
+        });
+        PhaseTapChanger received = receiver.getTwoWindingsTransformer("T2W").getPhaseTapChanger();
+        assertEquals(800.0, received.getRegulationValue(), TOLERANCE);
+        assertEquals(10.0, received.getTargetDeadband(), TOLERANCE);
+        assertFalse(received.isRegulating());
+    }
+
+    /**
+     * B3, the other case: with the equipment model the export writes the current limit as a CurrentLimit of the
+     * regulated terminal, and the TapChangerControl keeps upstream's zeros with multiplier M.
+     */
+    @Test
+    void aCurrentLimiterWrittenWithItsEquipmentModelKeepsTheZerosOfTheControl() {
+        String ssh = fullSsh(currentLimiter(), true);
+        String control = ssh.substring(ssh.indexOf("TapChangerControl rdf:about=\"#_T2W-PhaseTapChanger-Control\""));
+        control = control.substring(0, control.indexOf("</cim:TapChangerControl>"));
+        assertTrue(control.contains("<cim:RegulatingControl.targetValue>0</cim:RegulatingControl.targetValue>"), control);
+        assertTrue(control.contains("UnitMultiplier.M"), control);
     }
 }

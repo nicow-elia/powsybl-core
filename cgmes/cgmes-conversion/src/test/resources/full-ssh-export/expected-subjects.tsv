@@ -15693,7 +15693,7 @@ phase tap changer limiting current	PhaseTapChangerSymmetrical	T2W-SYMMETRICAL-Ph
 phase tap changer limiting current	RatioTapChanger	T3W-Winding2-RatioTapChanger	da95f4a9b844
 phase tap changer limiting current	TapChangerControl	T3W-Winding2-RatioTapChanger-Control	e4d13191c3b7
 phase tap changer limiting current	TapChangerControl	T2W-SYMMETRICAL-PhaseTapChanger-Control	6c076dc4e765
-phase tap changer limiting current	TapChangerControl	T2W-PhaseTapChanger-Control	124486b2f0ca
+phase tap changer limiting current	TapChangerControl	T2W-PhaseTapChanger-Control	96f8cebb300f
 phase tap changer limiting current	Terminal	T2W-SYMMETRICAL-Terminal1	02f88ad78a65
 phase tap changer limiting current	Terminal	T2W-SYMMETRICAL-Terminal2	02f88ad78a65
 phase tap changer limiting current	Terminal	T2W-Terminal1	02f88ad78a65

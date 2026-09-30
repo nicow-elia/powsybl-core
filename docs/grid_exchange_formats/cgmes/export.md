@@ -266,7 +266,7 @@ A CGMES `RegulatingControl` is shared: a generator, a shunt compensator and a ta
 
 The view of each user is the one of the full export (target by mode: a voltage in kV, or a reactive power in MVAr for the reactive power mode, negated for a generator; deadband only for shunts and ratio tap changers), read from the state being described. It differs in two places:
 
-* A phase tap changer in current limiter mode is described with the values it really has, where a full export writes zeros. A partial file is applied on top of a state the receiver already holds, so writing zeros would reset a regulation that never changed.
+* A phase tap changer in current limiter mode is described with the values it really has (a current in Amperes, multiplier `none`). A partial file is applied on top of a state the receiver already holds, so writing zeros would reset a regulation that never changed. The full export writes the same values when the import recorded the `TapChangerControl` and the SSH is read against that equipment model; with an equipment model of its own it writes the limit as a `CurrentLimit` of the regulated terminal and keeps the zeros (multiplier `M`) on the control, as upstream does.
 * A generator whose `VoltageRegulation` mode no longer matches the CGMES mode its import recorded (`CGMES.mode`) is refused: the receiving side reads the target of its control in the recorded mode.
 
 Two consequences are worth knowing:
@@ -326,6 +326,7 @@ Five defects of the CGMES import and of the full SSH export had to be fixed for 
 
 The full SSH export also writes what the change export writes, where the two used to differ and the import reads the change export's value (not fixed upstream):
 
+* The `TapChangerControl` of a phase tap changer limiting current that the import recorded, in an SSH exported without its equipment model: the values of the tap changer (see Regulating controls above) instead of zeros, which the update read back as a limit of 0.
 * The `EquivalentInjection` of a boundary line with a generation: the import puts the whole injection into the generation of the boundary line, so `EquivalentInjection.p` and `q` are `p0 - targetP` and `q0 - targetQ` (a value that is not a number counts as 0); the full export used to write `p0` and `q0` alone, and the generation was lost.
 
 (cgmes-difference-model-export)=

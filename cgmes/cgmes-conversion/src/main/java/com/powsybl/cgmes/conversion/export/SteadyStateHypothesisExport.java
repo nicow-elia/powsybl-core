@@ -28,6 +28,7 @@ import javax.xml.stream.XMLStreamWriter;
 import java.util.*;
 
 import static com.powsybl.cgmes.conversion.Conversion.*;
+import static com.powsybl.cgmes.conversion.elements.transformers.AbstractTransformerConversion.getCgmesTapChanger;
 import static com.powsybl.cgmes.conversion.export.CgmesExportUtil.*;
 import static com.powsybl.cgmes.conversion.export.elements.RegulatingControlEq.*;
 import static com.powsybl.cgmes.conversion.naming.CgmesObjectReference.Part.*;
@@ -304,7 +305,8 @@ public final class SteadyStateHypothesisExport {
                     new TapChangerRef(twt, CgmesChangeTranslator.RATIO_TAP_CHANGER_PREFIX + end, rtc).regulation(),
                     tapChangerControlId, context, IidmStateView.LIVE), regulatingControlViews);
         } else if (tc instanceof PhaseTapChanger ptc) {
-            addRegulatingControlView(regulatingControlView(ptc, tapChangerControlId,
+            boolean recordedControl = getCgmesTapChanger(twt, cgmesTapChangerId).map(CgmesTapChanger::getControlId).isPresent();
+            addRegulatingControlView(phaseTapChangerView(ptc, tapChangerControlId, recordedControl,
                     new TapChangerRef(twt, CgmesChangeTranslator.PHASE_TAP_CHANGER_PREFIX + end, ptc),
                     context, IidmStateView.LIVE), regulatingControlViews);
         }
@@ -546,6 +548,31 @@ public final class SteadyStateHypothesisExport {
                 new RegulatingControlView(controlId, RegulatingControlType.TAP_CHANGER_CONTROL,
                     true, false, 0.0, 0.0, "M");
         };
+    }
+
+    /**
+     * The TapChangerControl description of a phase tap changer, read from the given state, or {@code null} when it has
+     * none. A phase tap changer limiting current is described with the values it has (a current in Amperes, which
+     * carries no sign, multiplier none) when the steady state hypothesis is read against the equipment model its
+     * import recorded the control from; with an equipment model of its own the export writes the limit as a
+     * CurrentLimit of the regulated terminal and the control keeps upstream's zeros.
+     *
+     * <p>Package private so that the change export describes a TapChangerControl exactly as the full export does.</p>
+     *
+     * @param recordedControl whether the import recorded the TapChangerControl of this tap changer
+     */
+    static RegulatingControlView phaseTapChangerView(PhaseTapChanger ptc, String controlId, boolean recordedControl,
+                                                     TapChangerRef ref, CgmesExportContext context, IidmStateView state) {
+        PhaseTapChanger.RegulationMode mode = ref.getEnum(state, CgmesChangeTranslator.REGULATION_MODE_SUFFIX,
+                PhaseTapChanger.RegulationMode.class, ptc::getRegulationMode);
+        if (mode == PhaseTapChanger.RegulationMode.CURRENT_LIMITER && recordedControl && !context.isExportEquipment()) {
+            return new RegulatingControlView(controlId, RegulatingControlType.TAP_CHANGER_CONTROL, true,
+                    ref.getBoolean(state, CgmesChangeTranslator.REGULATING_SUFFIX, ptc::isRegulating),
+                    ref.getDouble(state, CgmesChangeTranslator.TARGET_DEADBAND_SUFFIX, ptc::getTargetDeadband),
+                    ref.getDouble(state, CgmesChangeTranslator.REGULATION_VALUE_SUFFIX, ptc::getRegulationValue),
+                    "none");
+        }
+        return regulatingControlView(ptc, controlId, ref, context, state);
     }
 
     private static void writeHiddenTapChanger(CgmesTapChanger cgmesTc, String defaultType, String cimNamespace,

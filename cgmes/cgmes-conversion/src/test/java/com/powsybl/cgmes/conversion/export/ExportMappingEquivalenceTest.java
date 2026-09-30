@@ -189,11 +189,6 @@ class ExportMappingEquivalenceTest {
     private record Deliberate(String id, String basis, RowPredicate when, String reference) {
     }
 
-    /** What the full export writes on the TapChangerControl of a phase tap changer limiting current, as compared. */
-    private static final Map<String, String> CURRENT_LIMITER_ZEROS = Map.of(
-            "RegulatingControl.enabled", "Lfalse", "RegulatingControl.targetDeadband", "L0.0",
-            "RegulatingControl.targetValue", "L0.0", "RegulatingControl.targetValueUnitMultiplier", "EUnitMultiplier.M");
-
     /** The probes whose refusal explains a missing equipment value, by the property the full equipment export writes. */
     private static final Map<String, Set<String>> EQ_PROBES = Map.of(
             "ACLineSegment.r", Set.of("r"), "ACLineSegment.x", Set.of("x"),
@@ -360,12 +355,6 @@ class ExportMappingEquivalenceTest {
     );
 
     private static final List<Deliberate> DELIBERATE_DIFFERENCES = List.of(
-        new Deliberate("CURRENT_LIMITER_REAL_VALUES", DOCUMENTED,
-            row -> row.both() && row.facts().currentLimiterControls().contains(row.key().subject())
-                && CURRENT_LIMITER_ZEROS.containsKey(row.key().property())
-                && CURRENT_LIMITER_ZEROS.get(row.key().property()).equals(comparable(row.full()))
-                && row.facts().sharedAsExpected(row),
-            "docs/grid_exchange_formats/cgmes/export.md, Partial SSH export / Regulating controls, first bullet"),
         new Deliberate("DETAILED_LCC_POWER_FACTOR", FULL_EXPORT_DEFECT,
             row -> row.both() && row.facts().detailedLccs().contains(row.key().subject())
                 && Set.of("ACDCConverter.p", "ACDCConverter.q").contains(row.key().property())
@@ -1172,7 +1161,6 @@ class ExportMappingEquivalenceTest {
      * @param generatedEquivalentInjections the EquivalentInjection identifiers the full export generates for boundary
      *                                      lines that carry none
      * @param detailedLccs                  the line commutated converters of the detailed DC model
-     * @param currentLimiterControls        tap changer controls of phase tap changers in current limiter mode
      * @param cgmesModeMismatchControls     the regulating controls, machines and GeneratingUnits of generators whose
      *                                      regulation is in another mode than the CGMES mode the import recorded, with
      *                                      the generator
@@ -1202,7 +1190,7 @@ class ExportMappingEquivalenceTest {
      */
     private record Facts(Set<String> branchSwitches, Set<String> branchSwitchTerminals, Set<String> dcSwitchTerminals,
                          Set<String> generatedEquivalentInjections,
-                         Set<String> detailedLccs, Set<String> currentLimiterControls,
+                         Set<String> detailedLccs,
                          Map<String, String> cgmesModeMismatchControls, Map<String, String> unrecordedControls,
                          Map<String, String> holdersWithoutRegulation, Map<String, String> unregulatedConverters,
                          Map<String, String> reactivePowerTapChangerControls, Set<String> batteries,
@@ -1284,34 +1272,12 @@ class ExportMappingEquivalenceTest {
                             String.valueOf(Math.abs(p) * Math.sqrt(1 - powerFactor * powerFactor) / powerFactor));
                 }
             }
-            // A phase tap changer limiting current, described with its own values on the control the import recorded
-            for (TwoWindingsTransformer transformer : network.getTwoWindingsTransformers()) {
-                transformer.getOptionalPhaseTapChanger().filter(Facts::isCurrentLimiter).ifPresent(ptc -> currentLimiterValues(ptc,
-                        controlIdOf(transformer, CgmesExportUtil.tapChangerAliasType(transformer,
-                                Conversion.ALIAS_PHASE_TAP_CHANGER1, Conversion.ALIAS_PHASE_TAP_CHANGER2), context), expected));
-            }
-            for (ThreeWindingsTransformer transformer : network.getThreeWindingsTransformers()) {
-                transformer.getLegs().forEach(leg -> leg.getOptionalPhaseTapChanger().filter(Facts::isCurrentLimiter)
-                        .ifPresent(ptc -> currentLimiterValues(ptc, controlIdOf(transformer,
-                                CgmesExportUtil.getPhaseTapChangerAliasType(Integer.toString(leg.getSide().getNum())), context),
-                                expected)));
-            }
             // An EquivalentBranch states the impedance of both directions, IIDM holds one
             for (Line line : network.getLines()) {
                 equivalentBranchValues(line, line.getR(), line.getX(), context, expected);
             }
             for (BoundaryLine boundaryLine : network.getBoundaryLines(BoundaryLineFilter.ALL)) {
                 equivalentBranchValues(boundaryLine, boundaryLine.getR(), boundaryLine.getX(), context, expected);
-            }
-        }
-
-        private static void currentLimiterValues(PhaseTapChanger ptc, String controlId, Map<Key, String> expected) {
-            if (controlId != null) {
-                expected.put(new Key(controlId, "RegulatingControl.enabled"), String.valueOf(ptc.isRegulating()));
-                expected.put(new Key(controlId, "RegulatingControl.targetDeadband"), String.valueOf(ptc.getTargetDeadband()));
-                expected.put(new Key(controlId, "RegulatingControl.targetValue"), String.valueOf(ptc.getRegulationValue()));
-                // A current in Amperes, carrying no sign
-                expected.put(new Key(controlId, "RegulatingControl.targetValueUnitMultiplier"), "UnitMultiplier.none");
             }
         }
 
@@ -1369,17 +1335,6 @@ class ExportMappingEquivalenceTest {
                     }
                 }
             }
-            Set<String> currentLimiterControls = new HashSet<>();
-            for (TwoWindingsTransformer transformer : network.getTwoWindingsTransformers()) {
-                transformer.getOptionalPhaseTapChanger().filter(Facts::isCurrentLimiter).ifPresent(ptc -> addControlId(transformer,
-                        CgmesExportUtil.tapChangerAliasType(transformer, Conversion.ALIAS_PHASE_TAP_CHANGER1, Conversion.ALIAS_PHASE_TAP_CHANGER2),
-                        context, currentLimiterControls));
-            }
-            for (ThreeWindingsTransformer transformer : network.getThreeWindingsTransformers()) {
-                transformer.getLegs().forEach(leg -> leg.getOptionalPhaseTapChanger().filter(Facts::isCurrentLimiter).ifPresent(ptc ->
-                        addControlId(transformer, CgmesExportUtil.getPhaseTapChangerAliasType(Integer.toString(leg.getSide().getNum())),
-                                context, currentLimiterControls)));
-            }
             Set<String> currentLimiterLimits = new HashSet<>();
             network.getTwoWindingsTransformers().forEach(transformer -> transformer.getOptionalPhaseTapChanger()
                     .filter(Facts::isCurrentLimiter).filter(ptc -> ptc.getRegulationTerminal() != null)
@@ -1402,7 +1357,7 @@ class ExportMappingEquivalenceTest {
             shared.refusals().forEach((iidmId, reasons) ->
                     refusals.put(id(naming.getCgmesId(network.getIdentifiable(iidmId)), context), reasons));
             return new Facts(branchSwitches, branchSwitchTerminals, dcSwitchTerminals, generatedEquivalentInjections,
-                    detailedLccs, currentLimiterControls,
+                    detailedLccs,
                     cgmesModeMismatchControls, unrecordedControls(network, context), holdersWithoutRegulation(network, context),
                     unregulatedConverters(network, context), reactivePowerTapChangerControls(network, context),
                     batteries(network, context), fictitiousInjections(network, context), hiddenTapChangers(network, context),
@@ -1440,11 +1395,12 @@ class ExportMappingEquivalenceTest {
                                 Conversion.ALIAS_RATIO_TAP_CHANGER1, Conversion.ALIAS_RATIO_TAP_CHANGER2),
                                 CgmesObjectReference.Part.RATIO_TAP_CHANGER, 1, context),
                         true, terminalSign(transformer, ""), false, controls));
+                String phaseAlias = CgmesExportUtil.tapChangerAliasType(transformer,
+                        Conversion.ALIAS_PHASE_TAP_CHANGER1, Conversion.ALIAS_PHASE_TAP_CHANGER2);
                 transformer.getOptionalPhaseTapChanger().ifPresent(ptc -> phaseTapChangerControl(ptc,
-                        tapChangerControlId(transformer, CgmesExportUtil.tapChangerAliasType(transformer,
-                                Conversion.ALIAS_PHASE_TAP_CHANGER1, Conversion.ALIAS_PHASE_TAP_CHANGER2),
-                                CgmesObjectReference.Part.PHASE_TAP_CHANGER, 1, context),
-                        terminalSign(transformer, ""), controls));
+                        tapChangerControlId(transformer, phaseAlias, CgmesObjectReference.Part.PHASE_TAP_CHANGER, 1, context),
+                        terminalSign(transformer, ""),
+                        controlIdOf(transformer, phaseAlias, context) != null && !context.isExportEquipment(), controls));
             }
             for (ThreeWindingsTransformer transformer : network.getThreeWindingsTransformers()) {
                 for (ThreeWindingsTransformer.Leg leg : transformer.getLegs()) {
@@ -1453,10 +1409,12 @@ class ExportMappingEquivalenceTest {
                             tapChangerControlId(transformer, CgmesExportUtil.getRatioTapChangerAliasType(end),
                                     CgmesObjectReference.Part.RATIO_TAP_CHANGER, leg.getSide().getNum(), context),
                             true, terminalSign(transformer, end), false, controls));
+                    String phaseAlias = CgmesExportUtil.getPhaseTapChangerAliasType(end);
                     leg.getOptionalPhaseTapChanger().ifPresent(ptc -> phaseTapChangerControl(ptc,
-                            tapChangerControlId(transformer, CgmesExportUtil.getPhaseTapChangerAliasType(end),
-                                    CgmesObjectReference.Part.PHASE_TAP_CHANGER, leg.getSide().getNum(), context),
-                            terminalSign(transformer, end), controls));
+                            tapChangerControlId(transformer, phaseAlias, CgmesObjectReference.Part.PHASE_TAP_CHANGER,
+                                    leg.getSide().getNum(), context),
+                            terminalSign(transformer, end),
+                            controlIdOf(transformer, phaseAlias, context) != null && !context.isExportEquipment(), controls));
                 }
             }
             Map<Key, String> seam = new HashMap<>();
@@ -1521,21 +1479,31 @@ class ExportMappingEquivalenceTest {
         }
 
         /**
-         * The TapChangerControl of a phase tap changer controlling active power, with the terminal sign of its end. A
-         * current limiter is a user without expectation here: its values are those of {@code CURRENT_LIMITER_REAL_VALUES}.
+         * The TapChangerControl of a phase tap changer: controlling active power, its regulation value with the
+         * terminal sign of its end; limiting current, the current it has (no sign, multiplier none) when the import
+         * recorded the control and the SSH is read against that equipment model, else zeros.
          */
         private static void phaseTapChangerControl(PhaseTapChanger ptc, String controlId, int terminalSign,
-                                                   Map<String, List<Map<String, String>>> controls) {
+                                                   boolean realCurrentLimit, Map<String, List<Map<String, String>>> controls) {
             if (!ptc.hasLoadTapChangingCapabilities() || ptc.getRegulationMode() == null) {
                 return;
             }
-            Map<String, String> values = null;
+            Map<String, String> values = new HashMap<>();
+            values.put("RegulatingControl.discrete", "true");
             if (ptc.getRegulationMode() == PhaseTapChanger.RegulationMode.ACTIVE_POWER_CONTROL) {
-                values = new HashMap<>();
                 values.put("RegulatingControl.enabled", String.valueOf(ptc.isRegulating()));
-                values.put("RegulatingControl.discrete", "true");
                 putDeadband(values, ptc.getTargetDeadband());
                 values.put(TARGET_VALUE, String.valueOf(terminalSign * ptc.getRegulationValue()));
+                values.put(MULTIPLIER, "UnitMultiplier.M");
+            } else if (realCurrentLimit) {
+                values.put("RegulatingControl.enabled", String.valueOf(ptc.isRegulating()));
+                putDeadband(values, ptc.getTargetDeadband());
+                values.put(TARGET_VALUE, String.valueOf(ptc.getRegulationValue()));
+                values.put(MULTIPLIER, "UnitMultiplier.none");
+            } else {
+                values.put("RegulatingControl.enabled", "false");
+                values.put("RegulatingControl.targetDeadband", "0.0");
+                values.put(TARGET_VALUE, "0.0");
                 values.put(MULTIPLIER, "UnitMultiplier.M");
             }
             controls.computeIfAbsent(controlId, id -> new ArrayList<>()).add(values);
