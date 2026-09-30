@@ -1494,8 +1494,8 @@ class PartialSshExportTest extends AbstractSerDeTest {
     }
 
     /**
-     * Open problem O2 of report 21: the change export writes the voltage regulation of ratio tap changers only; a
-     * target of a ratio tap changer regulating reactive power is refused.
+     * The change export writes the voltage regulation of ratio tap changers only; a target of a ratio tap changer
+     * regulating reactive power is refused.
      */
     @Test
     void ratioTapChangerReactivePowerRegulationIsRejected() {

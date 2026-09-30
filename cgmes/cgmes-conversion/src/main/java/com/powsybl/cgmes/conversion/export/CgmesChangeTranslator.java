@@ -991,8 +991,8 @@ class CgmesChangeTranslator {
                         + " set");
             }
             if (regulation.mode(state) != RegulationMode.VOLTAGE) {
-                return failure("the change export only writes the voltage regulation of ratio tap changers (open"
-                        + " problem O2 of report 21). " + REMEDY + "export the full steady state hypothesis instead");
+                return failure("the change export only writes the voltage regulation of ratio tap changers. " + REMEDY
+                        + "export the full steady state hypothesis instead");
             }
         } else if (tapChanger instanceof PhaseTapChanger phaseTapChanger && phaseTapChanger.getRegulationTerminal() == null) {
             return failure("tap changer " + aliasType + " of " + transformer.getId()
