@@ -230,7 +230,19 @@ final class FastRoutePlan {
                 || config.getRemovePropertiesAndAliasesAfterImport()) {
             return UpdateScope.ALL;
         }
-        return UpdateScope.of(touchedIidmIds);
+        return UpdateScope.of(touchedIidmIds, disconnectsATerminal());
+    }
+
+    /**
+     * Whether a model to write states a disconnected terminal: only then can the update create a fictitious switch,
+     * so only then does the scoped update query the terminals of the whole model for it.
+     */
+    private boolean disconnectsATerminal() {
+        return models.stream()
+                .flatMap(model -> model.objects().stream())
+                .flatMap(object -> object.statements().stream())
+                .anyMatch(statement -> CONNECTED.equals(statement.property())
+                        && !Boolean.parseBoolean(statement.value().trim()));
     }
 
     /**

@@ -38,12 +38,14 @@ import java.util.stream.Stream;
 public final class UpdateScope {
 
     /** Every element of the network, which is what a file driven update needs. */
-    public static final UpdateScope ALL = new UpdateScope(null);
+    public static final UpdateScope ALL = new UpdateScope(null, true);
 
     private final Set<String> ids;
+    private final boolean disconnectsTerminals;
 
-    private UpdateScope(Set<String> ids) {
+    private UpdateScope(Set<String> ids, boolean disconnectsTerminals) {
         this.ids = ids;
+        this.disconnectsTerminals = disconnectsTerminals;
     }
 
     /**
@@ -53,13 +55,29 @@ public final class UpdateScope {
      *                        does not depend on the iteration order of the caller's collection
      */
     public static UpdateScope of(Collection<String> identifiableIds) {
+        return of(identifiableIds, true);
+    }
+
+    /**
+     * As above, stating whether the update may disconnect a terminal.
+     *
+     * @param disconnectsTerminals whether the update data can state a disconnected terminal. When it cannot, the update
+     *                             skips the pass that creates the fictitious switch of every disconnected terminal
+     *                             (powsybl-core #4085), whose query over all terminals would find none
+     */
+    public static UpdateScope of(Collection<String> identifiableIds, boolean disconnectsTerminals) {
         Objects.requireNonNull(identifiableIds);
-        return new UpdateScope(new TreeSet<>(identifiableIds));
+        return new UpdateScope(new TreeSet<>(identifiableIds), disconnectsTerminals);
     }
 
     /** Whether this scope is the whole network. */
     public boolean isAll() {
         return ids == null;
+    }
+
+    /** Whether the update may disconnect a terminal; always for {@link #ALL}. */
+    public boolean disconnectsTerminals() {
+        return disconnectsTerminals;
     }
 
     /**

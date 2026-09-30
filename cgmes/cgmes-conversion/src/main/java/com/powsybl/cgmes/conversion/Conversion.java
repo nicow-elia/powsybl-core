@@ -367,7 +367,9 @@ public class Conversion {
         // Switches are updated first because the subsequent update of the terminals
         // is configurable and, if activated, may modify their state.
         // Then, the update of the terminals can overwrite the state of the switches
-        createFictitiousSwitchesForDisconnectedTerminalsDuringUpdate(network, cgmes, updateContext);
+        if (scope.disconnectsTerminals()) {
+            createFictitiousSwitchesForDisconnectedTerminalsDuringUpdate(network, cgmes, updateContext);
+        }
         updateSwitches(network, updateContext, scope);
 
         updateLoads(network, cgmes, updateContext, scope);
