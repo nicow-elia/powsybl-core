@@ -560,6 +560,8 @@ class ExportMappingEquivalenceTest {
             regulation.setTerminal(network.getGenerator("ExternalNetworkInjection").getTerminal(), generator.getRegulatingTargetV());
             regulation.setMode(RegulationMode.REACTIVE_POWER);
             regulation.setTargetValue(25.0);
+            // A deadband of its own, which the RegulatingControl of a generator does not carry (it is written 0)
+            regulation.setTargetDeadband(0.5);
             generator.setLocalTargetQ(7.0);
             return network;
         });
@@ -665,6 +667,11 @@ class ExportMappingEquivalenceTest {
             }
             counts.merge(part + " " + outcome, 1, Integer::sum);
         }
+        // A value of a shared seam the full export leaves out of an object it writes is as wrong as a wrong value
+        facts.seam().keySet().stream()
+                .filter(key -> !full.containsKey(key) && full.containsKey(new Key(key.subject(), RDF_TYPE)))
+                .forEach(key -> unexplained.add(fixture.name() + ": " + part + " " + key + " SEAM: the full export does not"
+                        + " write it, the value derived from IIDM is " + facts.seam().get(key)));
     }
 
     /**
