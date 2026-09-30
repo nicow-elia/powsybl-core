@@ -43,7 +43,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * control it refuses (a static var compensator, whose block and control the update reads as one group).</p>
  *
  * <p>In {@link Scope#FULL_MODEL}, objects a change export refuses but a full export writes are described, and their
- * description equals what the full export writes: batteries and a generator without a recorded control, a
+ * description equals what the full export writes: a generator without a recorded control (the battery network), a
  * generator without VoltageRegulation (four substations, {@code GTH1}), a converter station that does not regulate, an
  * EquivalentInjection regulating without regulation capability.</p>
  *
@@ -90,8 +90,8 @@ class DescribeObjectTest {
     /** What a network written by a full export states about the named objects, and what the full model describes. */
     static List<Object[]> fullModels() {
         return List.of(
-            new Object[] {"battery network: batteries, a generator without a recorded control",
-                (Supplier<Network>) BatteryNetworkFactory::create, List.of("GEN", "BAT", "BAT2")},
+            new Object[] {"battery network, a generator without a recorded control",
+                (Supplier<Network>) BatteryNetworkFactory::create, List.of("GEN")},
             new Object[] {"four substations, a generator without VoltageRegulation",
                 (Supplier<Network>) FourSubstationsNodeBreakerFactory::create, List.of("GTH1", "GH1", "VSC1", "VSC2")},
             new Object[] {"converter station in voltage mode, not regulating", (Supplier<Network>) () -> {
@@ -174,7 +174,6 @@ class DescribeObjectTest {
         List<Result<CgmesPropertyBuffer, String>> descriptions = new ArrayList<>();
         switch (identifiable) {
             case Load load -> descriptions.add(translator.describeLoad(load));
-            case Battery battery -> descriptions.add(translator.describeBattery(battery));
             case Generator generator -> {
                 descriptions.add(translator.describeGenerator(generator));
                 if (generator.hasProperty(Conversion.PROPERTY_GENERATING_UNIT)) {

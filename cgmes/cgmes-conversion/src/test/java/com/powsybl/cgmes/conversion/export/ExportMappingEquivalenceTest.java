@@ -306,6 +306,18 @@ class ExportMappingEquivalenceTest {
                 List.of("only writes the voltage regulation of ratio tap changers")),
             "the control of a ratio tap changer regulating reactive power: the shared mapping refuses it (rule"
                 + " rtc-reactive-power, a changesOnly refusal), the full export writes it"),
+        new OnlyInFull("BATTERY", Set.of(CgmesNames.SYNCHRONOUS_MACHINE), Set.of(),
+            row -> row.facts().batteries().contains(row.key().subject()),
+            "the full export writes a battery as a SynchronousMachine; the shared mapping has no battery, which the"
+                + " CGMES import never creates (a second copy of the machine block, left to the full export)"),
+        new OnlyInFull("FICTITIOUS_INJECTION", Set.of(CgmesNames.ENERGY_SOURCE, CgmesNames.NONCONFORM_LOAD), Set.of(),
+            row -> row.facts().fictitiousInjections().contains(row.key().subject()),
+            "the fictitious injection of a node or a bus, written by the full export as a NonConformLoad or an"
+                + " EnergySource under a generated identifier; the shared mapping has no mapping for it"),
+        new OnlyInFull("HIDDEN_TAP_CHANGER", TAP_CHANGER_CLASSES, Set.of(),
+            row -> row.facts().hiddenTapChangers().contains(row.key().subject()),
+            "the tap changer the import combined into another one and kept hidden, written by the full export of an"
+                + " SSH alone with the step it recorded; IIDM has no such tap changer, the shared mapping none to describe"),
         new OnlyInFull("CURRENT_LIMITER_OPERATIONAL_LIMIT", LIMIT_CLASSES, Set.of(),
             row -> row.facts().currentLimiterLimits().contains(row.key().subject()),
             "the full equipment export writes the regulation value of a phase tap changer limiting current as a"
@@ -888,45 +900,7 @@ class ExportMappingEquivalenceTest {
                 }
             }
         }
-        describeWhatNoEventNames(network, context, translator, shared);
         return shared;
-    }
-
-    /**
-     * The objects no recorded change names, which the mapping describes for a full export all the same: batteries (the
-     * CGMES import creates none), fictitious injections and hidden tap changers (IIDM holds no object for them).
-     */
-    private static void describeWhatNoEventNames(Network network, CgmesExportContext context, CgmesChangeTranslator translator,
-                                                 Shared shared) {
-        for (Battery battery : network.getBatteries()) {
-            if (translator.describeBattery(battery) instanceof Result.Success(CgmesPropertyBuffer buffer)) {
-                collect(shared, buffer.statements(CgmesSubset.STEADY_STATE_HYPOTHESIS, context), shared.ssh(), battery, "describeBattery");
-            }
-        }
-        for (VoltageLevel voltageLevel : network.getVoltageLevels()) {
-            collect(shared, translator.describeFictitiousInjections(voltageLevel).statements(CgmesSubset.STEADY_STATE_HYPOTHESIS, context),
-                    shared.ssh(), voltageLevel, "describeFictitiousInjections");
-        }
-        for (TwoWindingsTransformer transformer : network.getTwoWindingsTransformers()) {
-            for (String aliasType : List.of(Conversion.ALIAS_PHASE_TAP_CHANGER1, Conversion.ALIAS_PHASE_TAP_CHANGER2,
-                    Conversion.ALIAS_RATIO_TAP_CHANGER1, Conversion.ALIAS_RATIO_TAP_CHANGER2)) {
-                describeHidden(transformer, aliasType, context, translator, shared);
-            }
-        }
-        for (ThreeWindingsTransformer transformer : network.getThreeWindingsTransformers()) {
-            for (String end : List.of("1", "2", "3")) {
-                describeHidden(transformer, CgmesExportUtil.getPhaseTapChangerAliasType(end), context, translator, shared);
-                describeHidden(transformer, CgmesExportUtil.getRatioTapChangerAliasType(end), context, translator, shared);
-            }
-        }
-    }
-
-    private static <C extends Connectable<C>> void describeHidden(C transformer, String aliasType, CgmesExportContext context,
-                                                                  CgmesChangeTranslator translator, Shared shared) {
-        String defaultClassName = aliasType.contains("Phase") ? CgmesNames.PHASE_TAP_CHANGER_TABULAR : CgmesNames.RATIO_TAP_CHANGER;
-        transformer.getAliasFromType(aliasType).ifPresent(tapChangerId -> collect(shared,
-                translator.describeHiddenTapChanger(transformer, tapChangerId, defaultClassName)
-                        .statements(CgmesSubset.STEADY_STATE_HYPOTHESIS, context), shared.ssh(), transformer, "describeHiddenTapChanger"));
     }
 
     private static void collect(Shared shared, List<CgmesStatement> statements, Map<Key, Triple> target,
@@ -1192,6 +1166,9 @@ class ExportMappingEquivalenceTest {
      * @param unregulatedConverters         the converters of an HVDC line one of whose converters does not regulate
      * @param reactivePowerTapChangerControls the controls of ratio tap changers regulating reactive power, with the
      *                                      transformer
+     * @param batteries                     the batteries
+     * @param fictitiousInjections          the fictitious injections the full export writes
+     * @param hiddenTapChangers             the hidden tap changers the import recorded
      * @param currentLimiterLimits          the CurrentLimit the full equipment export writes for a current limiter
      * @param voltageLimits                 the voltage level and the side of every stored VoltageLimit identifier
      * @param refusals                      the reasons of the refused probes, by CGMES subject
@@ -1208,7 +1185,8 @@ class ExportMappingEquivalenceTest {
                          Set<String> detailedLccs,
                          Map<String, String> cgmesModeMismatchControls, Map<String, String> unrecordedControls,
                          Map<String, String> holdersWithoutRegulation, Map<String, String> unregulatedConverters,
-                         Map<String, String> reactivePowerTapChangerControls,
+                         Map<String, String> reactivePowerTapChangerControls, Set<String> batteries,
+                         Set<String> fictitiousInjections, Set<String> hiddenTapChangers,
                          Set<String> currentLimiterLimits,
                          Map<String, VoltageLimitRef> voltageLimits, Map<String, List<String>> refusals,
                          Set<String> refusedSlots, Map<Key, String> expectedShared,
@@ -1356,6 +1334,7 @@ class ExportMappingEquivalenceTest {
                     detailedLccs,
                     cgmesModeMismatchControls, unrecordedControls(network, context), holdersWithoutRegulation(network, context),
                     unregulatedConverters(network, context), reactivePowerTapChangerControls(network, context),
+                    batteries(network, context), fictitiousInjections(network, context), hiddenTapChangers(network, context),
                     currentLimiterLimits, voltageLimits, refusals, new HashSet<>(),
                     expectedShared, seamExpectations(network, context));
         }
@@ -1670,6 +1649,43 @@ class ExportMappingEquivalenceTest {
 
         private static boolean regulatesReactivePower(RatioTapChanger rtc) {
             return rtc.getVoltageRegulation() != null && rtc.getVoltageRegulation().getMode() == RegulationMode.REACTIVE_POWER;
+        }
+
+        private static Set<String> batteries(Network network, CgmesExportContext context) {
+            Set<String> batteries = new HashSet<>();
+            network.getBatteries().forEach(battery -> batteries.add(id(context.getNamingStrategy().getCgmesId(battery), context)));
+            return batteries;
+        }
+
+        /** Named as {@code SteadyStateHypothesisExport} names them: per node of a node/breaker level, else per bus. */
+        private static Set<String> fictitiousInjections(Network network, CgmesExportContext context) {
+            NamingStrategy naming = context.getNamingStrategy();
+            Set<String> injections = new HashSet<>();
+            for (VoltageLevel voltageLevel : network.getVoltageLevels()) {
+                if (voltageLevel.getTopologyKind() == TopologyKind.NODE_BREAKER && !context.isBusBranchExport()) {
+                    VoltageLevel.NodeBreakerView view = voltageLevel.getNodeBreakerView();
+                    for (int node : view.getNodes()) {
+                        injections.add(id(naming.getCgmesId(CgmesObjectReference.refTyped(voltageLevel),
+                                CgmesObjectReference.Part.FICTITIOUS, ref("NCL"), ref(node)), context));
+                    }
+                } else {
+                    voltageLevel.getBusBreakerView().getBuses().forEach(bus -> injections.add(id(naming.getCgmesId(
+                            CgmesObjectReference.refTyped(bus), CgmesObjectReference.Part.FICTITIOUS, ref("NCL")), context)));
+                }
+            }
+            return injections;
+        }
+
+        private static Set<String> hiddenTapChangers(Network network, CgmesExportContext context) {
+            Set<String> hidden = new HashSet<>();
+            network.getConnectableStream().forEach(connectable -> {
+                CgmesTapChangers<?> tapChangers = (CgmesTapChangers<?>) connectable.getExtension(CgmesTapChangers.class);
+                if (tapChangers != null) {
+                    tapChangers.getTapChangers().stream().filter(CgmesTapChanger::isHidden).forEach(tapChanger ->
+                            hidden.add(id(context.getNamingStrategy().getCgmesId(tapChanger.getId()), context)));
+                }
+            });
+            return hidden;
         }
 
         /** As EquipmentExport names the CurrentLimit it writes for a phase tap changer limiting current. */
