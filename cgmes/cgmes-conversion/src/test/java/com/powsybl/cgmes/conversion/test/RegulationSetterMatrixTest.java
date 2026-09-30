@@ -30,6 +30,7 @@ import com.powsybl.iidm.network.RatioTapChanger;
 import com.powsybl.iidm.network.ShuntCompensator;
 import com.powsybl.iidm.network.StaticVarCompensator;
 import com.powsybl.iidm.network.Terminal;
+import com.powsybl.iidm.network.VariantManager;
 import com.powsybl.iidm.network.VoltageSourceConverter;
 import com.powsybl.iidm.network.VscConverterStation;
 import com.powsybl.iidm.network.events.NetworkEvent;
@@ -110,16 +111,26 @@ class RegulationSetterMatrixTest {
     private static final String SYNCHRONOUS_MACHINE = "SynchronousMachine";
     private static final String SHUNT_DIR = "/update/shunt-compensator/";
     private static final String HVDC_DIR = "/update/hvdc/";
+    private static final String MODE_CHANGED_AFTER_IMPORT = "generator whose mode was changed after the import";
 
     /**
      * A kind of regulation holder in a fixture.
      *
      * @param importedWithRegulation whether the CGMES import gives the holder a {@code VoltageRegulation}. When it
      *                               does, the matrix also runs without one, removed in memory on every copy
+     * @param regulationOnly         whether the holder differs from another holder of the matrix in its regulation
+     *                               only: without a {@code VoltageRegulation} it is that other holder, so the matrix
+     *                               runs it with its regulation only
      */
     record Holder(String name, Properties importParams, String dir, String[] files, Consumer<Network> prepare,
                   Function<Network, VoltageRegulationHolder<?>> holder, Function<Network, Identifiable<?>> owner,
-                  boolean importedWithRegulation) {
+                  boolean importedWithRegulation, boolean regulationOnly) {
+
+        Holder(String name, Properties importParams, String dir, String[] files, Consumer<Network> prepare,
+               Function<Network, VoltageRegulationHolder<?>> holder, Function<Network, Identifiable<?>> owner,
+               boolean importedWithRegulation) {
+            this(name, importParams, dir, files, prepare, holder, owner, importedWithRegulation, false);
+        }
 
         Network load(boolean withRegulation) {
             Network network = readCgmesResources(importParams, dir, files);
@@ -172,6 +183,21 @@ class RegulationSetterMatrixTest {
         return network.getThreeWindingsTransformer("T3W").getLeg2().getRatioTapChanger();
     }
 
+    /**
+     * Replace the regulation of the holder by one created while another variant is the working one: in the working
+     * variant it then has no mode, is not regulating and has no target (U2). IIDM sets no regulating terminal while
+     * there are several variants, so it regulates locally.
+     */
+    private static void regulationFromAnotherVariant(Network network, VoltageRegulationHolder<?> holder) {
+        holder.removeVoltageRegulation();
+        VariantManager variants = network.getVariantManager();
+        String working = variants.getWorkingVariantId();
+        variants.cloneVariant(working, "another variant");
+        variants.setWorkingVariant("another variant");
+        holder.newVoltageRegulation().withMode(RegulationMode.VOLTAGE).withRegulating(false).build();
+        variants.setWorkingVariant(working);
+    }
+
     static List<Holder> holders() {
         Consumer<Network> nothing = network -> { };
         String[] shuntFiles = {"shuntCompensator_EQ.xml", "shuntCompensator_SSH.xml"};
@@ -185,13 +211,29 @@ class RegulationSetterMatrixTest {
                         // A remote target other than the local one (405), so that the two cannot be mistaken
                         n -> n.getGenerator(SYNCHRONOUS_MACHINE).getVoltageRegulation()
                                 .setTerminal(n.getGenerator("ExternalNetworkInjection").getTerminal(), 410.0),
-                        n -> n.getGenerator(SYNCHRONOUS_MACHINE), n -> n.getGenerator(SYNCHRONOUS_MACHINE), true),
+                        n -> n.getGenerator(SYNCHRONOUS_MACHINE), n -> n.getGenerator(SYNCHRONOUS_MACHINE), true, true),
+                // The import records the CGMES mode of the machine's control, voltage; the regulation is switched to
+                // reactive power at the machine's own terminal, which the update would read as the other quantity
+                new Holder(MODE_CHANGED_AFTER_IMPORT, noParameters(), GENERATOR_DIR,
+                        GENERATOR_FILES, n -> {
+                            Generator g = n.getGenerator(SYNCHRONOUS_MACHINE);
+                            g.getVoltageRegulation().setTerminal(g.getTerminal(), g.getRegulatingTargetV());
+                            g.getVoltageRegulation().setMode(RegulationMode.REACTIVE_POWER);
+                            g.getVoltageRegulation().setTargetValue(10.0);
+                        }, n -> n.getGenerator(SYNCHRONOUS_MACHINE), n -> n.getGenerator(SYNCHRONOUS_MACHINE), true,
+                        true),
                 new Holder("generator without a CGMES regulating control", noParameters(), GENERATOR_DIR,
                         GENERATOR_FILES, nothing, n -> n.getGenerator("ExternalNetworkInjection"),
                         n -> n.getGenerator("ExternalNetworkInjection"), false),
                 new Holder("shunt compensator", noParameters(), SHUNT_DIR, shuntFiles, nothing,
                         n -> n.getShuntCompensator("LinearShuntCompensator"),
                         n -> n.getShuntCompensator("LinearShuntCompensator"), true),
+                // The regulation was created while another variant was the working one: it has no mode in this one
+                new Holder("shunt compensator whose regulation was created in another variant", noParameters(),
+                        SHUNT_DIR, shuntFiles,
+                        n -> regulationFromAnotherVariant(n, n.getShuntCompensator("LinearShuntCompensator")),
+                        n -> n.getShuntCompensator("LinearShuntCompensator"),
+                        n -> n.getShuntCompensator("LinearShuntCompensator"), true, true),
                 new Holder("equivalent shunt", noParameters(), SHUNT_DIR, shuntFiles, nothing,
                         n -> n.getShuntCompensator("EquivalentShunt"), n -> n.getShuntCompensator("EquivalentShunt"),
                         false),
@@ -207,6 +249,10 @@ class RegulationSetterMatrixTest {
                 new Holder("ratio tap changer without a CGMES control", noParameters(), "/issues/voltageRegulation/",
                         transformerFiles, nothing, n -> n.getTwoWindingsTransformer("PT2_0").getRatioTapChanger(),
                         n -> n.getTwoWindingsTransformer("PT2_0"), false),
+                // The CGMES TapChangerControl of this ratio tap changer regulates reactive power
+                new Holder("ratio tap changer regulating reactive power", noParameters(), "/issues/voltageRegulation/",
+                        transformerFiles, nothing, n -> n.getTwoWindingsTransformer("PT2_2").getRatioTapChanger(),
+                        n -> n.getTwoWindingsTransformer("PT2_2"), true, true),
                 new Holder("VSC converter station 1", noParameters(), HVDC_DIR, hvdcFiles, nothing, n -> vsc(n, 1),
                         n -> vsc(n, 1), true),
                 new Holder("VSC converter station 2", noParameters(), HVDC_DIR, hvdcFiles, nothing, n -> vsc(n, 2),
@@ -278,6 +324,10 @@ class RegulationSetterMatrixTest {
         setters.add(new Setter("VoltageRegulation.setMode", true, (n, h, change) -> {
             VoltageRegulation regulation = h.getVoltageRegulation();
             regulation.setMode(change ? otherMode(regulation.getMode()) : regulation.getMode());
+        }));
+        setters.add(new Setter("VoltageRegulation.setSlope", true, (n, h, change) -> {
+            VoltageRegulation regulation = h.getVoltageRegulation();
+            regulation.setSlope(changed(regulation.getSlope(), change, 0.01));
         }));
         setters.add(new Setter("VoltageRegulation.setTerminal", true, (n, h, change) -> {
             VoltageRegulation regulation = h.getVoltageRegulation();
@@ -502,12 +552,12 @@ class RegulationSetterMatrixTest {
                     continue;
                 }
                 for (boolean withRegulation : new boolean[] {true, false}) {
-                    // Without a VoltageRegulation there is nothing to call its setters on; and a remote regulation
-                    // without a VoltageRegulation is the local case
+                    // Without a VoltageRegulation there is nothing to call its setters on; and a holder that differs
+                    // from another in its regulation only is that other one without a VoltageRegulation
                     // The builder is a creation only on a holder without regulation
                     boolean skip = withRegulation
                             ? !holder.importedWithRegulation() || setter.name().startsWith("newVoltageRegulation")
-                            : setter.needsRegulation() || holder.name().endsWith("remotely");
+                            : setter.needsRegulation() || holder.regulationOnly();
                     if (skip) {
                         continue;
                     }
@@ -516,6 +566,25 @@ class RegulationSetterMatrixTest {
                         // the bridge has no value that keeps its state, so it has no no-op (c-m11)
                         if (!change && withRegulation && setter.name().contains("setVoltageRegulatorOn")
                                 && mode == RegulationMode.REACTIVE_POWER) {
+                            continue;
+                        }
+                        // ShuntCompensator.setVoltageRegulatorOn sets the mode VOLTAGE: on a regulation without a mode in
+                        // this variant it has no value that keeps its state, so it has no no-op either
+                        if (!change && withRegulation && setter.name().equals("ShuntCompensator.setVoltageRegulatorOn")
+                                && mode == null) {
+                            continue;
+                        }
+                        // Generator.setVoltageRegulatorOn reads the flag in voltage mode only and writes the regulating
+                        // flag: on a generator regulating reactive power its change sets the flag it already has
+                        if (change && withRegulation && setter.name().equals("Generator.setVoltageRegulatorOn")
+                                && mode == RegulationMode.REACTIVE_POWER) {
+                            continue;
+                        }
+                        // A receiver whose generator is in another mode than the CGMES mode its import recorded leaves
+                        // that state on ANY CGMES update, which dispatches the regulation on the recorded mode: a change
+                        // that writes the machine block only would test the receiver, not the export
+                        if (holder.name().equals(MODE_CHANGED_AFTER_IMPORT)
+                                && (setter.name().equals("setLocalTargetQ") || setter.name().equals("Generator.setTargetQ"))) {
                             continue;
                         }
                         cases.add(new Case(holder, setter, withRegulation, change));
@@ -561,7 +630,7 @@ class RegulationSetterMatrixTest {
     static final Set<String> RULES = Set.of("steady-state", "echo-1", "echo-2", "echo-3", "local-target",
             "own-terminal", "G1", "iidm-validation", "no-change", "terminal-eq", "mode-eq", "vsc-no-control-flag",
             "import-gives-regulation", "deadband-not-read", "no-control", "equivalent-shunt", "no-mode",
-            "rtc-reactive-power", "cgmes-mode");
+            "rtc-reactive-power", "cgmes-mode", "slope-no-property");
 
     /** The outcome of a case and the rule it follows. */
     record Observed(Outcome outcome, String rule) {
@@ -654,6 +723,7 @@ class RegulationSetterMatrixTest {
             new String[] {"does not regulate, and a VsConverter has no control flag", "vsc-no-control-flag"},
             new String[] {"has no VoltageRegulation, but the CGMES update gives it one", "import-gives-regulation"},
             new String[] {"the deadband of a RegulatingControl", "deadband-not-read"},
+            new String[] {"a CGMES RegulatingControl has no slope", "slope-no-property"},
             new String[] {"regulating control", "no-control"},
             new String[] {"tap changer control", "no-control"},
             new String[] {"EquivalentShunt", "equivalent-shunt"},
@@ -677,6 +747,7 @@ class RegulationSetterMatrixTest {
         Network sender = c.holder().load(c.withRegulation());
         SortedMap<String, String> original = SteadyStateFingerprint.of(sender);
         String terminalBefore = regulatingTerminalOf(c, sender);
+        String slopeBefore = slopeOf(c, sender);
         // What the regulation does not use in the original state, for the comparison after a revert
         Set<String> inactiveBefore = inactiveLocalTargets(c, sender);
         List<NetworkEvent> events;
@@ -696,7 +767,11 @@ class RegulationSetterMatrixTest {
         // A change case that changes nothing tests nothing (review 21 round 3, r3-m9). The regulating terminal is not in
         // the fingerprint (the import normalises it), so it is compared here, on the sender only
         boolean terminalChanged = !Objects.equals(terminalBefore, regulatingTerminalOf(c, sender));
-        assertTrue(!c.change() || !senderChange.isEmpty() || terminalChanged,
+        // Nor is the slope of a regulation, which no steady state hypothesis holds: a change of it alone has to be
+        // refused. A regulation created or removed is compared as such, not by its slope
+        String slopeAfter = slopeOf(c, sender);
+        boolean slopeChanged = slopeBefore != null && slopeAfter != null && !slopeBefore.equals(slopeAfter);
+        assertTrue(!c.change() || !senderChange.isEmpty() || terminalChanged || slopeChanged,
                 () -> c.name() + ": the change changes nothing");
 
         Properties parameters = new Properties();
@@ -758,11 +833,12 @@ class RegulationSetterMatrixTest {
 
         Outcome outcome = outcome(c, refusals, senderChange, terminalChanged, written, sender, events, original,
                 changed, inactive);
+        assertTrue(!slopeChanged || outcome == Outcome.REFUSED, () -> c.name() + ": a slope change that is not refused");
         // A no-op changes nothing, except where a deprecated setter creates the regulation, which IIDM does not report
         // (G1): the case is then silent, or refused when the bridge reports a wrong old value (echo rule 3)
         boolean createdByABridge = senderChange.entrySet().stream()
                 .anyMatch(entry -> entry.getKey().endsWith("voltageRegulation") && "none".equals(entry.getValue()[0]));
-        assertTrue(c.change() || senderChange.isEmpty() && !terminalChanged || createdByABridge,
+        assertTrue(c.change() || senderChange.isEmpty() && !terminalChanged && !slopeChanged || createdByABridge,
                 () -> c.name() + ": a no-op that changes the sender");
         return new Observed(outcome, rule(outcome, refusal, events, terminalChanged));
     }
@@ -797,6 +873,12 @@ class RegulationSetterMatrixTest {
         Terminal terminal = regulation == null ? null : regulation.getTerminal();
         return terminal == null ? "none" : terminal.getConnectable().getId() + "/"
                 + terminal.getConnectable().getTerminals().indexOf(terminal);
+    }
+
+    /** The slope of the regulation of the case, {@code null} when it has none. */
+    private static String slopeOf(Case c, Network network) {
+        VoltageRegulation regulation = c.holder().holder().apply(network).getVoltageRegulation();
+        return regulation == null ? null : String.valueOf(regulation.getSlope());
     }
 
     /**

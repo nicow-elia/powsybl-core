@@ -304,6 +304,19 @@ class EventCompactorTest {
     }
 
     /**
+     * Rule 2: an echo that changes nothing is dropped, although it repeats no canonical change. No setter of the
+     * setter matrix reports such an echo (its rule {@code echo-2} has no row), so this is the test of the rule.
+     */
+    @Test
+    void anEchoThatChangesNothingIsDropped() {
+        List<NetworkEvent> events = List.of(update("G", "voltageRegulatorOn", true, true));
+        CompactedChanges changes = EventCompactor.compact(events, VARIANT, networkWithGenerator("G"));
+
+        assertEquals(List.of(), changes.events());
+        assertFalse(changes.hasChange("G", "voltageRegulatorOn"));
+    }
+
+    /**
      * An echo whose new value is {@code null} (the deprecated setRegulatingTerminal(null) removing a terminal) is
      * compacted like any other: the lookup of the reported values must not throw (review 21 closing, found by the
      * no-op rows of c-m11).

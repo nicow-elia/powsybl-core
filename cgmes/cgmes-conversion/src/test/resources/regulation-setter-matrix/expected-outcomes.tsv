@@ -5,6 +5,8 @@ generator regulating locally | VoltageRegulation.setRegulating | with regulation
 generator regulating locally | VoltageRegulation.setRegulating | with regulation | no-op	UNCHANGED	no-change
 generator regulating locally | VoltageRegulation.setMode | with regulation | change	IIDM_REFUSES	iidm-validation
 generator regulating locally | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED	no-change
+generator regulating locally | VoltageRegulation.setSlope | with regulation | change	REFUSED	slope-no-property
+generator regulating locally | VoltageRegulation.setSlope | with regulation | no-op	UNCHANGED	no-change
 generator regulating locally | VoltageRegulation.setTerminal | with regulation | change	REFUSED	terminal-eq
 generator regulating locally | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED	no-change
 generator regulating locally | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT	G1
@@ -53,6 +55,8 @@ generator regulating remotely | VoltageRegulation.setRegulating | with regulatio
 generator regulating remotely | VoltageRegulation.setRegulating | with regulation | no-op	UNCHANGED	no-change
 generator regulating remotely | VoltageRegulation.setMode | with regulation | change	REFUSED	mode-eq
 generator regulating remotely | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED	no-change
+generator regulating remotely | VoltageRegulation.setSlope | with regulation | change	REFUSED	slope-no-property
+generator regulating remotely | VoltageRegulation.setSlope | with regulation | no-op	UNCHANGED	no-change
 generator regulating remotely | VoltageRegulation.setTerminal | with regulation | change	REFUSED	terminal-eq
 generator regulating remotely | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED	no-change
 generator regulating remotely | removeVoltageRegulation | with regulation | change	IIDM_SILENT	G1
@@ -73,6 +77,30 @@ generator regulating remotely | Generator.setTargetQ | with regulation | change	
 generator regulating remotely | Generator.setTargetQ | with regulation | no-op	UNCHANGED	no-change
 generator regulating remotely | Generator.setRegulatingTerminal | with regulation | change	REFUSED	terminal-eq
 generator regulating remotely | Generator.setRegulatingTerminal | with regulation | no-op	UNCHANGED	no-change
+generator whose mode was changed after the import | VoltageRegulation.setTargetValue | with regulation | change	REFUSED	cgmes-mode
+generator whose mode was changed after the import | VoltageRegulation.setTargetValue | with regulation | no-op	UNCHANGED	no-change
+generator whose mode was changed after the import | VoltageRegulation.setTargetDeadband | with regulation | change	REFUSED	deadband-not-read
+generator whose mode was changed after the import | VoltageRegulation.setTargetDeadband | with regulation | no-op	UNCHANGED	no-change
+generator whose mode was changed after the import | VoltageRegulation.setRegulating | with regulation | change	REFUSED	cgmes-mode
+generator whose mode was changed after the import | VoltageRegulation.setRegulating | with regulation | no-op	UNCHANGED	no-change
+generator whose mode was changed after the import | VoltageRegulation.setMode | with regulation | change	REFUSED	mode-eq
+generator whose mode was changed after the import | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED	no-change
+generator whose mode was changed after the import | VoltageRegulation.setSlope | with regulation | change	REFUSED	slope-no-property
+generator whose mode was changed after the import | VoltageRegulation.setSlope | with regulation | no-op	UNCHANGED	no-change
+generator whose mode was changed after the import | VoltageRegulation.setTerminal | with regulation | change	REFUSED	terminal-eq
+generator whose mode was changed after the import | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED	no-change
+generator whose mode was changed after the import | removeVoltageRegulation | with regulation | change	IIDM_SILENT	G1
+generator whose mode was changed after the import | removeVoltageRegulation | with regulation | no-op	UNCHANGED	no-change
+generator whose mode was changed after the import | setLocalTargetV | with regulation | change	NOT_REPRESENTED	local-target
+generator whose mode was changed after the import | setLocalTargetV | with regulation | no-op	UNCHANGED	no-change
+generator whose mode was changed after the import | Generator.setTargetV | with regulation | change	NOT_REPRESENTED	local-target
+generator whose mode was changed after the import | Generator.setTargetV | with regulation | no-op	UNCHANGED	no-change
+generator whose mode was changed after the import | Generator.setTargetV(v, local) | with regulation | change	NOT_REPRESENTED	local-target
+generator whose mode was changed after the import | Generator.setTargetV(v, local) | with regulation | no-op	UNCHANGED	no-change
+generator whose mode was changed after the import | Generator.setTargetV(v, same local) | with regulation | change	NOT_REPRESENTED	local-target
+generator whose mode was changed after the import | Generator.setTargetV(v, same local) | with regulation | no-op	UNCHANGED	no-change
+generator whose mode was changed after the import | Generator.setRegulatingTerminal | with regulation | change	REFUSED	terminal-eq
+generator whose mode was changed after the import | Generator.setRegulatingTerminal | with regulation | no-op	UNCHANGED	no-change
 generator without a CGMES regulating control | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT	G1
 generator without a CGMES regulating control | newVoltageRegulation (not regulating) | without regulation | no-op	UNCHANGED	no-change
 generator without a CGMES regulating control | newVoltageRegulation (regulating) | without regulation | change	IIDM_REFUSES	iidm-validation
@@ -99,6 +127,8 @@ shunt compensator | VoltageRegulation.setRegulating | with regulation | change	E
 shunt compensator | VoltageRegulation.setRegulating | with regulation | no-op	UNCHANGED	no-change
 shunt compensator | VoltageRegulation.setMode | with regulation | change	IIDM_REFUSES	iidm-validation
 shunt compensator | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED	no-change
+shunt compensator | VoltageRegulation.setSlope | with regulation | change	REFUSED	slope-no-property
+shunt compensator | VoltageRegulation.setSlope | with regulation | no-op	UNCHANGED	no-change
 shunt compensator | VoltageRegulation.setTerminal | with regulation | change	REFUSED	terminal-eq
 shunt compensator | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED	no-change
 shunt compensator | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT	G1
@@ -131,6 +161,29 @@ shunt compensator | ShuntCompensator.setRegulatingTerminal | with regulation | c
 shunt compensator | ShuntCompensator.setRegulatingTerminal | with regulation | no-op	REFUSED	echo-3
 shunt compensator | ShuntCompensator.setRegulatingTerminal | without regulation | change	REFUSED	terminal-eq
 shunt compensator | ShuntCompensator.setRegulatingTerminal | without regulation | no-op	REFUSED	echo-3
+shunt compensator whose regulation was created in another variant | VoltageRegulation.setTargetDeadband | with regulation | change	REFUSED	no-mode
+shunt compensator whose regulation was created in another variant | VoltageRegulation.setTargetDeadband | with regulation | no-op	UNCHANGED	no-change
+shunt compensator whose regulation was created in another variant | VoltageRegulation.setRegulating | with regulation | change	IIDM_REFUSES	iidm-validation
+shunt compensator whose regulation was created in another variant | VoltageRegulation.setRegulating | with regulation | no-op	UNCHANGED	no-change
+shunt compensator whose regulation was created in another variant | VoltageRegulation.setMode | with regulation | change	REFUSED	mode-eq
+shunt compensator whose regulation was created in another variant | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED	no-change
+shunt compensator whose regulation was created in another variant | VoltageRegulation.setSlope | with regulation | change	REFUSED	slope-no-property
+shunt compensator whose regulation was created in another variant | VoltageRegulation.setSlope | with regulation | no-op	UNCHANGED	no-change
+shunt compensator whose regulation was created in another variant | VoltageRegulation.setTerminal | with regulation | change	IIDM_REFUSES	iidm-validation
+shunt compensator whose regulation was created in another variant | VoltageRegulation.setTerminal | with regulation | no-op	IIDM_REFUSES	iidm-validation
+shunt compensator whose regulation was created in another variant | removeVoltageRegulation | with regulation | change	IIDM_SILENT	G1
+shunt compensator whose regulation was created in another variant | removeVoltageRegulation | with regulation | no-op	UNCHANGED	no-change
+shunt compensator whose regulation was created in another variant | setLocalTargetV | with regulation | change	NOT_REPRESENTED	local-target
+shunt compensator whose regulation was created in another variant | setLocalTargetV | with regulation | no-op	UNCHANGED	no-change
+shunt compensator whose regulation was created in another variant | setLocalTargetQ | with regulation | change	IIDM_REFUSES	iidm-validation
+shunt compensator whose regulation was created in another variant | setLocalTargetQ | with regulation | no-op	IIDM_REFUSES	iidm-validation
+shunt compensator whose regulation was created in another variant | ShuntCompensator.setVoltageRegulatorOn | with regulation | change	IIDM_REFUSES	iidm-validation
+shunt compensator whose regulation was created in another variant | ShuntCompensator.setTargetV | with regulation | change	NOT_REPRESENTED	local-target
+shunt compensator whose regulation was created in another variant | ShuntCompensator.setTargetV | with regulation | no-op	UNCHANGED	no-change
+shunt compensator whose regulation was created in another variant | ShuntCompensator.setTargetDeadband | with regulation | change	REFUSED	no-mode
+shunt compensator whose regulation was created in another variant | ShuntCompensator.setTargetDeadband | with regulation | no-op	UNCHANGED	no-change
+shunt compensator whose regulation was created in another variant | ShuntCompensator.setRegulatingTerminal | with regulation | change	IIDM_REFUSES	iidm-validation
+shunt compensator whose regulation was created in another variant | ShuntCompensator.setRegulatingTerminal | with regulation | no-op	IIDM_REFUSES	iidm-validation
 equivalent shunt | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT	G1
 equivalent shunt | newVoltageRegulation (not regulating) | without regulation | no-op	UNCHANGED	no-change
 equivalent shunt | newVoltageRegulation (regulating) | without regulation | change	IIDM_REFUSES	iidm-validation
@@ -153,6 +206,8 @@ static var compensator | VoltageRegulation.setRegulating | with regulation | cha
 static var compensator | VoltageRegulation.setRegulating | with regulation | no-op	UNCHANGED	no-change
 static var compensator | VoltageRegulation.setMode | with regulation | change	REFUSED	mode-eq
 static var compensator | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED	no-change
+static var compensator | VoltageRegulation.setSlope | with regulation | change	REFUSED	slope-no-property
+static var compensator | VoltageRegulation.setSlope | with regulation | no-op	UNCHANGED	no-change
 static var compensator | VoltageRegulation.setTerminal | with regulation | change	REFUSED	terminal-eq
 static var compensator | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED	no-change
 static var compensator | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT	G1
@@ -197,6 +252,8 @@ static var compensator regulating reactive power | VoltageRegulation.setRegulati
 static var compensator regulating reactive power | VoltageRegulation.setRegulating | with regulation | no-op	UNCHANGED	no-change
 static var compensator regulating reactive power | VoltageRegulation.setMode | with regulation | change	REFUSED	mode-eq
 static var compensator regulating reactive power | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED	no-change
+static var compensator regulating reactive power | VoltageRegulation.setSlope | with regulation | change	REFUSED	slope-no-property
+static var compensator regulating reactive power | VoltageRegulation.setSlope | with regulation | no-op	UNCHANGED	no-change
 static var compensator regulating reactive power | VoltageRegulation.setTerminal | with regulation | change	REFUSED	terminal-eq
 static var compensator regulating reactive power | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED	no-change
 static var compensator regulating reactive power | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT	G1
@@ -241,6 +298,8 @@ ratio tap changer | VoltageRegulation.setRegulating | with regulation | change	E
 ratio tap changer | VoltageRegulation.setRegulating | with regulation | no-op	UNCHANGED	no-change
 ratio tap changer | VoltageRegulation.setMode | with regulation | change	REFUSED	mode-eq
 ratio tap changer | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED	no-change
+ratio tap changer | VoltageRegulation.setSlope | with regulation | change	REFUSED	slope-no-property
+ratio tap changer | VoltageRegulation.setSlope | with regulation | no-op	UNCHANGED	no-change
 ratio tap changer | VoltageRegulation.setTerminal | with regulation | change	REFUSED	terminal-eq
 ratio tap changer | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED	no-change
 ratio tap changer | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT	G1
@@ -289,12 +348,40 @@ ratio tap changer without a CGMES control | RatioTapChanger.setRegulating | with
 ratio tap changer without a CGMES control | RatioTapChanger.setRegulating | without regulation | no-op	UNCHANGED	no-change
 ratio tap changer without a CGMES control | RatioTapChanger.setRegulationTerminal | without regulation | change	REFUSED	terminal-eq
 ratio tap changer without a CGMES control | RatioTapChanger.setRegulationTerminal | without regulation | no-op	IIDM_SILENT	G1
+ratio tap changer regulating reactive power | VoltageRegulation.setTargetValue | with regulation | change	REFUSED	rtc-reactive-power
+ratio tap changer regulating reactive power | VoltageRegulation.setTargetValue | with regulation | no-op	UNCHANGED	no-change
+ratio tap changer regulating reactive power | VoltageRegulation.setTargetDeadband | with regulation | change	REFUSED	rtc-reactive-power
+ratio tap changer regulating reactive power | VoltageRegulation.setTargetDeadband | with regulation | no-op	UNCHANGED	no-change
+ratio tap changer regulating reactive power | VoltageRegulation.setRegulating | with regulation | change	REFUSED	rtc-reactive-power
+ratio tap changer regulating reactive power | VoltageRegulation.setRegulating | with regulation | no-op	UNCHANGED	no-change
+ratio tap changer regulating reactive power | VoltageRegulation.setMode | with regulation | change	REFUSED	mode-eq
+ratio tap changer regulating reactive power | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED	no-change
+ratio tap changer regulating reactive power | VoltageRegulation.setSlope | with regulation | change	REFUSED	slope-no-property
+ratio tap changer regulating reactive power | VoltageRegulation.setSlope | with regulation | no-op	UNCHANGED	no-change
+ratio tap changer regulating reactive power | VoltageRegulation.setTerminal | with regulation | change	REFUSED	terminal-eq
+ratio tap changer regulating reactive power | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED	no-change
+ratio tap changer regulating reactive power | removeVoltageRegulation | with regulation | change	IIDM_SILENT	G1
+ratio tap changer regulating reactive power | removeVoltageRegulation | with regulation | no-op	UNCHANGED	no-change
+ratio tap changer regulating reactive power | RatioTapChanger.setRegulationMode | with regulation | change	REFUSED	mode-eq
+ratio tap changer regulating reactive power | RatioTapChanger.setRegulationMode | with regulation | no-op	UNCHANGED	no-change
+ratio tap changer regulating reactive power | RatioTapChanger.setRegulationValue | with regulation | change	REFUSED	rtc-reactive-power
+ratio tap changer regulating reactive power | RatioTapChanger.setRegulationValue | with regulation | no-op	UNCHANGED	no-change
+ratio tap changer regulating reactive power | RatioTapChanger.setTargetV | with regulation | change	REFUSED	mode-eq
+ratio tap changer regulating reactive power | RatioTapChanger.setTargetV | with regulation | no-op	IIDM_REFUSES	iidm-validation
+ratio tap changer regulating reactive power | RatioTapChanger.setTargetDeadband | with regulation | change	REFUSED	rtc-reactive-power
+ratio tap changer regulating reactive power | RatioTapChanger.setTargetDeadband | with regulation | no-op	UNCHANGED	no-change
+ratio tap changer regulating reactive power | RatioTapChanger.setRegulating | with regulation | change	REFUSED	rtc-reactive-power
+ratio tap changer regulating reactive power | RatioTapChanger.setRegulating | with regulation | no-op	UNCHANGED	no-change
+ratio tap changer regulating reactive power | RatioTapChanger.setRegulationTerminal | with regulation | change	REFUSED	terminal-eq
+ratio tap changer regulating reactive power | RatioTapChanger.setRegulationTerminal | with regulation | no-op	UNCHANGED	no-change
 VSC converter station 1 | VoltageRegulation.setTargetDeadband | with regulation | change	REFUSED	deadband-not-read
 VSC converter station 1 | VoltageRegulation.setTargetDeadband | with regulation | no-op	UNCHANGED	no-change
 VSC converter station 1 | VoltageRegulation.setRegulating | with regulation | change	REFUSED	vsc-no-control-flag
 VSC converter station 1 | VoltageRegulation.setRegulating | with regulation | no-op	UNCHANGED	no-change
 VSC converter station 1 | VoltageRegulation.setMode | with regulation | change	IIDM_REFUSES	iidm-validation
 VSC converter station 1 | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED	no-change
+VSC converter station 1 | VoltageRegulation.setSlope | with regulation | change	REFUSED	slope-no-property
+VSC converter station 1 | VoltageRegulation.setSlope | with regulation | no-op	UNCHANGED	no-change
 VSC converter station 1 | VoltageRegulation.setTerminal | with regulation | change	REFUSED	own-terminal
 VSC converter station 1 | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED	no-change
 VSC converter station 1 | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT	G1
@@ -341,6 +428,8 @@ VSC converter station 2 | VoltageRegulation.setRegulating | with regulation | ch
 VSC converter station 2 | VoltageRegulation.setRegulating | with regulation | no-op	UNCHANGED	no-change
 VSC converter station 2 | VoltageRegulation.setMode | with regulation | change	IIDM_REFUSES	iidm-validation
 VSC converter station 2 | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED	no-change
+VSC converter station 2 | VoltageRegulation.setSlope | with regulation | change	REFUSED	slope-no-property
+VSC converter station 2 | VoltageRegulation.setSlope | with regulation | no-op	UNCHANGED	no-change
 VSC converter station 2 | VoltageRegulation.setTerminal | with regulation | change	REFUSED	own-terminal
 VSC converter station 2 | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED	no-change
 VSC converter station 2 | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT	G1
@@ -389,6 +478,8 @@ VSC converter station 1 with its terminal set | VoltageRegulation.setRegulating 
 VSC converter station 1 with its terminal set | VoltageRegulation.setRegulating | with regulation | no-op	UNCHANGED	no-change
 VSC converter station 1 with its terminal set | VoltageRegulation.setMode | with regulation | change	EXPORTED	steady-state
 VSC converter station 1 with its terminal set | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED	no-change
+VSC converter station 1 with its terminal set | VoltageRegulation.setSlope | with regulation | change	REFUSED	slope-no-property
+VSC converter station 1 with its terminal set | VoltageRegulation.setSlope | with regulation | no-op	UNCHANGED	no-change
 VSC converter station 1 with its terminal set | VoltageRegulation.setTerminal | with regulation | change	REFUSED	own-terminal
 VSC converter station 1 with its terminal set | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED	no-change
 VSC converter station 1 with its terminal set | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT	G1
@@ -437,6 +528,8 @@ VSC converter station 2 with its terminal set | VoltageRegulation.setRegulating 
 VSC converter station 2 with its terminal set | VoltageRegulation.setRegulating | with regulation | no-op	UNCHANGED	no-change
 VSC converter station 2 with its terminal set | VoltageRegulation.setMode | with regulation | change	EXPORTED	steady-state
 VSC converter station 2 with its terminal set | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED	no-change
+VSC converter station 2 with its terminal set | VoltageRegulation.setSlope | with regulation | change	REFUSED	slope-no-property
+VSC converter station 2 with its terminal set | VoltageRegulation.setSlope | with regulation | no-op	UNCHANGED	no-change
 VSC converter station 2 with its terminal set | VoltageRegulation.setTerminal | with regulation | change	REFUSED	own-terminal
 VSC converter station 2 with its terminal set | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED	no-change
 VSC converter station 2 with its terminal set | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT	G1
@@ -485,6 +578,8 @@ VSC converter station 2 regulating reactive power | VoltageRegulation.setRegulat
 VSC converter station 2 regulating reactive power | VoltageRegulation.setRegulating | with regulation | no-op	UNCHANGED	no-change
 VSC converter station 2 regulating reactive power | VoltageRegulation.setMode | with regulation | change	EXPORTED	steady-state
 VSC converter station 2 regulating reactive power | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED	no-change
+VSC converter station 2 regulating reactive power | VoltageRegulation.setSlope | with regulation | change	REFUSED	slope-no-property
+VSC converter station 2 regulating reactive power | VoltageRegulation.setSlope | with regulation | no-op	UNCHANGED	no-change
 VSC converter station 2 regulating reactive power | VoltageRegulation.setTerminal | with regulation | change	REFUSED	own-terminal
 VSC converter station 2 regulating reactive power | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED	no-change
 VSC converter station 2 regulating reactive power | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT	G1
@@ -531,6 +626,8 @@ detailed voltage source converter | VoltageRegulation.setRegulating | with regul
 detailed voltage source converter | VoltageRegulation.setRegulating | with regulation | no-op	UNCHANGED	no-change
 detailed voltage source converter | VoltageRegulation.setMode | with regulation | change	EXPORTED	steady-state
 detailed voltage source converter | VoltageRegulation.setMode | with regulation | no-op	UNCHANGED	no-change
+detailed voltage source converter | VoltageRegulation.setSlope | with regulation | change	REFUSED	slope-no-property
+detailed voltage source converter | VoltageRegulation.setSlope | with regulation | no-op	UNCHANGED	no-change
 detailed voltage source converter | VoltageRegulation.setTerminal | with regulation | change	REFUSED	terminal-eq
 detailed voltage source converter | VoltageRegulation.setTerminal | with regulation | no-op	UNCHANGED	no-change
 detailed voltage source converter | newVoltageRegulation (not regulating) | without regulation | change	IIDM_SILENT	G1
