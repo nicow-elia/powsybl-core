@@ -228,17 +228,12 @@ class CgmesChangeRegulatingControls {
      * holder that has a VoltageRegulation (an EquivalentInjection and an EquivalentShunt have none).
      */
     private Optional<String> regulatingControlId(Identifiable<?> identifiable) {
-        if (scope == Scope.FULL_MODEL) {
-            // A full model names a control for every holder with a VoltageRegulation, as the full export writes it;
-            // an EquivalentInjection carries its regulation itself and an EquivalentShunt has none
-            boolean named = identifiable instanceof VoltageRegulationHolder<?> holder && holder.getVoltageRegulation() != null
+        boolean named = identifiable.hasProperty(PROPERTY_REGULATING_CONTROL)
+                || scope == Scope.FULL_MODEL && identifiable instanceof VoltageRegulationHolder<?> holder
+                    && holder.getVoltageRegulation() != null
                     && !CgmesNames.EQUIVALENT_INJECTION.equals(identifiable.getProperty(PROPERTY_CGMES_ORIGINAL_CLASS))
                     && !Boolean.parseBoolean(identifiable.getProperty(PROPERTY_IS_EQUIVALENT_SHUNT));
-            return named
-                    ? Optional.of(context.getNamingStrategy().getCgmesIdFromProperty(identifiable, PROPERTY_REGULATING_CONTROL))
-                    : Optional.empty();
-        }
-        return identifiable.hasProperty(PROPERTY_REGULATING_CONTROL)
+        return named
                 ? Optional.of(context.getNamingStrategy().getCgmesIdFromProperty(identifiable, PROPERTY_REGULATING_CONTROL))
                 : Optional.empty();
     }
