@@ -219,7 +219,8 @@ class ExportMappingEquivalenceTest {
     /** The classes of the block of a voltage regulation holder in the steady state hypothesis. */
     private static final Set<String> HOLDER_CLASSES = Set.of(CgmesNames.SYNCHRONOUS_MACHINE,
             CgmesNames.EXTERNAL_NETWORK_INJECTION, "LinearShuntCompensator", "NonlinearShuntCompensator",
-            CgmesNames.STATIC_VAR_COMPENSATOR, CgmesNames.VS_CONVERTER);
+            CgmesNames.STATIC_VAR_COMPENSATOR, CgmesNames.VS_CONVERTER, "GeneratingUnit", "ThermalGeneratingUnit",
+            "HydroGeneratingUnit", "WindGeneratingUnit", "SolarGeneratingUnit", "NuclearGeneratingUnit");
 
     private static final Set<String> TAP_CHANGER_CLASSES = Set.of(CgmesNames.RATIO_TAP_CHANGER,
             CgmesNames.PHASE_TAP_CHANGER_TABULAR, "PhaseTapChangerSymmetrical", "PhaseTapChangerAsymmetrical",
@@ -280,7 +281,8 @@ class ExportMappingEquivalenceTest {
                 + " CGMES update reads the RegulatingControl: the shared mapping refuses the control (rule cgmes-mode,"
                 + " the receiver would read the target as the other quantity), the full export writes it from the IIDM"
                 + " mode (docs: Partial SSH export / Limitations)"),
-        new OnlyInFull("BRANCH_CLASS_SWITCH_IMPEDANCE", BRANCH_CLASSES, Set.of(),
+        new OnlyInFull("BRANCH_CLASS_SWITCH_IMPEDANCE", BRANCH_CLASSES,
+            Set.of("ACLineSegment.r", "ACLineSegment.x", "ACLineSegment.gch", "ACLineSegment.bch"),
             row -> row.facts().branchSwitches().contains(row.key().subject()) && row.fullNumber() == 0,
             "the full equipment export writes a switch the import created from a CGMES branch class as that class, with"
                 + " a zero impedance; IIDM holds no impedance for a switch, so the change mapping has none to write"),
@@ -1641,7 +1643,13 @@ class ExportMappingEquivalenceTest {
             Map<String, String> holders = new HashMap<>();
             for (Generator generator : network.getGenerators()) {
                 if (generator.getVoltageRegulation() == null) {
-                    holders.put(id(naming.getCgmesId(generator), context), id(naming.getCgmesId(generator), context));
+                    String subject = id(naming.getCgmesId(generator), context);
+                    holders.put(subject, subject);
+                    // The GeneratingUnit of the machine is refused with it
+                    if (generator.hasProperty(Conversion.PROPERTY_GENERATING_UNIT)) {
+                        holders.put(id(naming.getCgmesIdFromProperty(generator, Conversion.PROPERTY_GENERATING_UNIT),
+                                context), subject);
+                    }
                 }
             }
             for (ShuntCompensator shunt : network.getShuntCompensators()) {

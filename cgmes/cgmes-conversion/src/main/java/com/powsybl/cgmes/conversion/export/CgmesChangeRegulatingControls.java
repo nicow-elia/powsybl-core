@@ -10,7 +10,9 @@ package com.powsybl.cgmes.conversion.export;
 import com.powsybl.cgmes.conversion.RegulatingControlMapping;
 import com.powsybl.cgmes.conversion.export.SteadyStateHypothesisExport.RegulatingControlType;
 import com.powsybl.cgmes.conversion.export.SteadyStateHypothesisExport.RegulatingControlView;
+import com.powsybl.cgmes.conversion.naming.CgmesObjectReference.Part;
 import com.powsybl.cgmes.extensions.CgmesTapChanger;
+import com.powsybl.cgmes.model.CgmesNames;
 import com.powsybl.commons.util.Result;
 import com.powsybl.iidm.network.Connectable;
 import com.powsybl.iidm.network.Generator;
@@ -24,6 +26,7 @@ import com.powsybl.iidm.network.TapChanger;
 import com.powsybl.iidm.network.ThreeWindingsTransformer;
 import com.powsybl.iidm.network.TwoWindingsTransformer;
 import com.powsybl.iidm.network.regulation.RegulationMode;
+import com.powsybl.iidm.network.regulation.VoltageRegulationHolder;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -37,6 +40,8 @@ import static com.powsybl.cgmes.conversion.Conversion.ALIAS_PHASE_TAP_CHANGER1;
 import static com.powsybl.cgmes.conversion.Conversion.ALIAS_PHASE_TAP_CHANGER2;
 import static com.powsybl.cgmes.conversion.Conversion.ALIAS_RATIO_TAP_CHANGER1;
 import static com.powsybl.cgmes.conversion.Conversion.ALIAS_RATIO_TAP_CHANGER2;
+import static com.powsybl.cgmes.conversion.Conversion.PROPERTY_CGMES_ORIGINAL_CLASS;
+import static com.powsybl.cgmes.conversion.Conversion.PROPERTY_IS_EQUIVALENT_SHUNT;
 import static com.powsybl.cgmes.conversion.Conversion.PROPERTY_MODE;
 import static com.powsybl.cgmes.conversion.Conversion.PROPERTY_REGULATING_CONTROL;
 import static com.powsybl.cgmes.conversion.elements.transformers.AbstractTransformerConversion.getCgmesTapChanger;
@@ -67,13 +72,20 @@ class CgmesChangeRegulatingControls {
 
     private final Network network;
     private final CgmesExportContext context;
+    /** Which controls are named (a full model names the ones the import did not record) and which users refused. */
+    private final Scope scope;
 
     /** The users of every RegulatingControl of the network, by control identifier. Built on first use. */
     private Map<String, List<User>> usersByControlId;
 
     CgmesChangeRegulatingControls(Network network, CgmesExportContext context) {
+        this(network, context, Scope.CHANGES);
+    }
+
+    CgmesChangeRegulatingControls(Network network, CgmesExportContext context, Scope scope) {
         this.network = network;
         this.context = context;
+        this.scope = scope;
     }
 
     /**
@@ -88,7 +100,7 @@ class CgmesChangeRegulatingControls {
         if (users.isEmpty()) {
             return failure("no equipment of the network regulates through CGMES regulating control " + regulatingControlId);
         }
-        if (tapChangersDisagree(users, state)) {
+        if (scope.honours(Refusal.TAP_CHANGERS_DISAGREE) && tapChangersDisagree(users, state)) {
             return failure(Refusal.TAP_CHANGERS_DISAGREE.message("tap changers sharing CGMES tap changer control "
                     + regulatingControlId + " do not agree on whether they regulate, and the CGMES update gives them"
                     + " all the state of the shared control."));
@@ -98,13 +110,18 @@ class CgmesChangeRegulatingControls {
         for (User user : users) {
             switch (user.view().apply(state)) {
                 case Result.Success(RegulatingControlView view) -> views.add(view);
-                // One user the control cannot describe makes the whole description wrong, not just its own part
+                // One user the control cannot describe makes the whole description of a change wrong, not just its
+                // own part; a full model writes the control from the users it can describe
                 case Result.Failure(String reason) -> {
-                    return failure(reason);
+                    if (scope.honours(Refusal.UNDESCRIBED_USER)) {
+                        return failure(reason);
+                    }
                 }
             }
         }
-        return success(write(SteadyStateHypothesisExport.combineRegulatingControlViews(views)));
+        // A control none of whose users can be described is left out of a full model
+        return views.isEmpty() ? success(new CgmesPropertyBuffer())
+                : success(write(SteadyStateHypothesisExport.combineRegulatingControlViews(views)));
     }
 
     /**
@@ -198,7 +215,7 @@ class CgmesChangeRegulatingControls {
         Predicate<IidmStateView> regulatesIn = tapChanger instanceof RatioTapChanger
                 ? ref.regulation()::isRegulating
                 : state -> ref.getBoolean(state, CgmesChangeTranslator.REGULATING_SUFFIX, tapChanger::isRegulating);
-        controlId(transformer, aliasType).ifPresent(id -> add(index, id, new User(regulatesIn, true,
+        indexedControlId(transformer, aliasType, tapChanger, end).ifPresent(id -> add(index, id, new User(regulatesIn, true,
                 state -> tapChangerView(transformer, end, ref, id, state))));
     }
 
@@ -206,10 +223,33 @@ class CgmesChangeRegulatingControls {
         index.computeIfAbsent(controlId, id -> new ArrayList<>()).add(user);
     }
 
+    /**
+     * The control of a holder: the one the import recorded, or in a full model the one the full export names for a
+     * holder that has a VoltageRegulation (an EquivalentInjection and an EquivalentShunt have none).
+     */
     private Optional<String> regulatingControlId(Identifiable<?> identifiable) {
-        return identifiable.hasProperty(PROPERTY_REGULATING_CONTROL)
+        boolean named = identifiable.hasProperty(PROPERTY_REGULATING_CONTROL)
+                || scope == Scope.FULL_MODEL && identifiable instanceof VoltageRegulationHolder<?> holder
+                    && holder.getVoltageRegulation() != null
+                    && !CgmesNames.EQUIVALENT_INJECTION.equals(identifiable.getProperty(PROPERTY_CGMES_ORIGINAL_CLASS))
+                    && !Boolean.parseBoolean(identifiable.getProperty(PROPERTY_IS_EQUIVALENT_SHUNT));
+        return named
                 ? Optional.of(context.getNamingStrategy().getCgmesIdFromProperty(identifiable, PROPERTY_REGULATING_CONTROL))
                 : Optional.empty();
+    }
+
+    /**
+     * The TapChangerControl of a tap changer in the index: the one the import recorded, or in a full model the one the
+     * full export names, under a generated identifier when the import recorded none.
+     */
+    private <C extends Connectable<C>> Optional<String> indexedControlId(C transformer, String aliasType,
+                                                                          TapChanger<?, ?, ?, ?> tapChanger, String end) {
+        if (scope == Scope.CHANGES) {
+            return controlId(transformer, aliasType);
+        }
+        Part part = tapChanger instanceof PhaseTapChanger ? Part.PHASE_TAP_CHANGER : Part.RATIO_TAP_CHANGER;
+        return Optional.of(CgmesExportUtil.getTapChangerControlId(transformer, part, end.isEmpty() ? 1 : Integer.parseInt(end),
+                transformer.getAliasFromType(aliasType).orElse(null), context));
     }
 
     /**
@@ -246,7 +286,8 @@ class CgmesChangeRegulatingControls {
             return failure(Refusal.NO_MODE.message("the voltage regulation of " + owner.getType() + " "
                     + owner.getId() + " has no mode in this variant."));
         }
-        if (regulation.holder() instanceof Generator generator && !agreesWithCgmesMode(generator, mode)) {
+        if (regulation.holder() instanceof Generator generator && scope.honours(Refusal.CGMES_MODE)
+                && !agreesWithCgmesMode(generator, mode)) {
             return failure(Refusal.CGMES_MODE.message("the voltage regulation of generator " + generator.getId()
                     + " is in mode " + mode + ", but the CGMES update reads its RegulatingControl in the mode "
                     + generator.getProperty(PROPERTY_MODE) + " recorded at import."));
