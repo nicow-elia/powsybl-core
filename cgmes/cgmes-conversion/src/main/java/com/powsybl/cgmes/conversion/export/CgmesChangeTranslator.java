@@ -1908,21 +1908,73 @@ class CgmesChangeTranslator {
     }
 
     /**
-     * The block of a converter station of the simplified DC model: the four quantities of its line and its control
-     * modes, and for a voltage source converter its targets; or why a converter of its line cannot be described.
+     * The block of a converter station of the simplified DC model: the four quantities of its line, and its control
+     * modes, for a voltage source converter with its targets; or why a converter of its line cannot be described.
+     * The properties are in the order of the CIM class, as the full export writes them; a full model appends the
+     * constants of the class IIDM holds no attribute for.
      */
     Result<CgmesPropertyBuffer, String> describeConverterStation(HvdcConverterStation<?> converter) {
-        if (converter.getHvdcLine() == null) {
+        HvdcLine hvdcLine = converter.getHvdcLine();
+        if (hvdcLine == null) {
             return failure("converter " + converter.getId() + " belongs to no HVDC line, which holds its power");
         }
+        SteadyStateHypothesisExport.ConverterState converterState =
+                SteadyStateHypothesisExport.computeConverterState(converter, state);
+        boolean rectifier = CgmesExportUtil.isConverterStationRectifier(converter, state);
         if (converter instanceof VscConverterStation vsc) {
-            return vscStationUpdates(vsc, null).map(targets -> merge(converterActivePowerUpdates(vsc), targets));
+            Optional<String> unregulated = unregulatedConverterOf(hvdcLine);
+            if (unregulated.isPresent()) {
+                return failure(unregulated.get());
+            }
+            RegulationRef regulation = RegulationRef.of(vsc);
+            if (regulation.regulation() != null && regulation.mode(state) == null) {
+                return failure(Refusal.NO_MODE.message("the voltage regulation of converter " + vsc.getId()
+                        + " has no mode in this variant, so qPccControl cannot be written."));
+            }
+            return success(vsConverterUpdate(cgmesId(vsc), converterState,
+                    SteadyStateHypothesisExport.vscTargetQpcc(regulation, context, state),
+                    SteadyStateHypothesisExport.vscTargetUpcc(regulation, state), rectifier ? "pPcc" : "udc",
+                    SteadyStateHypothesisExport.vscQpccControl(regulation, state)));
         }
-        return success(converterActivePowerUpdates(converter));
+        CgmesPropertyBuffer.ObjectUpdate update = converterStateUpdate(CgmesNames.CS_CONVERTER, cgmesId(converter), converterState);
+        if (scope == Scope.FULL_MODEL) {
+            // Constants of the CIM class, which IIDM holds no attribute for and a change never touches
+            update.value("CsConverter.targetAlpha", 0.0).value("CsConverter.targetGamma", 0.0).value("CsConverter.targetIdc", 0.0);
+        }
+        return success(update.enumValue("CsConverter.operatingMode", "CsOperatingModeKind", rectifier ? "rectifier" : "inverter")
+                .enumValue("CsConverter.pPccControl", "CsPpccControlKind", rectifier ? "activePower" : "dcVoltage")
+                .updates());
     }
 
-    /** The block of a converter of the detailed DC model, or why it cannot be described. */
+    /** A VsConverter in the order of its CIM class; a full model appends the constants IIDM holds no attribute for. */
+    private CgmesPropertyBuffer vsConverterUpdate(String id, SteadyStateHypothesisExport.ConverterSetpoints setpoints,
+                                                  double targetQpcc, double targetUpcc, String pPccControl, String qPccControl) {
+        CgmesPropertyBuffer.ObjectUpdate update = converterStateUpdate(CgmesNames.VS_CONVERTER, id, setpoints);
+        if (scope == Scope.FULL_MODEL) {
+            update.value("VsConverter.droop", 0.0).value("VsConverter.droopCompensation", 0.0).value("VsConverter.qShare", 0.0);
+        }
+        return update.value("VsConverter.targetQpcc", targetQpcc)
+                .value("VsConverter.targetUpcc", targetUpcc)
+                .enumValue("VsConverter.pPccControl", "VsPpccControlKind", pPccControl)
+                .enumValue("VsConverter.qPccControl", "VsQpccControlKind", qPccControl)
+                .updates();
+    }
+
+    /**
+     * The block of a converter of the detailed DC model, or why it cannot be described. A voltage source converter is
+     * written in the order of its CIM class, as the full export writes it.
+     */
     Result<CgmesPropertyBuffer, String> describeAcDcConverter(AcDcConverter<?> converter) {
+        if (converter instanceof VoltageSourceConverter vsc) {
+            Optional<String> unregulated = unregulatedConverter(vsc);
+            if (unregulated.isPresent()) {
+                return failure(unregulated.get());
+            }
+            SteadyStateHypothesisExport.AcDcConverterState converterState =
+                    SteadyStateHypothesisExport.computeAcDcConverterState(vsc, state);
+            return success(vsConverterUpdate(cgmesId(vsc), converterState, converterState.targetQpcc(),
+                    converterState.targetUpcc(), converterState.pPccControl(), converterState.operatingModeOrQpccControl()));
+        }
         return acDcConverterUpdates(converter, null);
     }
 
