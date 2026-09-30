@@ -44,7 +44,8 @@ import static com.powsybl.cgmes.model.CgmesNamespace.RDF_NAMESPACE;
  */
 class CgmesPropertyBuffer {
 
-    private final Map<ObjectKey, ObjectUpdate> updatesByObject = new LinkedHashMap<>();
+    // Most buffers describe one object: a small table, which grows as a merged buffer grows
+    private final Map<ObjectKey, ObjectUpdate> updatesByObject = new LinkedHashMap<>(4);
 
     /** What identifies a described CGMES object: the profile the description belongs to and the object itself. */
     private record ObjectKey(CgmesSubset subset, String masterResourceId) {

@@ -107,15 +107,13 @@ class CgmesChangeRegulatingControls {
 
         List<RegulatingControlView> views = new ArrayList<>(users.size());
         for (User user : users) {
-            switch (user.view().apply(state)) {
-                case Result.Success(RegulatingControlView view) -> views.add(view);
+            Result<RegulatingControlView, String> view = user.view().apply(state);
+            if (view instanceof Result.Success<RegulatingControlView, String> success) {
+                views.add(success.value());
+            } else if (scope.honours(Refusal.UNDESCRIBED_USER)) {
                 // One user the control cannot describe makes the whole description of a change wrong, not just its
                 // own part; a full model writes the control from the users it can describe
-                case Result.Failure(String reason) -> {
-                    if (scope.honours(Refusal.UNDESCRIBED_USER)) {
-                        return failure(reason);
-                    }
-                }
+                return failure(((Result.Failure<RegulatingControlView, String>) view).reason());
             }
         }
         // A control none of whose users can be described is left out of a full model
