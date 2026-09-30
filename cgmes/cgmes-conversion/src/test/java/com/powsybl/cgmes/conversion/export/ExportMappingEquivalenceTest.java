@@ -267,12 +267,6 @@ class ExportMappingEquivalenceTest {
             row -> row.facts().generatedEquivalentInjections().contains(row.key().subject()),
             "the boundary line carries no CGMES.EquivalentInjection, so the full export writes one under a generated"
                 + " identifier; the shared mapping only describes objects the receiver already holds"),
-        new OnlyInFull("UNUSABLE_TARGET_OMITTED", Set.of(CgmesNames.EQUIVALENT_INJECTION),
-            Set.of("EquivalentInjection.regulationTarget"),
-            row -> row.fullNumber() == 0 && row.facts().expectedOmissions().contains(row.key()),
-            "the shared mapping writes a regulation target only when it is a usable voltage (> 0,"
-                + " CgmesChangeTranslator.equivalentInjectionBlock); the full export writes 0 for none or NaN. Only"
-                + " where the IIDM target really is not a usable voltage"),
         new OnlyInFull("CGMES_MODE_MISMATCH", CGMES_MODE_CLASSES, Set.of(),
             row -> row.facts().cgmesModeMismatchControls().containsKey(row.key().subject())
                 && row.facts().refusedFor(row.facts().cgmesModeMismatchControls().get(row.key().subject()),
@@ -1183,8 +1177,6 @@ class ExportMappingEquivalenceTest {
      * @param expectedShared                the value the shared mapping has to write where it deliberately differs from
      *                                      the full export, derived here from the IIDM objects as the import reads the
      *                                      property back
-     * @param expectedOmissions             the properties the shared mapping has to leave out, because the IIDM value is
-     *                                      not one it writes (an unusable voltage target, a setpoint that is not finite)
      * @param seam                          the value of every property of {@link #SEAM_PROPERTIES} both sides have to
      *                                      write, derived from the IIDM objects without the seams
      */
@@ -1197,7 +1189,7 @@ class ExportMappingEquivalenceTest {
                          Set<String> fictitiousInjections, Set<String> hiddenTapChangers,
                          Set<String> currentLimiterLimits,
                          Map<String, VoltageLimitRef> voltageLimits, Map<String, List<String>> refusals,
-                         Set<String> refusedSlots, Map<Key, String> expectedShared, Set<Key> expectedOmissions,
+                         Set<String> refusedSlots, Map<Key, String> expectedShared,
                          Map<Key, String> seam) {
 
         record VoltageLimitRef(String voltageLevelId, boolean high) {
@@ -1238,28 +1230,11 @@ class ExportMappingEquivalenceTest {
         }
 
         /**
-         * The values the shared mapping has to write where it deliberately differs from the full export, and the
-         * properties it has to leave out, derived from the IIDM objects independently of the mapping.
+         * The values the shared mapping has to write where it deliberately differs from the full export, derived from
+         * the IIDM objects independently of the mapping.
          */
-        private static void expectations(Network network, CgmesExportContext context, Map<Key, String> expected,
-                                         Set<Key> omissions) {
+        private static void expectations(Network network, CgmesExportContext context, Map<Key, String> expected) {
             NamingStrategy naming = context.getNamingStrategy();
-            for (BoundaryLine boundaryLine : network.getBoundaryLines(BoundaryLineFilter.ALL)) {
-                if (!boundaryLine.hasProperty(Conversion.PROPERTY_EQUIVALENT_INJECTION)) {
-                    continue;
-                }
-                String injection = id(naming.getCgmesIdFromProperty(boundaryLine, Conversion.PROPERTY_EQUIVALENT_INJECTION), context);
-                BoundaryLine.Generation generation = boundaryLine.getGeneration();
-                if (generation == null || !(generation.getTargetV() > 0)) {
-                    omissions.add(new Key(injection, "EquivalentInjection.regulationTarget"));
-                }
-            }
-            for (Generator generator : network.getGenerators()) {
-                if (CgmesNames.EQUIVALENT_INJECTION.equals(generator.getProperty(Conversion.PROPERTY_CGMES_ORIGINAL_CLASS))
-                        && !(generator.getLocalTargetV() > 0)) {
-                    omissions.add(new Key(id(naming.getCgmesId(generator), context), "EquivalentInjection.regulationTarget"));
-                }
-            }
             // The import reads the power factor of a line commutated converter back as |p| / hypot(p, q), and the
             // active power as the setpoint of a converter controlling it
             for (LineCommutatedConverter lcc : network.getLineCommutatedConverters()) {
@@ -1351,8 +1326,7 @@ class ExportMappingEquivalenceTest {
                         voltageLimits.put(id(naming.getCgmesId(stored), context), new VoltageLimitRef(voltageLevelId, false)));
             }
             Map<Key, String> expectedShared = new HashMap<>();
-            Set<Key> expectedOmissions = new HashSet<>();
-            expectations(network, context, expectedShared, expectedOmissions);
+            expectations(network, context, expectedShared);
             Map<String, List<String>> refusals = new HashMap<>();
             shared.refusals().forEach((iidmId, reasons) ->
                     refusals.put(id(naming.getCgmesId(network.getIdentifiable(iidmId)), context), reasons));
@@ -1362,7 +1336,7 @@ class ExportMappingEquivalenceTest {
                     unregulatedConverters(network, context), reactivePowerTapChangerControls(network, context),
                     batteries(network, context), fictitiousInjections(network, context), hiddenTapChangers(network, context),
                     currentLimiterLimits, voltageLimits, refusals, new HashSet<>(),
-                    expectedShared, expectedOmissions, seamExpectations(network, context));
+                    expectedShared, seamExpectations(network, context));
         }
 
         /**

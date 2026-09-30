@@ -729,8 +729,7 @@ class CgmesChangeTranslator {
     }
 
     /**
-     * The EquivalentInjection block: powers in the load convention, the regulation status and, when it is a usable
-     * voltage, the regulation target.
+     * The EquivalentInjection block: powers in the load convention, the regulation status and the regulation target.
      */
     private static CgmesPropertyBuffer equivalentInjectionBlock(String id, double p, double q, boolean regulationOn,
                                                                 double targetV) {
@@ -738,10 +737,9 @@ class CgmesChangeTranslator {
                 .value("EquivalentInjection.p", p)
                 .value("EquivalentInjection.q", q)
                 .value("EquivalentInjection.regulationStatus", regulationOn);
-        if (targetV > 0) {
-            update.value("EquivalentInjection.regulationTarget", targetV);
-        }
-        return update.updates();
+        // Always written, a target that is not a number as 0, as the full export writes it: left out, the receiver
+        // would keep a target the sender no longer has
+        return update.value("EquivalentInjection.regulationTarget", targetV).updates();
     }
 
     /** Zero for an undefined value, which is what the CGMES import writes back for one. */
@@ -833,9 +831,9 @@ class CgmesChangeTranslator {
      * The block describing an EquivalentInjection, which carries its own regulation instead of pointing at a
      * RegulatingControl.
      *
-     * <p>The regulation target is only written when it is a usable voltage: the CGMES update turns the regulation
-     * off when the target is not, and an EquivalentInjection that the equipment model gives no regulation
-     * capability can never regulate on the receiving side whatever the file says.</p>
+     * <p>The regulation target is always written, one that is not a number as {@code 0}; the CGMES update turns the
+     * regulation off when the target is not a usable voltage. An EquivalentInjection that the equipment model gives
+     * no regulation capability can never regulate on the receiving side whatever the file says.</p>
      */
     private Result<CgmesPropertyBuffer, String> equivalentInjectionUpdates(Generator generator) {
         RegulationRef regulation = RegulationRef.of(generator);

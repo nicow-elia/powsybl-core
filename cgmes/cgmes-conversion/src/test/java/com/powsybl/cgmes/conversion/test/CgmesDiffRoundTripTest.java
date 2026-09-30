@@ -77,6 +77,9 @@ class CgmesDiffRoundTripTest {
             "StaticVarCompensator-Q.localTargetV",
             "StaticVarCompensator-Q.regulatingTargetV",
             "CSC_1_1.targetVdc",
+            // Every SSH export writes a regulation target of an EquivalentInjection that is not a number as 0, as the
+            // full export always did, and the importer reads 0: the sender's NaN arrives as 0 (owner decision O4)
+            "EquivalentInjection.localTargetV",
             // A detailed converter that changes to DC voltage control has cim:ACDCConverter.targetPpcc = 0, and the
             // importer turns a converter that does not control its active power into one with an undefined target
             "CSC_1_1.targetP",
