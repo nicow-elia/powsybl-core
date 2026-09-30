@@ -10,20 +10,26 @@ package com.powsybl.cgmes.conversion.export;
 import com.powsybl.cgmes.conversion.Conversion;
 import com.powsybl.cgmes.conversion.elements.OperationalLimitConversion;
 import com.powsybl.cgmes.conversion.export.PartialSshExport.UnsupportedChangeBehavior;
+import com.powsybl.cgmes.conversion.naming.CgmesObjectReference.Part;
+import com.powsybl.cgmes.conversion.naming.NamingStrategy;
 import com.powsybl.cgmes.extensions.CimCharacteristics;
 import com.powsybl.cgmes.model.CgmesNames;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.PowsyblException;
 import com.powsybl.commons.util.Result;
 import com.powsybl.iidm.network.AcDcConverter;
+import com.powsybl.iidm.network.Battery;
 import com.powsybl.iidm.network.BoundaryLine;
 import com.powsybl.iidm.network.Branch;
+import com.powsybl.iidm.network.Bus;
 import com.powsybl.iidm.network.Connectable;
 import com.powsybl.iidm.network.DcSwitch;
 import com.powsybl.iidm.network.Generator;
 import com.powsybl.iidm.network.HvdcConverterStation;
 import com.powsybl.iidm.network.HvdcLine;
 import com.powsybl.iidm.network.Identifiable;
+import com.powsybl.iidm.network.IdentifiableType;
+import com.powsybl.iidm.network.Injection;
 import com.powsybl.iidm.network.LccConverterStation;
 import com.powsybl.iidm.network.LimitType;
 import com.powsybl.iidm.network.Line;
@@ -34,12 +40,14 @@ import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.OperationalLimitsGroup;
 import com.powsybl.iidm.network.PhaseTapChanger;
 import com.powsybl.iidm.network.RatioTapChanger;
+import com.powsybl.iidm.network.ReactiveLimitsHolder;
 import com.powsybl.iidm.network.ShuntCompensator;
 import com.powsybl.iidm.network.StaticVarCompensator;
 import com.powsybl.iidm.network.Switch;
 import com.powsybl.iidm.network.TapChanger;
 import com.powsybl.iidm.network.Terminal;
 import com.powsybl.iidm.network.ThreeWindingsTransformer;
+import com.powsybl.iidm.network.TopologyKind;
 import com.powsybl.iidm.network.TwoWindingsTransformer;
 import com.powsybl.iidm.network.VoltageLevel;
 import com.powsybl.iidm.network.VoltageSourceConverter;
@@ -86,6 +94,8 @@ import static com.powsybl.cgmes.conversion.Conversion.PROPERTY_REGULATING_CONTRO
 import static com.powsybl.cgmes.conversion.Conversion.PROPERTY_REGULATION_CAPABILITY;
 import static com.powsybl.cgmes.conversion.export.CgmesPropertyBuffer.merge;
 import static com.powsybl.cgmes.conversion.export.CgmesPropertyBuffer.newUpdates;
+import static com.powsybl.cgmes.conversion.naming.CgmesObjectReference.ref;
+import static com.powsybl.cgmes.conversion.naming.CgmesObjectReference.refTyped;
 import static com.powsybl.commons.util.Result.failure;
 import static com.powsybl.commons.util.Result.success;
 
@@ -787,15 +797,28 @@ class CgmesChangeTranslator {
     }
 
     private CgmesPropertyBuffer synchronousMachineUpdates(Generator generator) {
+        return synchronousMachineBlock(generator, generatorControlEnabled(generator),
+                state.getDouble(generator, TARGET_P, generator::getTargetP), RegulationRef.of(generator).localTargetQ(state),
+                referencePriority(generator), generator.getMinP(), generator.getMaxP());
+    }
+
+    /**
+     * The block of a CGMES SynchronousMachine, which a generator and a battery are written as: the control flag, the
+     * powers, the reference priority and the operating mode, which the CGMES update reads as one group.
+     *
+     * @param targetP the active power target, in the generator convention of IIDM
+     * @param targetQ the reactive power target, in the generator convention of IIDM
+     */
+    private <I extends ReactiveLimitsHolder & Injection<I>> CgmesPropertyBuffer synchronousMachineBlock(
+            I machine, boolean controlEnabled, double targetP, double targetQ, int referencePriority, double minP, double maxP) {
         // Sign convention: CGMES uses the load convention for machines, IIDM the generator convention.
-        double targetP = state.getDouble(generator, TARGET_P, generator::getTargetP);
-        return newUpdates(CgmesNames.SYNCHRONOUS_MACHINE, cgmesId(generator))
-                .value(REGULATING_COND_EQ_CONTROL_ENABLED, generatorControlEnabled(generator))
+        return newUpdates(CgmesNames.SYNCHRONOUS_MACHINE, cgmesId(machine))
+                .value(REGULATING_COND_EQ_CONTROL_ENABLED, controlEnabled)
                 .value(ROTATING_MACHINE_P, -targetP)
-                .value(ROTATING_MACHINE_Q, -RegulationRef.of(generator).localTargetQ(state))
-                .value("SynchronousMachine.referencePriority", referencePriority(generator))
+                .value(ROTATING_MACHINE_Q, -targetQ)
+                .value("SynchronousMachine.referencePriority", referencePriority)
                 .enumValue("SynchronousMachine.operatingMode", "SynchronousMachineOperatingMode",
-                        SteadyStateHypothesisExport.obtainOperatingMode(generator, generator.getMinP(), generator.getMaxP(), targetP, state))
+                        SteadyStateHypothesisExport.obtainOperatingMode(machine, minP, maxP, targetP, state))
                 .updates();
     }
 
@@ -880,23 +903,7 @@ class CgmesChangeTranslator {
         if (!(identifiable instanceof Generator generator)) {
             return failure(identifiable.getType() + " " + identifiable.getId() + " has no CGMES GeneratingUnit");
         }
-        if (!CgmesNames.SYNCHRONOUS_MACHINE.equals(originalClass(generator))
-                || !generator.hasProperty(PROPERTY_GENERATING_UNIT)) {
-            return failure("generator " + generator.getId() + " has no CGMES GeneratingUnit");
-        }
-        Optional<String> refusal = generatorRefusal(generator);
-        if (refusal.isPresent()) {
-            return failure(refusal.get());
-        }
-        state.requireExtensionNotCreated(generator, ActivePowerControl.NAME);
-        SteadyStateHypothesisExport.GeneratingUnit generatingUnit =
-                SteadyStateHypothesisExport.generatingUnitForGeneratorAndBatteries(generator, context, state);
-        if (generatingUnit == null) {
-            return failure("generator " + generator.getId() + " is a condenser or has no participation factor");
-        }
-        return success(newUpdates(generatingUnit.className, generatingUnit.id)
-                .value("GeneratingUnit.normalPF", generatingUnit.participationFactor)
-                .updates());
+        return describeGeneratingUnit(generator);
     }
 
     // Tap changers
@@ -1859,9 +1866,100 @@ class CgmesChangeTranslator {
                 : Optional.empty());
     }
 
-    /** The GeneratingUnit of a generator, which carries its participation factor. */
-    Result<CgmesPropertyBuffer, String> describeGeneratingUnit(Generator generator) {
-        return participationFactorUpdates(generator, null);
+    /**
+     * The GeneratingUnit of a generator or a battery, which carries its participation factor, or why it has none. A
+     * change names only the unit the import recorded for a SynchronousMachine; a full model names the unit of every
+     * generator and battery with a participation factor, under a generated identifier where none was recorded.
+     */
+    <I extends ReactiveLimitsHolder & Injection<I>> Result<CgmesPropertyBuffer, String> describeGeneratingUnit(I injection) {
+        if (injection instanceof Generator generator) {
+            if (scope == Scope.CHANGES && (!CgmesNames.SYNCHRONOUS_MACHINE.equals(originalClass(generator))
+                    || !generator.hasProperty(PROPERTY_GENERATING_UNIT))) {
+                return failure("generator " + generator.getId() + " has no CGMES GeneratingUnit");
+            }
+            Optional<String> refusal = generatorRefusal(generator);
+            if (refusal.isPresent()) {
+                return failure(refusal.get());
+            }
+        } else if (scope == Scope.CHANGES) {
+            return failure(injection.getType() + " " + injection.getId() + " has no CGMES GeneratingUnit");
+        }
+        state.requireExtensionNotCreated(injection, ActivePowerControl.NAME);
+        SteadyStateHypothesisExport.GeneratingUnit generatingUnit =
+                SteadyStateHypothesisExport.generatingUnitForGeneratorAndBatteries(injection, context, state);
+        if (generatingUnit == null) {
+            return failure(injection.getType() == IdentifiableType.GENERATOR
+                    ? "generator " + injection.getId() + " is a condenser or has no participation factor"
+                    : injection.getType() + " " + injection.getId() + " is a condenser or has no participation factor");
+        }
+        return success(newUpdates(generatingUnit.className, generatingUnit.id)
+                .value("GeneratingUnit.normalPF", generatingUnit.participationFactor)
+                .updates());
+    }
+
+    /**
+     * The machine block of a battery, a SynchronousMachine as the full export writes it: the CGMES import creates no
+     * battery, so only a full model describes one.
+     */
+    Result<CgmesPropertyBuffer, String> describeBattery(Battery battery) {
+        RegulationRef regulation = RegulationRef.of(battery);
+        // A battery writes its regulating reactive power target, as the full export always did
+        return success(synchronousMachineBlock(battery, regulation.isRegulating(state),
+                state.getDouble(battery, TARGET_P, battery::getTargetP), regulation.regulatingTargetQ(state),
+                ReferencePriority.get(battery), battery.getMinP(), battery.getMaxP()));
+    }
+
+    /**
+     * The fictitious injections of a voltage level (the fictitious P0 and Q0 of its nodes, or of its buses in a bus
+     * branch export) and their terminals, always connected: a NonConformLoad for a consumption, an EnergySource for a
+     * production, under the identifiers the export generates for them. IIDM reports no change of them.
+     */
+    CgmesPropertyBuffer describeFictitiousInjections(VoltageLevel voltageLevel) {
+        CgmesPropertyBuffer buffer = new CgmesPropertyBuffer();
+        NamingStrategy naming = context.getNamingStrategy();
+        if (voltageLevel.getTopologyKind() == TopologyKind.NODE_BREAKER && !context.isBusBranchExport()) {
+            VoltageLevel.NodeBreakerView view = voltageLevel.getNodeBreakerView();
+            for (int node : view.getNodes()) {
+                fictitiousInjection(buffer,
+                        naming.getCgmesId(refTyped(voltageLevel), Part.FICTITIOUS, ref("NCL"), ref(node)),
+                        naming.getCgmesId(refTyped(voltageLevel), Part.FICTITIOUS, Part.TERMINAL, ref(node)),
+                        view.getFictitiousP0(node), view.getFictitiousQ0(node));
+            }
+        } else {
+            for (Bus bus : voltageLevel.getBusBreakerView().getBuses()) {
+                fictitiousInjection(buffer, naming.getCgmesId(refTyped(bus), Part.FICTITIOUS, ref("NCL")),
+                        naming.getCgmesId(refTyped(bus), Part.FICTITIOUS, Part.TERMINAL),
+                        bus.getFictitiousP0(), bus.getFictitiousQ0());
+            }
+        }
+        return buffer;
+    }
+
+    private static void fictitiousInjection(CgmesPropertyBuffer buffer, String loadId, String terminalId, double p, double q) {
+        if (p == 0.0 && q == 0.0) {
+            return;
+        }
+        if (p <= 0) {
+            buffer.object(CgmesNames.ENERGY_SOURCE, loadId).value("EnergySource.activePower", p).value("EnergySource.reactivePower", q);
+        } else {
+            buffer.object(CgmesNames.NONCONFORM_LOAD, loadId).value("EnergyConsumer.p", p).value("EnergyConsumer.q", q);
+        }
+        buffer.object(CgmesNames.TERMINAL, terminalId).value(ACDC_TERMINAL_CONNECTED, true);
+    }
+
+    /**
+     * The tap changer the import combined into the given one and kept hidden, with the step it recorded; empty when
+     * there is none. IIDM holds no such tap changer, it is written only in an SSH read against its equipment model.
+     */
+    <C extends Connectable<C>> CgmesPropertyBuffer describeHiddenTapChanger(C transformer, String cgmesTapChangerId,
+                                                                           String defaultClassName) {
+        return CgmesExportUtil.getHiddenCombinedTapChanger(transformer, cgmesTapChangerId)
+                .map(hidden -> newUpdates(Optional.ofNullable(hidden.getType()).orElse(defaultClassName), hidden.getId())
+                        .value("TapChanger.controlEnabled", false)
+                        .value("TapChanger.step", hidden.getStep().orElseThrow(() ->
+                                new PowsyblException("Non null step expected for tap changer " + hidden.getId())))
+                        .updates())
+                .orElseGet(CgmesPropertyBuffer::new);
     }
 
     /** The section count and the control flag of a shunt compensator, the block the CGMES update reads as a whole. */
