@@ -327,6 +327,7 @@ Five defects of the CGMES import and of the full SSH export had to be fixed for 
 The full SSH export also writes what the change export writes, where the two used to differ and the import reads the change export's value (not fixed upstream):
 
 * The `TapChangerControl` of a phase tap changer limiting current that the import recorded, in an SSH exported without its equipment model: the values of the tap changer (see Regulating controls above) instead of zeros, which the update read back as a limit of 0.
+* A `RegulatingControl` some of whose users have a `VoltageRegulation` without a mode in the working variant (created while another variant was the working one): it is written from its other users, and left out when it has none; the export used to fail. A change export refuses such a change.
 * The `EquivalentInjection` of a boundary line with a generation: the import puts the whole injection into the generation of the boundary line, so `EquivalentInjection.p` and `q` are `p0 - targetP` and `q0 - targetQ` (a value that is not a number counts as 0); the full export used to write `p0` and `q0` alone, and the generation was lost.
 
 (cgmes-difference-model-export)=

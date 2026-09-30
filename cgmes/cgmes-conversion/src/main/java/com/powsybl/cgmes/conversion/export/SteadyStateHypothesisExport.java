@@ -594,7 +594,7 @@ public final class SteadyStateHypothesisExport {
 
     /**
      * The RegulatingControl description of a voltage regulation holder, read from the given state of the network, or
-     * {@code null} when the holder has no voltage regulation.
+     * {@code null} when the holder has no voltage regulation, or one without a mode in this variant.
      *
      * <p>Package private so that the change export describes a RegulatingControl exactly as the full export does,
      * which is what the receiving side of a partial or difference file expects to read.</p>
@@ -604,7 +604,9 @@ public final class SteadyStateHypothesisExport {
     static RegulatingControlView regulatingControlView(RegulationRef regulation, String regulatingControlId,
                                                        CgmesExportContext context, IidmStateView state) {
         VoltageRegulationHolder<?> regulationHolder = regulation.holder();
-        if (regulation.regulation() != null) {
+        // A regulation without a mode in this variant (created while another variant was the working one) cannot say
+        // what its control regulates: it describes no view, and the control is written from its other users, if any
+        if (regulation.regulation() != null && regulation.mode(state) != null) {
             boolean enabled = regulation.isRegulating(state);
 
             // Only discrete regulation holders can have a non-zero deadband
