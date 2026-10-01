@@ -9,6 +9,7 @@ package com.powsybl.cgmes.conversion.diff;
 
 import com.powsybl.cgmes.conversion.diff.DiffSubjectResolver.ResolvedSubject;
 import com.powsybl.cgmes.conversion.export.MachineFamily;
+import com.powsybl.cgmes.conversion.export.TapChangerAndShuntFamily;
 import com.powsybl.cgmes.conversion.mapping.LoadRows;
 import com.powsybl.iidm.network.BoundaryLine;
 import com.powsybl.iidm.network.DcSwitch;
@@ -54,9 +55,6 @@ final class DiffProbes {
     private static final String VR_TARGET_DEADBAND = "VoltageRegulation.TargetDeadband";
     private static final String VR_MODE = "VoltageRegulation.RegulationMode";
 
-    private static final List<String> SHUNT = List.of("sectionCount", LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING,
-            VR_TARGET_DEADBAND);
-    private static final List<String> SVC = List.of(LOCAL_TARGET_Q, LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING);
     private static final List<String> HVDC_LINE = List.of("activePowerSetpoint", "convertersMode");
     private static final List<String> VSC = List.of(LOCAL_TARGET_Q, LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING, VR_MODE);
     private static final List<String> LCC = List.of("powerFactor");
@@ -66,15 +64,6 @@ final class DiffProbes {
     private static final List<String> LINE = List.of("r", "x", "g1", "b1");
     private static final List<String> VOLTAGE_LEVEL = List.of("highVoltageLimit", "lowVoltageLimit");
     private static final List<String> BOUNDARY_LINE_IMPEDANCE = List.of("r", "x", "g", "b");
-
-    /** The suffixes of a phase tap changer, which are prefixed by the name a recorded change gives it. */
-    private static final List<String> PHASE_TAP_CHANGER_SUFFIXES = List.of(".tapPosition", ".regulating",
-            ".regulationValue", ".targetDeadband");
-    /** The suffixes of a ratio tap changer, which regulates through its VoltageRegulation. */
-    private static final List<String> RATIO_TAP_CHANGER_SUFFIXES = List.of(".tapPosition", "." + VR_REGULATING,
-            "." + VR_TARGET_VALUE, "." + VR_TARGET_DEADBAND);
-    private static final String RATIO_TAP_CHANGER = "ratioTapChanger";
-    private static final String PHASE_TAP_CHANGER = "phaseTapChanger";
 
     private DiffProbes() {
     }
@@ -96,7 +85,7 @@ final class DiffProbes {
         String prefix = subject.ownerAttributePrefix();
         if (!prefix.isEmpty() && object.equals(subject.owner())) {
             switch (subject.probeKind()) {
-                case TAP_CHANGER_PREFIX -> tapChangerSuffixes(prefix).forEach(suffix -> probes.add(prefix + suffix));
+                case TAP_CHANGER_PREFIX -> probes.addAll(TapChangerAndShuntFamily.tapChangerProbes(prefix));
                 case ATTRIBUTE_KEY -> probes.add(prefix);
                 case NONE -> { /* nothing beyond the probes of the owner */ }
             }
@@ -112,15 +101,15 @@ final class DiffProbes {
             case BoundaryLine ignored -> concat(MachineFamily.BOUNDARY_LINE_PROBES, BOUNDARY_LINE_IMPEDANCE);
             case Line ignored -> LINE;
             case VoltageLevel ignored -> VOLTAGE_LEVEL;
-            case ShuntCompensator ignored -> SHUNT;
-            case StaticVarCompensator ignored -> SVC;
+            case ShuntCompensator ignored -> TapChangerAndShuntFamily.SHUNT_PROBES;
+            case StaticVarCompensator ignored -> TapChangerAndShuntFamily.STATIC_VAR_COMPENSATOR_PROBES;
             case HvdcLine ignored -> HVDC_LINE;
             case VscConverterStation ignored -> VSC;
             case LccConverterStation ignored -> LCC;
             case VoltageSourceConverter ignored -> DETAILED_CONVERTER;
             case LineCommutatedConverter ignored -> DETAILED_CONVERTER;
-            case TwoWindingsTransformer ignored -> allTapChangerProbes("");
-            case ThreeWindingsTransformer ignored -> allTapChangerProbes("1", "2", "3");
+            case TwoWindingsTransformer ignored -> TapChangerAndShuntFamily.transformerProbes("");
+            case ThreeWindingsTransformer ignored -> TapChangerAndShuntFamily.transformerProbes("1", "2", "3");
             case DcSwitch ignored -> SWITCH;
             default -> List.of();
         };
@@ -130,19 +119,5 @@ final class DiffProbes {
         List<String> all = new ArrayList<>(first);
         all.addAll(second);
         return all;
-    }
-
-    private static List<String> tapChangerSuffixes(String prefix) {
-        return prefix.startsWith(RATIO_TAP_CHANGER) ? RATIO_TAP_CHANGER_SUFFIXES : PHASE_TAP_CHANGER_SUFFIXES;
-    }
-
-    /** Every tap changer attribute of a transformer, for the case where the subject is the transformer itself. */
-    private static List<String> allTapChangerProbes(String... ends) {
-        List<String> probes = new ArrayList<>();
-        for (String end : ends) {
-            RATIO_TAP_CHANGER_SUFFIXES.forEach(suffix -> probes.add(RATIO_TAP_CHANGER + end + suffix));
-            PHASE_TAP_CHANGER_SUFFIXES.forEach(suffix -> probes.add(PHASE_TAP_CHANGER + end + suffix));
-        }
-        return probes;
     }
 }

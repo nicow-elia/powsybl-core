@@ -8,6 +8,8 @@
 package com.powsybl.cgmes.conversion.diff;
 
 import com.powsybl.cgmes.conversion.export.MachineFamily;
+import com.powsybl.cgmes.conversion.export.RegulatingControlFamily;
+import com.powsybl.cgmes.conversion.export.TapChangerAndShuntFamily;
 import com.powsybl.cgmes.conversion.mapping.Block;
 import com.powsybl.cgmes.conversion.mapping.LoadRows;
 import com.powsybl.cgmes.conversion.mapping.PlainFamily;
@@ -179,7 +181,6 @@ public final class FastRouteCapabilities {
     }
 
     private static final String ACDC_TERMINAL_CONNECTED = "ACDCTerminal.connected";
-    private static final String REGULATING_COND_EQ_CONTROL_ENABLED = "RegulatingCondEq.controlEnabled";
     private static final String ACDC_CONVERTER_P = "ACDCConverter.p";
     private static final String ACDC_CONVERTER_Q = "ACDCConverter.q";
     private static final String ACDC_CONVERTER_TARGET_PPCC = "ACDCConverter.targetPpcc";
@@ -320,26 +321,11 @@ public final class FastRouteCapabilities {
         table.add(ssh(Family.EXTERNAL_NETWORK_INJECTION, MachineFamily.EXTERNAL_NETWORK_INJECTION, VariantSafety.NETWORK_DEPENDENT));
         table.add(ssh(Family.EQUIVALENT_INJECTION, MachineFamily.EQUIVALENT_INJECTION, VariantSafety.NETWORK_DEPENDENT));
         table.add(ssh(Family.GENERATING_UNIT, MachineFamily.GENERATING_UNIT, VariantSafety.NETWORK_DEPENDENT));
-        table.add(ssh(Family.STATIC_VAR_COMPENSATOR, "staticVarCompensators", "StaticVarCompensator",
-                Set.of("StaticVarCompensator"),
-                List.of(PropertyGroup.of("StaticVarCompensator.q", REGULATING_COND_EQ_CONTROL_ENABLED))));
-        table.add(ssh(Family.SHUNT_COMPENSATOR, "shuntCompensators", "LinearShuntCompensator",
-                Set.of("LinearShuntCompensator", "NonlinearShuntCompensator"),
-                List.of(PropertyGroup.of("ShuntCompensator.sections", REGULATING_COND_EQ_CONTROL_ENABLED))));
-        table.add(ssh(Family.RATIO_TAP_CHANGER, "ratioTapChangers", "RatioTapChanger", Set.of("RatioTapChanger"),
-                List.of(PropertyGroup.of("TapChanger.step", "TapChanger.controlEnabled")),
-                VariantSafety.NETWORK_DEPENDENT));
-        table.add(ssh(Family.PHASE_TAP_CHANGER, "phaseTapChangers", "PhaseTapChangerLinear",
-                Set.of("PhaseTapChangerLinear", "PhaseTapChangerAsymmetrical", "PhaseTapChangerSymmetrical",
-                        "PhaseTapChangerNonLinear", "PhaseTapChangerTabular"),
-                List.of(PropertyGroup.of("TapChanger.step", "TapChanger.controlEnabled")),
-                VariantSafety.NETWORK_DEPENDENT));
-        table.add(ssh(Family.REGULATING_CONTROL, "regulatingControls", "RegulatingControl",
-                Set.of("RegulatingControl", "TapChangerControl"),
-                List.of(new PropertyGroup(Set.of("RegulatingControl.enabled", "RegulatingControl.targetValue",
-                                "RegulatingControl.targetValueUnitMultiplier", "RegulatingControl.discrete"),
-                        Set.of("RegulatingControl.targetDeadband"))),
-                VariantSafety.NETWORK_DEPENDENT));
+        table.add(ssh(Family.STATIC_VAR_COMPENSATOR, TapChangerAndShuntFamily.STATIC_VAR_COMPENSATOR, VariantSafety.SAFE));
+        table.add(ssh(Family.SHUNT_COMPENSATOR, TapChangerAndShuntFamily.SHUNT_COMPENSATOR, VariantSafety.SAFE));
+        table.add(ssh(Family.RATIO_TAP_CHANGER, TapChangerAndShuntFamily.RATIO_TAP_CHANGER, VariantSafety.NETWORK_DEPENDENT));
+        table.add(ssh(Family.PHASE_TAP_CHANGER, TapChangerAndShuntFamily.PHASE_TAP_CHANGER, VariantSafety.NETWORK_DEPENDENT));
+        table.add(ssh(Family.REGULATING_CONTROL, RegulatingControlFamily.REGULATING_CONTROL, VariantSafety.NETWORK_DEPENDENT));
         table.add(ssh(Family.CS_CONVERTER, AC_DC_CONVERTERS_QUERY, "CsConverter", Set.of("CsConverter"),
                 List.of(AC_DC_CONVERTER_SETPOINTS,
                         PropertyGroup.of("CsConverter.operatingMode", "CsConverter.pPccControl")),

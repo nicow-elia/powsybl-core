@@ -263,7 +263,7 @@ public final class SteadyStateHypothesisExport {
         TapChangerRef ref = new TapChangerRef(twt, (tc instanceof RatioTapChanger
                 ? CgmesChangeTranslator.RATIO_TAP_CHANGER_PREFIX : CgmesChangeTranslator.PHASE_TAP_CHANGER_PREFIX) + end, tc);
 
-        mapping.describeTapChanger(twt, aliasType, defaultType, ref, out);
+        mapping.tapChangers.describeTapChanger(twt, aliasType, defaultType, ref, out);
         if (tc instanceof RatioTapChanger) {
             addRegulatingControlView(RegulatingControlView.of(ref.regulation(), tapChangerControlId, context, IidmStateView.LIVE),
                     regulatingControlViews);
@@ -279,7 +279,7 @@ public final class SteadyStateHypothesisExport {
         if (!context.isExportEquipment()) {
             Optional<CgmesTapChanger> hiddenCombinedTapChanger = getHiddenCombinedTapChanger(twt, cgmesTapChangerId);
             if (hiddenCombinedTapChanger.isPresent()) {
-                CgmesChangeTranslator.describeHiddenTapChanger(hiddenCombinedTapChanger.get(), defaultType, out);
+                TapChangerAndShuntFamily.describeHiddenTapChanger(hiddenCombinedTapChanger.get(), defaultType, out);
             }
         }
     }
@@ -290,7 +290,7 @@ public final class SteadyStateHypothesisExport {
             if ("true".equals(s.getProperty(PROPERTY_IS_EQUIVALENT_SHUNT))) {
                 continue;
             }
-            mapping.describeShunt(s, out);
+            mapping.tapChangers.describeShunt(s, out);
             addRegulatingControlView(RegulationRef.of(s), getRegulatingControlId(s, context), regulatingControlViews, context);
         }
     }
@@ -327,7 +327,7 @@ public final class SteadyStateHypothesisExport {
     private static void writeStaticVarCompensators(Network network, CgmesChangeTranslator mapping, Map<String, List<RegulatingControlView>> regulatingControlViews,
                                                    CgmesPropertySink out, CgmesExportContext context) {
         for (StaticVarCompensator svc : network.getStaticVarCompensators()) {
-            mapping.describeStaticVarCompensator(svc, out);
+            mapping.tapChangers.describeStaticVarCompensator(svc, out);
             addRegulatingControlView(RegulationRef.of(svc), getRegulatingControlId(svc, context), regulatingControlViews, context);
         }
     }

@@ -222,6 +222,7 @@ class CgmesChangeTranslator {
     private final RegulatingControlFamily regulatingControls;
     final LoadFamily loads;
     final MachineFamily machines;
+    final TapChangerAndShuntFamily tapChangers;
     /** Who reads the description: which objects it may name and which refusals it honours. */
     private final Scope scope;
     /** Built on first use, so that a change set without limits never pays for the walk it costs. */
@@ -267,6 +268,7 @@ class CgmesChangeTranslator {
                 ? regulatingControls : new RegulatingControlFamily(network, context, scope);
         this.loads = new LoadFamily(context, state, scope);
         this.machines = new MachineFamily(context, state, scope, this.regulatingControls);
+        this.tapChangers = new TapChangerAndShuntFamily(context, state, scope, this.regulatingControls);
     }
 
     /**
@@ -437,17 +439,17 @@ class CgmesChangeTranslator {
             // Not represented in the steady state hypothesis and read by nothing: not a change of the SSH
             return success(new CgmesPropertyBuffer());
         }
-        TapChangerAttribute tapChangerAttribute = tapChangerAttribute(attribute);
+        TapChangerAndShuntFamily.TapChangerAttribute tapChangerAttribute = TapChangerAndShuntFamily.tapChangerAttribute(attribute);
         return switch (identifiable) {
             case Switch sw when OPEN.equals(attribute) -> switchUpdates(sw);
             case DcSwitch dcSwitch when OPEN.equals(attribute) -> dcSwitchUpdates(dcSwitch);
             case Load load when LoadRows.keys().contains(attribute) -> loads.loadUpdates(load);
             case BoundaryLine boundaryLine when MachineFamily.BOUNDARY_LINE_KEYS.contains(attribute) -> machines.boundaryLineUpdates(boundaryLine);
             case Generator generator when MachineFamily.GENERATOR_KEYS.contains(attribute) -> machines.generatorUpdates(generator, attribute);
-            case TwoWindingsTransformer transformer when tapChangerAttribute != null -> twoWindingsTapChangerUpdates(transformer, tapChangerAttribute);
-            case ThreeWindingsTransformer transformer when tapChangerAttribute != null -> threeWindingsTapChangerUpdates(transformer, tapChangerAttribute);
-            case ShuntCompensator shunt when SHUNT_ATTRIBUTES.contains(attribute) -> shuntCompensatorUpdates(shunt, attribute);
-            case StaticVarCompensator svc when RegulatingControlFamily.STATIC_VAR_COMPENSATOR_KEYS.contains(attribute) -> staticVarCompensatorUpdates(svc);
+            case TwoWindingsTransformer transformer when tapChangerAttribute != null -> tapChangers.twoWindingsTapChangerUpdates(transformer, tapChangerAttribute);
+            case ThreeWindingsTransformer transformer when tapChangerAttribute != null -> tapChangers.threeWindingsTapChangerUpdates(transformer, tapChangerAttribute);
+            case ShuntCompensator shunt when TapChangerAndShuntFamily.SHUNT_KEYS.contains(attribute) -> tapChangers.shuntCompensatorUpdates(shunt, attribute);
+            case StaticVarCompensator svc when RegulatingControlFamily.STATIC_VAR_COMPENSATOR_KEYS.contains(attribute) -> tapChangers.staticVarCompensatorUpdates(svc);
             case HvdcLine hvdcLine when HVDC_LINE_ATTRIBUTES.contains(attribute) -> hvdcLineUpdates(hvdcLine, attribute);
             case LccConverterStation converter when POWER_FACTOR.equals(attribute) -> lccPowerFactorUpdates(converter);
             case AcDcConverter<?> converter when AC_DC_CONVERTER_ATTRIBUTES.contains(attribute) -> acDcConverterUpdates(converter, attribute);

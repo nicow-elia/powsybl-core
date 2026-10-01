@@ -8,6 +8,7 @@
 package com.powsybl.cgmes.conversion.export;
 
 import com.powsybl.cgmes.conversion.RegulatingControlMapping;
+import com.powsybl.cgmes.conversion.mapping.Block;
 import com.powsybl.cgmes.conversion.naming.CgmesObjectReference.Part;
 import com.powsybl.cgmes.extensions.CgmesTapChanger;
 import com.powsybl.cgmes.model.CgmesNames;
@@ -85,7 +86,7 @@ import static com.powsybl.commons.util.Result.success;
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
-class RegulatingControlFamily {
+public final class RegulatingControlFamily {
 
     /**
      * A key of a regulation and the names the deprecated setters of IIDM report a change of it under after the
@@ -124,6 +125,11 @@ class RegulatingControlFamily {
             new Key(VR_TARGET_DEADBAND, "targetDeadband"),
             new Key(VR_TERMINAL, "regulationTerminal"),
             new Key(VR_TARGET_VALUE, "regulationValue"));
+
+    /** The block of a RegulatingControl or TapChangerControl the CGMES update reads; the deadband is optional. */
+    public static final Block REGULATING_CONTROL = new Block("regulatingControls", List.of("RegulatingControl", "TapChangerControl"),
+            List.of("RegulatingControl.enabled", "RegulatingControl.targetValue", "RegulatingControl.targetValueUnitMultiplier",
+                    "RegulatingControl.discrete"), List.of("RegulatingControl.targetDeadband"));
 
     private static final Pattern RATIO_TAP_CHANGER_ATTRIBUTE = Pattern.compile("^(ratioTapChanger[123]?)\\.(\\w+)$");
 

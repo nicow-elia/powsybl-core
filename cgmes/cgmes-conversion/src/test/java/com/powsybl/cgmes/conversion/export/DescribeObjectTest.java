@@ -219,13 +219,13 @@ class DescribeObjectTest {
                 }
             }
             case ShuntCompensator shunt -> {
-                descriptions.add(translator.shuntCompensatorUpdates(shunt, CgmesChangeTranslator.SECTION_COUNT));
+                descriptions.add(translator.tapChangers.shuntCompensatorUpdates(shunt, CgmesChangeTranslator.SECTION_COUNT));
                 if (shunt.getVoltageRegulation() != null) {
                     descriptions.add(controls.updatesOf(shunt, IidmStateView.LIVE));
                 }
             }
             // The block and the control of a static var compensator, which the update reads as one group
-            case StaticVarCompensator svc -> descriptions.add(translator.staticVarCompensatorUpdates(svc));
+            case StaticVarCompensator svc -> descriptions.add(translator.tapChangers.staticVarCompensatorUpdates(svc));
             case BoundaryLine boundaryLine -> descriptions.add(translator.machines.boundaryLineUpdates(boundaryLine));
             case Switch sw -> descriptions.add(translator.switchUpdates(sw));
             case HvdcLine line -> {
@@ -268,7 +268,7 @@ class DescribeObjectTest {
                                                                       String prefix, TapChanger<?, ?, ?, ?> tapChanger,
                                                                       List<Result<CgmesPropertyBuffer, String>> descriptions) {
         CgmesPropertyBuffer block = new CgmesPropertyBuffer();
-        translator.describeTapChanger(transformer, aliasType, defaultClassName, new TapChangerRef(transformer, prefix, tapChanger), block);
+        translator.tapChangers.describeTapChanger(transformer, aliasType, defaultClassName, new TapChangerRef(transformer, prefix, tapChanger), block);
         descriptions.add(Result.success(block));
         controls.controlId(transformer, aliasType)
                 .ifPresent(controlId -> descriptions.add(controls.updatesFor(controlId, IidmStateView.LIVE)));
