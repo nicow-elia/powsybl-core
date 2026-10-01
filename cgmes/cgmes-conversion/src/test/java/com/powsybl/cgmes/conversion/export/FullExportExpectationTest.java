@@ -85,6 +85,7 @@ class FullExportExpectationTest {
     private static final Set<String> LIMIT_CLASSES = Set.of("CurrentLimit", "ActivePowerLimit", "ApparentPowerLimit");
     private static final String CONTROL_ENABLED = "RegulatingCondEq.controlEnabled";
     private static final String CONNECTED = "ACDCTerminal.connected";
+    private static final Set<String> DETAILED_LCC_POWERS = Set.of("ACDCConverter.p", "ACDCConverter.q");
     private static final String TARGET_VALUE = "RegulatingControl.targetValue";
     private static final String MULTIPLIER = "RegulatingControl.targetValueUnitMultiplier";
     private static final String VOLTAGE_PCC = "VsQpccControlKind.voltagePcc";
@@ -313,14 +314,28 @@ class FullExportExpectationTest {
     void whatOnlyTheFullExportWritesIsKnown(Fixture fixture) {
         Network network = fixture.loader().get();
         CgmesExportContext context = new CgmesExportContext(network);
-        Set<Key> described = new HashSet<>();
+        Map<Key, String> described = new HashMap<>();
         Map<String, List<String>> refusals = new HashMap<>();
         describe(network, context, described, refusals);
         Facts facts = Facts.of(network, context, refusals);
+        // The full export writes the powers of a line commutated converter of the detailed model from the flow of its
+        // PCC terminal, the description from its target and power factor (B4, owner decision O2b, open)
+        Set<String> detailedLccs = new HashSet<>();
+        network.getLineCommutatedConverters().forEach(converter ->
+                detailedLccs.add(Facts.id(context.getNamingStrategy().getCgmesId(converter), context)));
         List<String> unexplained = new ArrayList<>();
         for (Triple triple : parse(fullSsh(network), context.getCim().getNamespace()).values()) {
             Key key = new Key(triple.subject(), triple.property());
-            if (described.contains(key)) {
+            String value = described.get(key);
+            if (value != null) {
+                // The full export and the description are the same families in two scopes: a value the two state
+                // differently is a drift between the scopes (a control several holders share is combined by the full
+                // export only, see NOT_DERIVED)
+                if (!RDF_TYPE.equals(key.property()) && !value.equals(comparable(triple))
+                        && !facts.sharedControls().contains(key.subject())
+                        && !(detailedLccs.contains(key.subject()) && DETAILED_LCC_POWERS.contains(key.property()))) {
+                    unexplained.add(describe(triple) + " described as " + value);
+                }
                 continue;
             }
             Row row = new Row(key, triple, facts);
@@ -330,14 +345,15 @@ class FullExportExpectationTest {
         }
         INVENTORY_RUN.add(fixture.name());
         assertTrue(unexplained.isEmpty(), () -> fixture.name() + ": the full export writes what the mapping does not"
-                + " describe, and no rule explains it:\n" + String.join("\n", unexplained));
+                + " describe (and no rule explains it), or describes with another value:\n" + String.join("\n", unexplained));
     }
 
     /**
      * What the mapping describes about every object of the network as it stands, in the scope of a change: the
-     * steady state statements (an {@code rdf:type} row for each subject), and the refusals by CGMES subject.
+     * steady state statements by key, with the value as every statement diff compares it (an {@code rdf:type} row
+     * for each subject), and the refusals by CGMES subject.
      */
-    private static void describe(Network network, CgmesExportContext context, Set<Key> described,
+    private static void describe(Network network, CgmesExportContext context, Map<Key, String> described,
                                  Map<String, List<String>> refusals) {
         CgmesChangeTranslator translator = new CgmesChangeTranslator(network, context,
                 PartialSshExport.UnsupportedChangeBehavior.IGNORE, "an expectation test",
@@ -347,8 +363,8 @@ class FullExportExpectationTest {
                 switch (block) {
                     case Result.Success(CgmesPropertyBuffer buffer) ->
                         buffer.statements(CgmesSubset.STEADY_STATE_HYPOTHESIS, context).forEach(statement -> {
-                            described.add(new Key(statement.subjectId(), statement.property()));
-                            described.add(new Key(statement.subjectId(), RDF_TYPE));
+                            described.put(new Key(statement.subjectId(), statement.property()), StatementDiff.comparable(statement));
+                            described.put(new Key(statement.subjectId(), RDF_TYPE), statement.className());
                         });
                     case Result.Failure(String reason) -> refusals.computeIfAbsent(
                             Facts.id(context.getNamingStrategy().getCgmesId(identifiable), context), id -> new ArrayList<>()).add(reason);
