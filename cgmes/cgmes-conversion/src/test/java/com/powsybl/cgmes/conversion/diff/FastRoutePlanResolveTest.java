@@ -10,8 +10,8 @@ package com.powsybl.cgmes.conversion.diff;
 import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
 import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.cgmes.conversion.Conversion;
-import com.powsybl.cgmes.conversion.diff.DiffSubjectResolver.ResolvedSubject;
 import com.powsybl.cgmes.conversion.diff.FastRouteCapabilities.Family;
+import com.powsybl.cgmes.conversion.diff.FastRoutePlan.ResolvedSubject;
 import com.powsybl.cgmes.conversion.export.Families;
 import com.powsybl.iidm.network.Network;
 import org.junit.jupiter.api.Test;
@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
-class DiffSubjectResolverTest {
+class FastRoutePlanResolveTest {
 
     private static Properties detailedDc() {
         Properties parameters = new Properties();
@@ -39,7 +39,7 @@ class DiffSubjectResolverTest {
 
     private static ResolvedSubject resolve(Network network, String subjectId, String... properties) {
         Optional<ResolvedSubject> resolved =
-                new DiffSubjectResolver(new Families(network)).resolve(subjectId, Set.of(properties), null);
+                FastRoutePlan.resolve(new Families(network), subjectId, Set.of(properties), null);
         assertTrue(resolved.isPresent(), () -> subjectId + " did not resolve");
         return resolved.get();
     }
@@ -58,10 +58,9 @@ class DiffSubjectResolverTest {
         assertFamily(network, "Breaker-T1", Family.TERMINAL, "Terminal", "ACDCTerminal.connected");
 
         // A branch the importer turned into a switch has no Switch.open of its own
-        assertTrue(new DiffSubjectResolver(new Families(network))
-                .resolve("SeriesCompensator", Set.of("Switch.open"), null).isEmpty());
-        assertTrue(new DiffSubjectResolver(new Families(network))
-                .reasonFor("SeriesCompensator", Set.of("Switch.open"), null).contains("carried by its terminals"));
+        assertTrue(FastRoutePlan.resolve(new Families(network), "SeriesCompensator", Set.of("Switch.open"), null).isEmpty());
+        assertTrue(FastRoutePlan.unresolvedReason(new Families(network), "SeriesCompensator", Set.of("Switch.open"), null)
+                .contains("carried by its terminals"));
     }
 
     @Test
@@ -144,7 +143,7 @@ class DiffSubjectResolverTest {
                 "mixed_bipole_EQ.xml", "mixed_bipole_SSH.xml");
         assertFamily(detailed, "CSC_1_1", Family.CS_CONVERTER, "CsConverter", "CsConverter.pPccControl");
         // A DC switch has no cim:Switch.open: its state is carried by the connected flag of its DC terminals
-        assertTrue(new DiffSubjectResolver(new Families(detailed)).resolve("DCSW_1_1", Set.of("Switch.open"), null).isEmpty());
+        assertTrue(FastRoutePlan.resolve(new Families(detailed), "DCSW_1_1", Set.of("Switch.open"), null).isEmpty());
         ResolvedSubject dcTerminal = resolve(detailed,
                 detailed.getDcSwitch("DCSW_1_1").getAliasFromType("CGMES.DCTerminal1").orElseThrow(),
                 "ACDCTerminal.connected");
@@ -164,16 +163,16 @@ class DiffSubjectResolverTest {
     @Test
     void everyKindOfSubjectOfTheConformityModel() {
         Network network = Network.read(CgmesConformity1Catalog.microGridBaseCaseBE().dataSource());
-        DiffSubjectResolver resolver = new DiffSubjectResolver(new Families(network));
+        Families families = new Families(network);
         network.getLoads().forEach(load -> assertTrue(
-                resolver.resolve(load.getId(), Set.of("EnergyConsumer.p"), null).isPresent()
-                        || resolver.resolve(load.getId(), Set.of("EnergySource.activePower"), null).isPresent()
-                        || resolver.resolve(load.getId(), Set.of("RotatingMachine.p"), null).isPresent(),
+                FastRoutePlan.resolve(families, load.getId(), Set.of("EnergyConsumer.p"), null).isPresent()
+                        || FastRoutePlan.resolve(families, load.getId(), Set.of("EnergySource.activePower"), null).isPresent()
+                        || FastRoutePlan.resolve(families, load.getId(), Set.of("RotatingMachine.p"), null).isPresent(),
                 load.getId()));
         network.getGenerators().forEach(generator -> assertTrue(
-                resolver.resolve(generator.getId(), Set.of(), null).isPresent(), generator.getId()));
+                FastRoutePlan.resolve(families, generator.getId(), Set.of(), null).isPresent(), generator.getId()));
         network.getSwitches().forEach(sw -> assertTrue(
-                resolver.resolve(sw.getId(), Set.of("Switch.open"), null).isPresent()
+                FastRoutePlan.resolve(families, sw.getId(), Set.of("Switch.open"), null).isPresent()
                         || sw.getProperty(Conversion.PROPERTY_CGMES_ORIGINAL_CLASS) == null
                         || !FastRouteCapabilities.spec(Family.SWITCH).rdfTypes()
                                 .contains(sw.getProperty(Conversion.PROPERTY_CGMES_ORIGINAL_CLASS)),
@@ -183,13 +182,13 @@ class DiffSubjectResolverTest {
     @Test
     void unknownSubjectAndWrongFamilyProperty() {
         Network network = readCgmesResources("/update/load/", "load_EQ.xml", "load_SSH.xml");
-        DiffSubjectResolver resolver = new DiffSubjectResolver(new Families(network));
-        assertTrue(resolver.resolve("nothing-like-this", Set.of("EnergyConsumer.p"), null).isEmpty());
-        assertTrue(resolver.reasonFor("nothing-like-this", Set.of("EnergyConsumer.p"), null)
+        Families families = new Families(network);
+        assertTrue(FastRoutePlan.resolve(families, "nothing-like-this", Set.of("EnergyConsumer.p"), null).isEmpty());
+        assertTrue(FastRoutePlan.unresolvedReason(families, "nothing-like-this", Set.of("EnergyConsumer.p"), null)
                 .contains("no object of this network has this identifier"));
 
-        assertTrue(resolver.resolve("EnergyConsumer", Set.of("Switch.open"), null).isEmpty());
-        assertTrue(resolver.reasonFor("EnergyConsumer", Set.of("Switch.open"), null)
+        assertTrue(FastRoutePlan.resolve(families, "EnergyConsumer", Set.of("Switch.open"), null).isEmpty());
+        assertTrue(FastRoutePlan.unresolvedReason(families, "EnergyConsumer", Set.of("Switch.open"), null)
                 .contains("Switch.open is not updatable on a ENERGY_CONSUMER"));
     }
 
@@ -285,7 +284,7 @@ class DiffSubjectResolverTest {
     @Test
     void aTransformerHasNoImpedanceSubject() {
         Network network = readCgmesResources("/update/transformer/", "transformer_EQ.xml", "transformer_SSH.xml");
-        assertTrue(new DiffSubjectResolver(new Families(network)).resolve("T2W", Set.of("ACLineSegment.r"), null).isEmpty(),
+        assertTrue(FastRoutePlan.resolve(new Families(network), "T2W", Set.of("ACLineSegment.r"), null).isEmpty(),
                 "a transformer impedance is not updatable in place");
     }
 }

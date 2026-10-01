@@ -7,6 +7,8 @@
  */
 package com.powsybl.cgmes.conversion.export;
 
+import com.powsybl.cgmes.conversion.export.AbstractFamily.Scope;
+import com.powsybl.cgmes.conversion.export.IidmStateView.UnreconstructibleStateException;
 import com.powsybl.cgmes.conversion.export.PartialSshExport.UnsupportedChangeBehavior;
 import com.powsybl.cgmes.conversion.mapping.LoadRows;
 import com.powsybl.cgmes.model.CgmesSubset;

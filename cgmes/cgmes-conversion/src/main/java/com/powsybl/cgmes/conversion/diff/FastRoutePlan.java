@@ -10,7 +10,7 @@ package com.powsybl.cgmes.conversion.diff;
 import com.powsybl.cgmes.conversion.Conversion;
 import com.powsybl.cgmes.conversion.RegulatingControlMapping;
 import com.powsybl.cgmes.conversion.UpdateScope;
-import com.powsybl.cgmes.conversion.diff.DiffSubjectResolver.ResolvedSubject;
+import com.powsybl.cgmes.conversion.diff.FastRouteCapabilities.Family;
 import com.powsybl.cgmes.conversion.diff.FastRouteCapabilities.PropertyGroup;
 import com.powsybl.cgmes.conversion.elements.TerminalConversion;
 import com.powsybl.cgmes.conversion.export.Families;
@@ -67,7 +67,7 @@ import java.util.Set;
  * asking whether a difference applies and applying it are the same code.</p>
  *
  * <p>Cost: one pass over the statements, plus at most one pass over the equipment carrying CGMES objects that IIDM
- * does not model (built lazily by {@link DiffSubjectResolver}), plus one export context when a group has to be
+ * does not model (built lazily by {@link Families#resolve}), plus one export context when a group has to be
  * completed.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
@@ -94,6 +94,69 @@ final class FastRoutePlan {
     private static final String CONNECTED = "ACDCTerminal.connected";
     private static final String REGULATING_CONTROL_ENABLED = "RegulatingControl.enabled";
     private static final String SERIES_COMPENSATOR_X = "SeriesCompensator.x";
+
+    /**
+     * What a difference model subject turned out to be: the subject index of the mapping ({@link Families#resolve})
+     * names the object and its class, the family is the one whose classes contain that class
+     * ({@link FastRouteCapabilities#familyOfClass}).
+     *
+     * @param family  the update query family the subject belongs to
+     * @param subject what the subject index of the mapping says about it
+     */
+    record ResolvedSubject(Family family, Families.Subject subject) {
+
+        /** The CIM class to write for the subject. */
+        String rdfType() {
+            return subject.cimClass();
+        }
+
+        /** The subject as an {@code rdf:about} value, in the form the receiving network's identifiers take. */
+        String about() {
+            return subject.about();
+        }
+
+        /** The IIDM object carrying the subject, which is the one a change of it is recorded on. */
+        Identifiable<?> owner() {
+            return subject.owner();
+        }
+
+        /** Every IIDM object the update of this subject touches, which is what a scoped update has to visit. */
+        Set<String> iidmIds() {
+            return subject.iidmIds();
+        }
+    }
+
+    /**
+     * Resolve one subject: it resolves only when the family found for it can carry every property the difference
+     * states about it.
+     *
+     * @param subjectId     the identifier as the difference model states it, already normalized
+     * @param properties    the properties the difference states about it
+     * @param classNameHint the class the producer gave the subject, or {@code null}
+     * @return the resolution, or empty when the subject is unknown or the family cannot carry the properties
+     */
+    static Optional<ResolvedSubject> resolve(Families families, String subjectId, Set<String> properties,
+                                             String classNameHint) {
+        return resolveSubject(families, subjectId, classNameHint)
+                .filter(resolved -> FastRouteCapabilities.spec(resolved.family()).properties().containsAll(properties));
+    }
+
+    /** Why a subject could not be resolved, see {@link #resolve}, as a sentence to append to "&lt;id&gt;: ". */
+    static String unresolvedReason(Families families, String subjectId, Set<String> properties, String classNameHint) {
+        Optional<ResolvedSubject> resolved = resolveSubject(families, subjectId, classNameHint);
+        if (resolved.isEmpty()) {
+            return families.unresolvedReason(subjectId);
+        }
+        Family family = resolved.get().family();
+        Set<String> familyProperties = FastRouteCapabilities.spec(family).properties();
+        String offending = properties.stream().filter(p -> !familyProperties.contains(p)).findFirst().orElse("?");
+        return "property " + offending + " is not updatable on a " + family;
+    }
+
+    private static Optional<ResolvedSubject> resolveSubject(Families families, String subjectId, String classNameHint) {
+        return families.resolve(subjectId, classNameHint)
+                .map(subject -> new ResolvedSubject(FastRouteCapabilities.familyOfClass(subject.cimClass()), subject));
+    }
 
     /**
      * One object of the synthetic update document.
@@ -275,7 +338,6 @@ final class FastRoutePlan {
         private final CgmesDiffImport.Options options;
         private final boolean inverted;
         private final Families families;
-        private final DiffSubjectResolver resolver;
         /** What the network says about each subject asked for, by subject: the reverse check may ask several times. */
         private final Map<String, Families.Description> descriptions = new HashMap<>();
         private final List<CgmesDiffImport.BlockingStatement> blocking = new ArrayList<>();
@@ -290,7 +352,6 @@ final class FastRoutePlan {
             this.options = options;
             this.inverted = inverted;
             this.families = new Families(network);
-            this.resolver = new DiffSubjectResolver(families);
         }
 
         private FastRoutePlan plan() {
@@ -375,13 +436,13 @@ final class FastRoutePlan {
                                         String classNameHint) {
             Set<String> properties = new LinkedHashSet<>();
             statements.forEach(statement -> properties.add(statement.property()));
-            Optional<ResolvedSubject> resolved = resolver.resolve(subjectId, properties, classNameHint);
+            Optional<ResolvedSubject> resolved = resolve(families, subjectId, properties, classNameHint);
             if (resolved.isEmpty()) {
                 CgmesStatement first = statements.isEmpty() ? null : statements.get(0);
                 blocking.add(new CgmesDiffImport.BlockingStatement(subset, first,
                         statements.isEmpty()
                                 ? "object creation cannot be applied in place: " + subjectId + " is unknown"
-                                : subjectId + ": " + resolver.reasonFor(subjectId, properties, classNameHint)));
+                                : subjectId + ": " + unresolvedReason(families, subjectId, properties, classNameHint)));
                 return null;
             }
             ResolvedSubject subject = resolved.get();
@@ -433,7 +494,7 @@ final class FastRoutePlan {
                 }
                 partners.forEach((partnerId, fromNetwork) -> {
                     Optional<ResolvedSubject> partner = objectsBySubject.containsKey(partnerId) ? Optional.empty()
-                            : resolver.resolve(partnerId, fromNetwork.keySet(), subject.rdfType());
+                            : resolve(families, partnerId, fromNetwork.keySet(), subject.rdfType());
                     if (!completePartner(objectsBySubject, partnerId, fromNetwork, partner, touched)) {
                         // A converter block alone takes the power of the link to zero: leave it to the slow route
                         blocking.add(new CgmesDiffImport.BlockingStatement(subset, fromNetwork.values().iterator().next(),
@@ -863,7 +924,7 @@ final class FastRoutePlan {
                     continue;
                 }
                 Optional<ResolvedSubject> resolved =
-                        resolver.resolve(statement.subjectId(), Set.of(statement.property()), statement.className());
+                        resolve(families, statement.subjectId(), Set.of(statement.property()), statement.className());
                 if (resolved.isEmpty()) {
                     continue;
                 }

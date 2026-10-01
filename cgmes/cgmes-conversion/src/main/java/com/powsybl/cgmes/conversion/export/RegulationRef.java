@@ -7,6 +7,7 @@
  */
 package com.powsybl.cgmes.conversion.export;
 
+import com.powsybl.cgmes.conversion.export.IidmStateView.UnreconstructibleStateException;
 import com.powsybl.iidm.network.Identifiable;
 import com.powsybl.iidm.network.Terminal;
 import com.powsybl.iidm.network.regulation.RegulationMode;

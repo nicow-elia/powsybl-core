@@ -7,7 +7,7 @@
  */
 package com.powsybl.cgmes.conversion.diff;
 
-import com.powsybl.cgmes.conversion.diff.DiffSubjectResolver.ResolvedSubject;
+import com.powsybl.cgmes.conversion.diff.FastRoutePlan.ResolvedSubject;
 import com.powsybl.cgmes.conversion.diff.FastRoutePlan.TypedObject;
 import com.powsybl.cgmes.conversion.export.Families;
 import com.powsybl.cgmes.model.diff.CgmesStatement;

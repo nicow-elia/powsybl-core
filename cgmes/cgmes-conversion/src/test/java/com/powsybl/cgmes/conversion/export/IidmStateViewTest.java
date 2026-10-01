@@ -8,6 +8,7 @@
 package com.powsybl.cgmes.conversion.export;
 
 import com.powsybl.cgmes.conversion.export.EventCompactor.CompactedChanges;
+import com.powsybl.cgmes.conversion.export.IidmStateView.UnreconstructibleStateException;
 import com.powsybl.cgmes.conversion.test.RecordedChangeScenarios;
 import com.powsybl.iidm.network.CurrentLimits;
 import com.powsybl.iidm.network.Generator;

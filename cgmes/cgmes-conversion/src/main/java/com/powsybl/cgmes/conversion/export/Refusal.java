@@ -7,6 +7,8 @@
  */
 package com.powsybl.cgmes.conversion.export;
 
+import com.powsybl.cgmes.conversion.export.AbstractFamily.Scope;
+
 import java.util.Arrays;
 import java.util.Objects;
 import java.util.Optional;
