@@ -386,7 +386,10 @@ class CgmesChangeTranslator {
             // Not represented in the steady state hypothesis and read by nothing: not a change of the SSH
             return success(new CgmesPropertyBuffer());
         }
-        TapChangerAndShuntFamily.TapChangerAttribute tapChangerAttribute = TapChangerAndShuntFamily.tapChangerAttribute(attribute);
+        // A tap changer change is reported on its transformer: the key is parsed for a transformer only
+        TapChangerAndShuntFamily.TapChangerAttribute tapChangerAttribute =
+                identifiable instanceof TwoWindingsTransformer || identifiable instanceof ThreeWindingsTransformer
+                        ? TapChangerAndShuntFamily.tapChangerAttribute(attribute) : null;
         return switch (identifiable) {
             case Switch sw when OPEN.equals(attribute) -> switches.switchUpdates(sw);
             case DcSwitch dcSwitch when OPEN.equals(attribute) -> switches.dcSwitchUpdates(dcSwitch);
