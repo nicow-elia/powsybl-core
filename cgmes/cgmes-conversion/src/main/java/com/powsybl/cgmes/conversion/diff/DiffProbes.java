@@ -9,6 +9,7 @@ package com.powsybl.cgmes.conversion.diff;
 
 import com.powsybl.cgmes.conversion.diff.DiffSubjectResolver.ResolvedSubject;
 import com.powsybl.cgmes.conversion.export.HvdcFamily;
+import com.powsybl.cgmes.conversion.export.LimitFamily;
 import com.powsybl.cgmes.conversion.export.MachineFamily;
 import com.powsybl.cgmes.conversion.export.SwitchAndTerminalFamily;
 import com.powsybl.cgmes.conversion.export.TapChangerAndShuntFamily;
@@ -50,10 +51,6 @@ import java.util.List;
  */
 final class DiffProbes {
 
-    private static final List<String> LINE = List.of("r", "x", "g1", "b1");
-    private static final List<String> VOLTAGE_LEVEL = List.of("highVoltageLimit", "lowVoltageLimit");
-    private static final List<String> BOUNDARY_LINE_IMPEDANCE = List.of("r", "x", "g", "b");
-
     private DiffProbes() {
     }
 
@@ -87,9 +84,9 @@ final class DiffProbes {
             case Switch ignored -> SwitchAndTerminalFamily.PROBES;
             case Load ignored -> LoadRows.keys();
             case Generator ignored -> MachineFamily.GENERATOR_PROBES;
-            case BoundaryLine ignored -> concat(MachineFamily.BOUNDARY_LINE_PROBES, BOUNDARY_LINE_IMPEDANCE);
-            case Line ignored -> LINE;
-            case VoltageLevel ignored -> VOLTAGE_LEVEL;
+            case BoundaryLine ignored -> concat(MachineFamily.BOUNDARY_LINE_PROBES, LimitFamily.BOUNDARY_LINE_PROBES);
+            case Line ignored -> LimitFamily.LINE_PROBES;
+            case VoltageLevel ignored -> LimitFamily.VOLTAGE_LEVEL_PROBES;
             case ShuntCompensator ignored -> TapChangerAndShuntFamily.SHUNT_PROBES;
             case StaticVarCompensator ignored -> TapChangerAndShuntFamily.STATIC_VAR_COMPENSATOR_PROBES;
             case HvdcLine ignored -> HvdcFamily.LINE_PROBES;

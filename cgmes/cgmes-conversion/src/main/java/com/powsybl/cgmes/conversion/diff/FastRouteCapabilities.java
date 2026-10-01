@@ -8,6 +8,7 @@
 package com.powsybl.cgmes.conversion.diff;
 
 import com.powsybl.cgmes.conversion.export.HvdcFamily;
+import com.powsybl.cgmes.conversion.export.LimitFamily;
 import com.powsybl.cgmes.conversion.export.MachineFamily;
 import com.powsybl.cgmes.conversion.export.RegulatingControlFamily;
 import com.powsybl.cgmes.conversion.export.SwitchAndTerminalFamily;
@@ -319,22 +320,15 @@ public final class FastRouteCapabilities {
                 List.of(new PropertyGroup(Set.of("ControlArea.netInterchange"), Set.of("ControlArea.pTolerance")))));
         // Operational limit values: equipment data in CIM 2.4.15, steady state data in CIM 3. One OperationalLimit
         // is one CGMES object with one value, so every group holds a single property.
-        table.add(limit(Family.CURRENT_LIMIT, "CurrentLimit"));
-        table.add(limit(Family.ACTIVE_POWER_LIMIT, "ActivePowerLimit"));
-        table.add(limit(Family.APPARENT_POWER_LIMIT, "ApparentPowerLimit"));
-        table.add(limit(Family.VOLTAGE_LIMIT, "VoltageLimit"));
+        table.add(limit(Family.CURRENT_LIMIT, LimitFamily.CURRENT_LIMIT));
+        table.add(limit(Family.ACTIVE_POWER_LIMIT, LimitFamily.ACTIVE_POWER_LIMIT));
+        table.add(limit(Family.APPARENT_POWER_LIMIT, LimitFamily.APPARENT_POWER_LIMIT));
+        table.add(limit(Family.VOLTAGE_LIMIT, LimitFamily.VOLTAGE_LIMIT_VALUE));
         // Equipment values nothing in the update path reads, applied with IIDM setters
-        table.add(directSetter(Family.AC_LINE_SEGMENT, "ACLineSegment", Set.of("ACLineSegment"),
-                List.of("ACLineSegment.r", "ACLineSegment.x", "ACLineSegment.gch", "ACLineSegment.bch")));
-        table.add(directSetter(Family.SERIES_COMPENSATOR, "SeriesCompensator", Set.of("SeriesCompensator"),
-                List.of("SeriesCompensator.r", "SeriesCompensator.x")));
-        // An EquivalentBranch states the impedance of both directions, and its import refuses a branch whose r21/x21
-        // differ from r/x, so a difference of one has to move both
-        table.add(directSetter(Family.EQUIVALENT_BRANCH, "EquivalentBranch", Set.of("EquivalentBranch"),
-                List.of("EquivalentBranch.r", "EquivalentBranch.x",
-                        "EquivalentBranch.r21", "EquivalentBranch.x21")));
-        table.add(directSetter(Family.VOLTAGE_LEVEL, "VoltageLevel", Set.of("VoltageLevel"),
-                List.of("VoltageLevel.highVoltageLimit", "VoltageLevel.lowVoltageLimit")));
+        table.add(directSetter(Family.AC_LINE_SEGMENT, LimitFamily.AC_LINE_SEGMENT));
+        table.add(directSetter(Family.SERIES_COMPENSATOR, LimitFamily.SERIES_COMPENSATOR));
+        table.add(directSetter(Family.EQUIVALENT_BRANCH, LimitFamily.EQUIVALENT_BRANCH));
+        table.add(directSetter(Family.VOLTAGE_LEVEL, LimitFamily.VOLTAGE_LEVEL));
         return List.copyOf(table);
     }
 
@@ -367,20 +361,19 @@ public final class FastRouteCapabilities {
      * versions. Which profile carries the value is a CIM version rule rather than a family rule, see
      * {@link #checkLimitProfile}.
      */
-    private static FamilySpec limit(Family family, String className) {
+    private static FamilySpec limit(Family family, Block block) {
         return new FamilySpec(family, Set.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS),
-                Handler.UPDATE_QUERY, "operationalLimits", className, Set.of(className),
-                List.of(PropertyGroup.of(className + ".value")), VariantSafety.UNSAFE);
+                Handler.UPDATE_QUERY, block.updateQuery(), block.cimClasses().get(0), Set.copyOf(block.cimClasses()),
+                List.of(PropertyGroup.of(block.required().toArray(String[]::new))), VariantSafety.UNSAFE);
     }
 
     /**
      * A family whose values are applied with IIDM setters. Every property is a group of its own: there is no query
      * that would read them together, so none of them can make another one unreadable.
      */
-    private static FamilySpec directSetter(Family family, String canonicalType, Set<String> rdfTypes,
-                                           List<String> properties) {
-        return new FamilySpec(family, Set.of(CgmesSubset.EQUIPMENT), Handler.DIRECT_SETTER, null, canonicalType,
-                rdfTypes, properties.stream().map(PropertyGroup::of).toList(), VariantSafety.UNSAFE);
+    private static FamilySpec directSetter(Family family, Block block) {
+        return new FamilySpec(family, Set.of(CgmesSubset.EQUIPMENT), Handler.DIRECT_SETTER, null, block.cimClasses().get(0),
+                Set.copyOf(block.cimClasses()), block.required().stream().map(PropertyGroup::of).toList(), VariantSafety.UNSAFE);
     }
 
     private static Map<Family, FamilySpec> byFamily() {
