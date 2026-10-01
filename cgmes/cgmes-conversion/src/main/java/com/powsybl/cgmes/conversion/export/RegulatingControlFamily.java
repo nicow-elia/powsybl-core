@@ -138,6 +138,11 @@ class RegulatingControlFamily {
 
     private static final Pattern RATIO_TAP_CHANGER_ATTRIBUTE = Pattern.compile("^(ratioTapChanger[123]?)\\.(\\w+)$");
 
+    /** The canonical keys each echo name of a holder repeats, indexed once (asked for every compacted event). */
+    private static final Map<String, Set<String>> HOLDER_ECHOES = HOLDER_KEYS.stream()
+            .flatMap(key -> key.echoes().stream().map(echo -> Map.entry(echo, key.canonical())))
+            .collect(Collectors.groupingBy(Map.Entry::getKey, Collectors.mapping(Map.Entry::getValue, Collectors.toUnmodifiableSet())));
+
     /** The keys of a holder whose change describes its control: the targets and the flag. */
     private static final Set<String> CONTROL_KEYS = Set.of(LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING);
     static final Set<String> GENERATOR_KEYS = CONTROL_KEYS;
@@ -181,7 +186,7 @@ class RegulatingControlFamily {
         if (matcher != null && matcher.matches()) {
             return repeated(RATIO_TAP_CHANGER_KEYS, matcher.group(2), matcher.group(1) + ".");
         }
-        Set<String> keys = repeated(HOLDER_KEYS, attribute, "");
+        Set<String> keys = HOLDER_ECHOES.getOrDefault(attribute, Set.of());
         // A target echo repeats the local or the remote target; a boundary line reports a targetV of its own
         return keys.size() > 1 && (identifiable == null || identifiable instanceof BoundaryLine) ? Set.of() : keys;
     }
@@ -193,7 +198,7 @@ class RegulatingControlFamily {
 
     /** Whether the key of the given attribute depends on the kind of equipment it was reported on: a target echo. */
     static boolean needsIdentifiable(String attribute) {
-        return HOLDER_KEYS.stream().filter(key -> key.echoes().contains(attribute)).count() > 1;
+        return HOLDER_ECHOES.getOrDefault(attribute, Set.of()).size() > 1;
     }
 
     /** Whether an echo may repeat a value reported under the given key: a key of a regulation. */
