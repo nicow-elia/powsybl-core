@@ -20,6 +20,7 @@ import com.powsybl.iidm.network.events.UpdateNetworkEvent;
 import com.powsybl.iidm.network.regulation.RegulationMode;
 import com.powsybl.iidm.network.test.BatteryNetworkFactory;
 import com.powsybl.iidm.network.test.FourSubstationsNodeBreakerFactory;
+import com.powsybl.iidm.network.test.HvdcTestNetwork;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -163,6 +164,29 @@ class DescribeObjectTest {
             Result<CgmesPropertyBuffer, String> result = translator.translate(event(generator, probe, variantId));
             assertTrue(result instanceof Result.Failure(String reason)
                     && Refusal.of(reason).orElse(null) == Refusal.IMPORT_GIVES_REGULATION, () -> probe + ": " + result);
+        }
+    }
+
+    /**
+     * A converter station that belongs to no HVDC line has no setpoints to write and no end that rectifies: every
+     * change of its control, and the station as a whole, is refused (no NullPointerException).
+     */
+    @Test
+    void aConverterStationWithoutHvdcLineIsRefused() {
+        Network network = HvdcTestNetwork.createVsc();
+        network.getHvdcLine("L").remove();
+        VscConverterStation station = network.getVscConverterStation("C1");
+        CgmesChangeTranslator translator = new CgmesChangeTranslator(network, new CgmesExportContext(network),
+                PartialSshExport.UnsupportedChangeBehavior.IGNORE);
+        String variantId = network.getVariantManager().getWorkingVariantId();
+        List<Result<CgmesPropertyBuffer, String>> results = new ArrayList<>();
+        for (String attribute : VsConverterControlFamily.KEYS) {
+            results.add(translator.translate(event(station, attribute, variantId)));
+        }
+        results.add(translator.converterStationUpdates(station));
+        for (Result<CgmesPropertyBuffer, String> result : results) {
+            assertTrue(result instanceof Result.Failure(String reason) && reason.contains("belongs to no HVDC line"),
+                    result::toString);
         }
     }
 
