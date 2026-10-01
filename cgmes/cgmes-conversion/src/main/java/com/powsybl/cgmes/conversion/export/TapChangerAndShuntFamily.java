@@ -133,14 +133,14 @@ public final class TapChangerAndShuntFamily extends AbstractFamily {
     }
 
     /**
-     * The attributes of a tap changer this exporter maps. Everything else it may report, such as a solved position
-     * or the regulation terminal of a phase tap changer, has no counterpart in the steady state hypothesis profile.
-     * A ratio tap changer regulates through its VoltageRegulation, whose attributes carry a dotted suffix of their
-     * own; the mode, the terminal and the slope are matched so that they can be refused with a reason.
+     * The attributes of a tap changer this exporter maps. Everything else it may report, such as a solved position,
+     * has no counterpart in the steady state hypothesis profile. A ratio tap changer regulates through its
+     * VoltageRegulation, whose attributes carry a dotted suffix of their own; the mode, the terminal and the slope of
+     * either kind are matched so that they can be refused with a reason.
      */
     private static final Pattern TAP_CHANGER_ATTRIBUTE = Pattern.compile(
             "^(?:(ratio)TapChanger([123]?)\\.(tapPosition|VoltageRegulation\\.(?:TargetValue|TargetDeadband|isRegulating|RegulationMode|Terminal|Slope))"
-                    + "|(phase)TapChanger([123]?)\\.(tapPosition|regulating|regulationValue|targetDeadband|regulationMode))$");
+                    + "|(phase)TapChanger([123]?)\\.(tapPosition|regulating|regulationValue|targetDeadband|regulationMode|regulationTerminal))$");
 
     static TapChangerAttribute tapChangerAttribute(String attribute) {
         Matcher matcher = TAP_CHANGER_ATTRIBUTE.matcher(attribute);

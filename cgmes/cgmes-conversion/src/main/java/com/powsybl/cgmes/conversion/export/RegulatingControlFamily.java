@@ -242,7 +242,8 @@ public final class RegulatingControlFamily {
     <C extends Connectable<C>> Result<CgmesPropertyBuffer, String> tapChangerUpdates(C transformer, String aliasType,
                                                                                      TapChangerRef ref, String suffix,
                                                                                      IidmStateView state) {
-        if ("regulationMode".equals(suffix) || RegulationKeyRefusals.EQUIPMENT_KEYS.contains(suffix)) {
+        // A phase tap changer spells the mode and the terminal of its regulation without the VoltageRegulation prefix
+        if ("regulationMode".equals(suffix) || "regulationTerminal".equals(suffix) || RegulationKeyRefusals.EQUIPMENT_KEYS.contains(suffix)) {
             return failure(RegulationKeyRefusals.equipmentOnly(suffix));
         }
         TapChanger<?, ?, ?, ?> tapChanger = ref.tapChanger();

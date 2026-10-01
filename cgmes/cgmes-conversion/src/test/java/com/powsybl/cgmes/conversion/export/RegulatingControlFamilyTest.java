@@ -14,9 +14,12 @@ import com.powsybl.iidm.network.ThreeWindingsTransformer;
 import com.powsybl.iidm.network.VariantManager;
 import com.powsybl.iidm.network.VariantManagerConstants;
 import com.powsybl.iidm.network.regulation.RegulationMode;
+import com.powsybl.iidm.network.test.EurostagTutorialExample1Factory;
+import com.powsybl.iidm.network.test.PhaseShifterTestCaseFactory;
 import org.junit.jupiter.api.Test;
 
 import static com.powsybl.cgmes.conversion.test.ConversionUtil.readCgmesResources;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -50,5 +53,26 @@ class RegulatingControlFamilyTest {
 
         Result.Failure<CgmesPropertyBuffer, String> failure = assertInstanceOf(Result.Failure.class, result);
         assertTrue(failure.reason().contains("has no mode in this variant"), failure.reason());
+    }
+
+    /**
+     * The regulating terminal of a tap changer is RegulatingControl.Terminal of the equipment profile whatever the kind
+     * of the tap changer: a phase tap changer, which spells it without the VoltageRegulation prefix, is refused with
+     * the same reason as a ratio one (open point 1 of report 20-p1).
+     */
+    @Test
+    void theRegulatingTerminalOfEitherTapChangerKindIsEquipmentData() {
+        String ratio = refusalOf(EurostagTutorialExample1Factory.create(), EurostagTutorialExample1Factory.NHV2_NLOAD,
+                CgmesChangeTranslator.RATIO_TAP_CHANGER_PREFIX + "." + CgmesChangeTranslator.VR_TERMINAL);
+        String phase = refusalOf(PhaseShifterTestCaseFactory.create(), "PS1",
+                CgmesChangeTranslator.PHASE_TAP_CHANGER_PREFIX + ".regulationTerminal");
+        assertTrue(ratio.contains("RegulatingControl.Terminal"), ratio);
+        assertEquals(ratio, phase);
+    }
+
+    private static String refusalOf(Network network, String transformerId, String attribute) {
+        Result.Failure<?, String> failure = assertInstanceOf(Result.Failure.class,
+                new CgmesObjectDump(network).dump(transformerId, attribute));
+        return failure.reason();
     }
 }
