@@ -25,6 +25,7 @@ import com.powsybl.cgmes.model.CgmesNames;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModelParser;
+import com.powsybl.cgmes.model.diff.StatementDiff;
 import com.powsybl.commons.exceptions.UncheckedXmlStreamException;
 import com.powsybl.commons.util.Result;
 import com.powsybl.commons.xml.XmlUtil;
@@ -74,7 +75,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *     it can describe, which covers every consistency group it writes. This is the synthetic full-object request
  *     {@link CgmesObjectDump} makes, without its cache;</li>
  *     <li>every {@code (subject, property)} of either side is compared, numeric literals by value as
- *     {@code TripleDiffCalculator.comparable} does, and ends up in exactly one of: equal,
+ *     {@link StatementDiff#comparable} does, and ends up in exactly one of: equal,
  *     {@link #ONLY_IN_FULL_EXPORT}, {@link #DELIBERATE_DIFFERENCES}, or unexplained, which fails the test. The class
  *     of a subject takes part in the comparison as an {@code rdf:type} row.</li>
  * </ol>
@@ -844,17 +845,10 @@ class ExportMappingEquivalenceTest {
         }
     }
 
-    /** As {@code TripleDiffCalculator.comparable}: the kind, and a numeric literal by value ({@code -0 == 0}). */
+    /** As every statement diff compares: the kind, and a numeric literal by value ({@code -0 == 0}). */
     static String comparable(Triple triple) {
-        if (triple.kind() == CgmesStatement.Kind.LITERAL) {
-            try {
-                // + 0.0 so that -0 and 0 compare equal: numeric equality, not the text of a double
-                return "L" + (Double.parseDouble(triple.value()) + 0.0);
-            } catch (NumberFormatException notANumber) {
-                return "L" + triple.value();
-            }
-        }
-        return triple.kind().name().charAt(0) + triple.value();
+        return StatementDiff.comparable(new CgmesStatement(triple.subject(), triple.className(), triple.property(),
+                triple.value(), triple.kind()));
     }
 
     // ---------------------------------------------------------------------------------------------------------------

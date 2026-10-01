@@ -14,6 +14,7 @@ import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
+import com.powsybl.cgmes.model.diff.StatementDiff;
 import com.powsybl.cgmes.model.triplestore.CgmesTripleStoreLoader;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
@@ -757,7 +758,7 @@ public final class SnapshotCatalog {
         long t1 = System.nanoTime();
         String cimNamespace = parsed.cimNamespace();
         Map<CgmesSubset, String> parentKeys = parentIndexKeys(parsed, plan, stateModels, cimNamespace);
-        Map<CgmesSubset, TripleDiffCalculator.Index> parentSides =
+        Map<CgmesSubset, StatementDiff.Index> parentSides =
                 parentIndexesOf(parentKeys, plan, stateModels, cimNamespace, importParams);
         Duration materialize = planning.plus(Duration.ofNanos(System.nanoTime() - t1));
 
@@ -772,8 +773,8 @@ public final class SnapshotCatalog {
                 ignored.add(subset);
                 continue;
             }
-            TripleDiffCalculator.Index nextSide = file.index();
-            TripleDiffCalculator.Index parentSide = parentSides.get(subset);
+            StatementDiff.Index nextSide = file.index();
+            StatementDiff.Index parentSide = parentSides.get(subset);
             if (nextSide == null || parentSide == null) {
                 // The file is the state the database already holds, or the parent has no model of that profile
                 continue;
@@ -850,14 +851,14 @@ public final class SnapshotCatalog {
      * materialisation happens exactly as it always did and only the missing profiles are read out of it, so the
      * statements and their order are the ones the comparison has always seen.</p>
      */
-    private Map<CgmesSubset, TripleDiffCalculator.Index> parentIndexesOf(Map<CgmesSubset, String> keys,
+    private Map<CgmesSubset, StatementDiff.Index> parentIndexesOf(Map<CgmesSubset, String> keys,
                                                                         MaterializationPlan plan,
                                                                         Map<String, StoredModel> stateModels,
                                                                         String cimNamespace,
                                                                         Properties importParams) {
-        Map<CgmesSubset, TripleDiffCalculator.Index> indexes = new EnumMap<>(CgmesSubset.class);
+        Map<CgmesSubset, StatementDiff.Index> indexes = new EnumMap<>(CgmesSubset.class);
         keys.forEach((subset, key) -> {
-            TripleDiffCalculator.Index cached = connection.parentIndex(key);
+            StatementDiff.Index cached = connection.parentIndex(key);
             if (cached != null) {
                 indexes.put(subset, cached);
             }
@@ -881,7 +882,7 @@ public final class SnapshotCatalog {
                     continue;
                 }
                 String stateId = plan.targetState().get(subset);
-                TripleDiffCalculator.Index index = TripleDiffCalculator.index(
+                StatementDiff.Index index = TripleDiffCalculator.index(
                         SparqlAccess.statementsOf(parentState.store().getRepository(),
                                 parentState.contexts().get(subset)),
                         parentBaseOf(stateModels, stateId, fallbackBase), cimNamespace);
@@ -911,7 +912,7 @@ public final class SnapshotCatalog {
      * @param timestep      the moment the snapshot describes
      * @return the difference
      */
-    private DifferenceModel diffOf(TripleDiffCalculator.Index parentSide, TripleDiffCalculator.Index nextSide,
+    private DifferenceModel diffOf(StatementDiff.Index parentSide, StatementDiff.Index nextSide,
                                    String parentStateId, CgmesSubset subset, Header header, String cimNamespace,
                                    String timestep) {
         DifferenceModelHeader diffHeader = DifferenceModelHeader.builder(header.id, subset, cimNamespace)

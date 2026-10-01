@@ -9,6 +9,7 @@
 package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conversion.CgmesImport;
+import com.powsybl.cgmes.model.diff.StatementDiff;
 import com.powsybl.cgmes.model.triplestore.CgmesTripleStoreLoader;
 import com.powsybl.commons.config.PlatformConfig;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
@@ -103,13 +104,13 @@ public final class RdfDbConnection implements AutoCloseable {
      * {@link GraphCache} is invalidated for the graphs.</p>
      *
      * <p><strong>Thread safety.</strong> A {@code LinkedHashMap} in access order mutates on a read, so every access
-     * is inside {@code synchronized (parentIndexes)}. The values are immutable ({@link TripleDiffCalculator.Index}
+     * is inside {@code synchronized (parentIndexes)}. The values are immutable ({@link StatementDiff.Index}
      * is read-only), so they may be handed out of the lock.</p>
      */
-    private final Map<String, TripleDiffCalculator.Index> parentIndexes =
+    private final Map<String, StatementDiff.Index> parentIndexes =
             new LinkedHashMap<>(8, 0.75f, true) {
                 @Override
-                protected boolean removeEldestEntry(Map.Entry<String, TripleDiffCalculator.Index> eldest) {
+                protected boolean removeEldestEntry(Map.Entry<String, StatementDiff.Index> eldest) {
                     return size() > PARENT_INDEX_CACHE_SIZE;
                 }
             };
@@ -444,14 +445,14 @@ public final class RdfDbConnection implements AutoCloseable {
     }
 
     /** @return the decoded parent profile kept under that key, or {@code null} */
-    TripleDiffCalculator.Index parentIndex(String key) {
+    StatementDiff.Index parentIndex(String key) {
         synchronized (parentIndexes) {
             return parentIndexes.get(key);
         }
     }
 
     /** Keep a decoded parent profile, evicting the least recently used one beyond the bound. */
-    void rememberParentIndex(String key, TripleDiffCalculator.Index index) {
+    void rememberParentIndex(String key, StatementDiff.Index index) {
         synchronized (parentIndexes) {
             parentIndexes.put(key, index);
         }

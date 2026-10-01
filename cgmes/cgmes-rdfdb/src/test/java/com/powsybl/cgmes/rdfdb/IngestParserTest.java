@@ -11,6 +11,7 @@ package com.powsybl.cgmes.rdfdb;
 import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
+import com.powsybl.cgmes.model.diff.StatementDiff;
 import com.powsybl.commons.datasource.MemDataSource;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
@@ -229,7 +230,7 @@ class IngestParserTest {
     }
 
     /** The same file through a scratch {@code MemoryStore} and {@code TripleDiffCalculator.index}, as before. */
-    private static TripleDiffCalculator.Index viaStore(String content, IngestParser.Result result) {
+    private static StatementDiff.Index viaStore(String content, IngestParser.Result result) {
         SailRepository repository = new SailRepository(new MemoryStore());
         repository.init();
         List<Statement> statements = new ArrayList<>();

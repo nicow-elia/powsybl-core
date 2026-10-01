@@ -13,6 +13,7 @@ import com.powsybl.cgmes.model.CgmesModelReports;
 import com.powsybl.cgmes.model.CgmesOnDataSource;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
+import com.powsybl.cgmes.model.diff.StatementDiff;
 import com.powsybl.cgmes.model.triplestore.CgmesTripleStoreLoader;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
@@ -42,7 +43,7 @@ import java.util.TreeSet;
  * Reads the instance files of one timestep for the sole purpose of comparing them with a stored state.
  *
  * <p>An ingestion does not want a triple store. It wants, per profile, the model header and the statements grouped
- * by subject &mdash; which is what {@link TripleDiffCalculator.Index} is. Building a scratch
+ * by subject &mdash; which is what {@link StatementDiff.Index} is. Building a scratch
  * {@code MemoryStore} first means every statement is written into an indexed sail, queried back out and only then
  * decoded, and every profile the ingestion does not compare (topology, state variables, diagram layout, the
  * boundary) is parsed in full although nothing but its {@code md:FullModel} is ever read. On the CGMES 3 Svedala
@@ -88,7 +89,7 @@ final class IngestParser {
      * @param index   the statements of the file, header excluded, or {@code null} for a header-only read
      */
     record ParsedFile(String name, String context, CgmesSubset subset, String headerId,
-                      Map<String, List<Value>> terms, TripleDiffCalculator.Index index) {
+                      Map<String, List<Value>> terms, StatementDiff.Index index) {
     }
 
     /**
@@ -327,7 +328,7 @@ final class IngestParser {
          * ordinary statement; removing the header subjects at the end excludes it, which is what the two-pass
          * index over a store did as well.</p>
          */
-        TripleDiffCalculator.Index index() {
+        StatementDiff.Index index() {
             Set<String> localHeaders = new LinkedHashSet<>();
             String prefix = subjectBase == null || subjectBase.isEmpty() ? null : subjectBase + "_";
             for (String header : headerSubjects) {
@@ -335,7 +336,7 @@ final class IngestParser {
                         ? header.substring(prefix.length()) : header);
             }
             localHeaders.forEach(bySubject::remove);
-            return TripleDiffCalculator.readOnly(bySubject);
+            return StatementDiff.readOnly(bySubject);
         }
     }
 }

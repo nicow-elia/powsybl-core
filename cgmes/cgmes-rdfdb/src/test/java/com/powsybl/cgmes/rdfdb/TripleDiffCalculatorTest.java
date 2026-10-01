@@ -12,6 +12,7 @@ import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
+import com.powsybl.cgmes.model.diff.StatementDiff;
 import org.eclipse.rdf4j.model.Statement;
 import org.eclipse.rdf4j.model.ValueFactory;
 import org.eclipse.rdf4j.model.impl.SimpleValueFactory;
@@ -161,14 +162,14 @@ class TripleDiffCalculatorTest {
                 "+Infinity", "0x1p3", "1.5f", "1.5d", "1.5D", ".5", "-.5", "N/A", "-", "+", "", " ", "true",
                 "false", "Infinity2", "NaNa", "Svedala Area", "2020-12-02T00:00:00Z", "1,5", "e1")) {
             CgmesStatement statement = CgmesStatement.literal("S", null, "EnergyConsumer.p", value);
-            assertThat(TripleDiffCalculator.comparable(statement))
+            assertThat(StatementDiff.comparable(statement))
                     .as("comparable of the literal \"" + value + "\"")
                     .isEqualTo(reference(statement));
         }
         // And a non-literal never goes near parseDouble
-        assertThat(TripleDiffCalculator.comparable(CgmesStatement.reference("S", null, "Terminal", "12")))
+        assertThat(StatementDiff.comparable(CgmesStatement.reference("S", null, "Terminal", "12")))
                 .isEqualTo("R12");
-        assertThat(TripleDiffCalculator.comparable(CgmesStatement.enumeration("S", null, "k", "12")))
+        assertThat(StatementDiff.comparable(CgmesStatement.enumeration("S", null, "k", "12")))
                 .isEqualTo("E12");
     }
 
