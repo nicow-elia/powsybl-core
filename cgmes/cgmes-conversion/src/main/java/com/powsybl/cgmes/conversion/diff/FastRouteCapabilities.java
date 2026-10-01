@@ -16,16 +16,13 @@ import com.powsybl.cgmes.conversion.export.SwitchAndTerminalFamily;
 import com.powsybl.cgmes.conversion.export.TapChangerAndShuntFamily;
 import com.powsybl.cgmes.conversion.mapping.Block;
 import com.powsybl.cgmes.conversion.mapping.LoadRows;
-import com.powsybl.cgmes.conversion.mapping.PlainFamily;
 import com.powsybl.cgmes.model.CgmesNamespace;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
-import com.powsybl.iidm.network.Load;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -35,6 +32,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Stream;
+
+import static java.util.Map.entry;
 
 /**
  * What the in-place difference model update can do, as one declarative table.
@@ -184,9 +184,11 @@ public final class FastRouteCapabilities {
         }
     }
 
-    /** The families whose value lives in the equipment profile in CGMES 2.4.15 and in the steady state in CGMES 3. */
-    private static final Set<Family> LIMIT_FAMILIES = Set.of(Family.CURRENT_LIMIT, Family.ACTIVE_POWER_LIMIT,
-            Family.APPARENT_POWER_LIMIT, Family.VOLTAGE_LIMIT);
+    /**
+     * The query of every operational limit value: equipment data in CIM 2.4.15, steady state data in CIM 3. One
+     * OperationalLimit is one CGMES object with one value.
+     */
+    private static final String OPERATIONAL_LIMITS_QUERY = LimitFamily.CURRENT_LIMIT.updateQuery();
 
     /** The setpoint block of a converter: the CGMES update reads these four together (and of both converters of a line). */
     static final PropertyGroup AC_DC_CONVERTER_SETPOINTS = PropertyGroup.of(HvdcFamily.SETPOINTS.toArray(String[]::new));
@@ -219,7 +221,7 @@ public final class FastRouteCapabilities {
             "the control area tolerance is written as the IIDM property \"pTolerance\", and properties are not"
                     + " stored per variant");
 
-    /** Why a family writes state shared by every variant, by family. */
+    /** Why a family writes state shared by every variant, by family: the families that are {@link VariantSafety#UNSAFE}. */
     private static final Map<Family, String> VARIANT_UNSAFE_REASONS = variantUnsafeReasons();
 
     private static Map<Family, String> variantUnsafeReasons() {
@@ -244,7 +246,10 @@ public final class FastRouteCapabilities {
         return Map.copyOf(reasons);
     }
 
-    /** Why a family may write state shared by every variant, decided against the receiving network. */
+    /**
+     * Why a family may write state shared by every variant, decided against the receiving network: the families that
+     * are {@link VariantSafety#NETWORK_DEPENDENT}. A family in neither map is {@link VariantSafety#SAFE}.
+     */
     private static final Map<Family, String> VARIANT_NETWORK_DEPENDENT_REASONS = networkDependentReasons();
 
     private static Map<Family, String> networkDependentReasons() {
@@ -280,9 +285,6 @@ public final class FastRouteCapabilities {
         return Map.copyOf(reasons);
     }
 
-    /** The families of an IIDM load, in the order of the table. */
-    private static final Map<Family, PlainFamily<Load>> LOAD_FAMILIES = loadFamilies();
-
     private static final List<FamilySpec> TABLE = table0();
     private static final Map<Family, FamilySpec> BY_FAMILY = byFamily();
     private static final Map<String, Set<Family>> BY_PROPERTY = byProperty();
@@ -291,85 +293,71 @@ public final class FastRouteCapabilities {
     private FastRouteCapabilities() {
     }
 
-    private static Map<Family, PlainFamily<Load>> loadFamilies() {
-        Map<Family, PlainFamily<Load>> families = new EnumMap<>(Family.class);
-        families.put(Family.ENERGY_CONSUMER, LoadRows.ENERGY_CONSUMER);
-        families.put(Family.ENERGY_SOURCE, LoadRows.ENERGY_SOURCE);
-        families.put(Family.ASYNCHRONOUS_MACHINE, LoadRows.ASYNCHRONOUS_MACHINE);
-        return Collections.unmodifiableMap(families);
-    }
-
+    /**
+     * The table: one family per block the mapping declares, in the order of the families. Everything a specification
+     * says is derived from the block (query, classes, groups; the profiles and the handler from the query) and from the
+     * variant safety reasons above; only the pairing of a family with its block is stated here.
+     */
     private static List<FamilySpec> table0() {
-        List<FamilySpec> table = new ArrayList<>();
-        table.add(ssh(Family.SWITCH, SwitchAndTerminalFamily.SWITCH, VariantSafety.SAFE));
-        table.add(ssh(Family.TERMINAL, SwitchAndTerminalFamily.TERMINAL, VariantSafety.NETWORK_DEPENDENT));
-        table.add(ssh(Family.DC_TERMINAL, SwitchAndTerminalFamily.DC_TERMINAL, VariantSafety.SAFE));
-        // The families of a load are data rows: query, classes and the one group they are read in come from the rows
-        // (the asynchronous machine's four properties are one required block, powsybl-core #4103)
-        LOAD_FAMILIES.forEach((family, rows) -> table.add(ssh(family, rows.block(), VariantSafety.SAFE)));
-        table.add(ssh(Family.SYNCHRONOUS_MACHINE, MachineFamily.SYNCHRONOUS_MACHINE, VariantSafety.NETWORK_DEPENDENT));
-        table.add(ssh(Family.EXTERNAL_NETWORK_INJECTION, MachineFamily.EXTERNAL_NETWORK_INJECTION, VariantSafety.NETWORK_DEPENDENT));
-        table.add(ssh(Family.EQUIVALENT_INJECTION, MachineFamily.EQUIVALENT_INJECTION, VariantSafety.NETWORK_DEPENDENT));
-        table.add(ssh(Family.GENERATING_UNIT, MachineFamily.GENERATING_UNIT, VariantSafety.NETWORK_DEPENDENT));
-        table.add(ssh(Family.STATIC_VAR_COMPENSATOR, TapChangerAndShuntFamily.STATIC_VAR_COMPENSATOR, VariantSafety.SAFE));
-        table.add(ssh(Family.SHUNT_COMPENSATOR, TapChangerAndShuntFamily.SHUNT_COMPENSATOR, VariantSafety.SAFE));
-        table.add(ssh(Family.RATIO_TAP_CHANGER, TapChangerAndShuntFamily.RATIO_TAP_CHANGER, VariantSafety.NETWORK_DEPENDENT));
-        table.add(ssh(Family.PHASE_TAP_CHANGER, TapChangerAndShuntFamily.PHASE_TAP_CHANGER, VariantSafety.NETWORK_DEPENDENT));
-        table.add(ssh(Family.REGULATING_CONTROL, RegulatingControlFamily.REGULATING_CONTROL, VariantSafety.NETWORK_DEPENDENT));
-        table.add(converter(Family.CS_CONVERTER, HvdcFamily.CS_CONVERTER, VariantSafety.UNSAFE));
-        table.add(converter(Family.VS_CONVERTER, HvdcFamily.VS_CONVERTER, VariantSafety.NETWORK_DEPENDENT));
-        table.add(ssh(Family.CONTROL_AREA, ControlAreaFamily.CONTROL_AREA, VariantSafety.SAFE));
-        // Operational limit values: equipment data in CIM 2.4.15, steady state data in CIM 3. One OperationalLimit
-        // is one CGMES object with one value, so every group holds a single property.
-        table.add(limit(Family.CURRENT_LIMIT, LimitFamily.CURRENT_LIMIT));
-        table.add(limit(Family.ACTIVE_POWER_LIMIT, LimitFamily.ACTIVE_POWER_LIMIT));
-        table.add(limit(Family.APPARENT_POWER_LIMIT, LimitFamily.APPARENT_POWER_LIMIT));
-        table.add(limit(Family.VOLTAGE_LIMIT, LimitFamily.VOLTAGE_LIMIT_VALUE));
-        // Equipment values nothing in the update path reads, applied with IIDM setters
-        table.add(directSetter(Family.AC_LINE_SEGMENT, LimitFamily.AC_LINE_SEGMENT));
-        table.add(directSetter(Family.SERIES_COMPENSATOR, LimitFamily.SERIES_COMPENSATOR));
-        table.add(directSetter(Family.EQUIVALENT_BRANCH, LimitFamily.EQUIVALENT_BRANCH));
-        table.add(directSetter(Family.VOLTAGE_LEVEL, LimitFamily.VOLTAGE_LEVEL));
-        return List.copyOf(table);
-    }
-
-    /** A family of the steady state hypothesis whose one group is the block a family of the mapping declares. */
-    private static FamilySpec ssh(Family family, Block block, VariantSafety variantSafety) {
-        return ssh(family, block.updateQuery(), block.cimClasses().get(0), Set.copyOf(block.cimClasses()),
-                List.of(new PropertyGroup(Set.copyOf(block.required()), Set.copyOf(block.optional()))), variantSafety);
-    }
-
-    /** A converter family: the setpoint block every converter has, then the control block of its class. */
-    private static FamilySpec converter(Family family, Block block, VariantSafety variantSafety) {
-        FamilySpec spec = ssh(family, block, variantSafety);
-        return new FamilySpec(family, spec.subsets(), spec.handler(), spec.updateQuery(), spec.canonicalType(), spec.rdfTypes(),
-                List.of(AC_DC_CONVERTER_SETPOINTS, spec.groups().get(0)), variantSafety);
-    }
-
-    private static FamilySpec ssh(Family family, String query, String canonicalType, Set<String> rdfTypes,
-                                  List<PropertyGroup> groups, VariantSafety variantSafety) {
-        return new FamilySpec(family, Set.of(CgmesSubset.STEADY_STATE_HYPOTHESIS), Handler.UPDATE_QUERY, query,
-                canonicalType, rdfTypes, groups, variantSafety);
+        return Stream.of(
+                entry(Family.SWITCH, SwitchAndTerminalFamily.SWITCH),
+                entry(Family.TERMINAL, SwitchAndTerminalFamily.TERMINAL),
+                entry(Family.DC_TERMINAL, SwitchAndTerminalFamily.DC_TERMINAL),
+                // The families of a load are data rows (the asynchronous machine's four properties are one required
+                // block, powsybl-core #4103)
+                entry(Family.ENERGY_CONSUMER, LoadRows.ENERGY_CONSUMER.block()),
+                entry(Family.ENERGY_SOURCE, LoadRows.ENERGY_SOURCE.block()),
+                entry(Family.ASYNCHRONOUS_MACHINE, LoadRows.ASYNCHRONOUS_MACHINE.block()),
+                entry(Family.SYNCHRONOUS_MACHINE, MachineFamily.SYNCHRONOUS_MACHINE),
+                entry(Family.EXTERNAL_NETWORK_INJECTION, MachineFamily.EXTERNAL_NETWORK_INJECTION),
+                entry(Family.EQUIVALENT_INJECTION, MachineFamily.EQUIVALENT_INJECTION),
+                entry(Family.GENERATING_UNIT, MachineFamily.GENERATING_UNIT),
+                entry(Family.STATIC_VAR_COMPENSATOR, TapChangerAndShuntFamily.STATIC_VAR_COMPENSATOR),
+                entry(Family.SHUNT_COMPENSATOR, TapChangerAndShuntFamily.SHUNT_COMPENSATOR),
+                entry(Family.RATIO_TAP_CHANGER, TapChangerAndShuntFamily.RATIO_TAP_CHANGER),
+                entry(Family.PHASE_TAP_CHANGER, TapChangerAndShuntFamily.PHASE_TAP_CHANGER),
+                entry(Family.REGULATING_CONTROL, RegulatingControlFamily.REGULATING_CONTROL),
+                entry(Family.CS_CONVERTER, HvdcFamily.CS_CONVERTER),
+                entry(Family.VS_CONVERTER, HvdcFamily.VS_CONVERTER),
+                entry(Family.CONTROL_AREA, ControlAreaFamily.CONTROL_AREA),
+                entry(Family.CURRENT_LIMIT, LimitFamily.CURRENT_LIMIT),
+                entry(Family.ACTIVE_POWER_LIMIT, LimitFamily.ACTIVE_POWER_LIMIT),
+                entry(Family.APPARENT_POWER_LIMIT, LimitFamily.APPARENT_POWER_LIMIT),
+                entry(Family.VOLTAGE_LIMIT, LimitFamily.VOLTAGE_LIMIT_VALUE),
+                entry(Family.AC_LINE_SEGMENT, LimitFamily.AC_LINE_SEGMENT),
+                entry(Family.SERIES_COMPENSATOR, LimitFamily.SERIES_COMPENSATOR),
+                entry(Family.EQUIVALENT_BRANCH, LimitFamily.EQUIVALENT_BRANCH),
+                entry(Family.VOLTAGE_LEVEL, LimitFamily.VOLTAGE_LEVEL))
+                .map(entry -> spec(entry.getKey(), entry.getValue()))
+                .toList();
     }
 
     /**
-     * An operational limit family: one class, one value, read by the {@code operationalLimits} query in both CIM
-     * versions. Which profile carries the value is a CIM version rule rather than a family rule, see
-     * {@link #checkLimitProfile}.
+     * The specification of a family from the block the mapping declares for it.
+     *
+     * <ul>
+     *     <li>A block without update query holds equipment values nothing in the update path reads: they are applied
+     *     with IIDM setters, and every property is a group of its own, since no query reads them together.</li>
+     *     <li>An operational limit value is read by its query in both CIM versions; which profile carries it is a CIM
+     *     version rule rather than a family rule, see {@link #checkLimitProfile}.</li>
+     *     <li>A converter is read with the setpoint block every converter has, then the control block of its class.</li>
+     *     <li>Any other block is one group of the steady state hypothesis: its required and its optional properties.</li>
+     * </ul>
      */
-    private static FamilySpec limit(Family family, Block block) {
-        return new FamilySpec(family, Set.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS),
-                Handler.UPDATE_QUERY, block.updateQuery(), block.cimClasses().get(0), Set.copyOf(block.cimClasses()),
-                List.of(PropertyGroup.of(block.required().toArray(String[]::new))), VariantSafety.UNSAFE);
-    }
-
-    /**
-     * A family whose values are applied with IIDM setters. Every property is a group of its own: there is no query
-     * that would read them together, so none of them can make another one unreadable.
-     */
-    private static FamilySpec directSetter(Family family, Block block) {
-        return new FamilySpec(family, Set.of(CgmesSubset.EQUIPMENT), Handler.DIRECT_SETTER, null, block.cimClasses().get(0),
-                Set.copyOf(block.cimClasses()), block.required().stream().map(PropertyGroup::of).toList(), VariantSafety.UNSAFE);
+    private static FamilySpec spec(Family family, Block block) {
+        Set<CgmesSubset> subsets = block.updateQuery() == null ? Set.of(CgmesSubset.EQUIPMENT)
+                : OPERATIONAL_LIMITS_QUERY.equals(block.updateQuery())
+                ? Set.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS)
+                : Set.of(CgmesSubset.STEADY_STATE_HYPOTHESIS);
+        PropertyGroup group = new PropertyGroup(Set.copyOf(block.required()), Set.copyOf(block.optional()));
+        List<PropertyGroup> groups = block.updateQuery() == null ? block.required().stream().map(PropertyGroup::of).toList()
+                : HvdcFamily.CS_CONVERTER.updateQuery().equals(block.updateQuery()) ? List.of(AC_DC_CONVERTER_SETPOINTS, group)
+                : List.of(group);
+        VariantSafety safety = VARIANT_UNSAFE_REASONS.containsKey(family) ? VariantSafety.UNSAFE
+                : VARIANT_NETWORK_DEPENDENT_REASONS.containsKey(family) ? VariantSafety.NETWORK_DEPENDENT
+                : VariantSafety.SAFE;
+        return new FamilySpec(family, subsets, block.updateQuery() == null ? Handler.DIRECT_SETTER : Handler.UPDATE_QUERY,
+                block.updateQuery(), block.cimClasses().get(0), Set.copyOf(block.cimClasses()), groups, safety);
     }
 
     private static Map<Family, FamilySpec> byFamily() {
@@ -654,7 +642,7 @@ public final class FastRouteCapabilities {
     }
 
     private static boolean isLimitValue(String property) {
-        return familiesOf(property).stream().anyMatch(LIMIT_FAMILIES::contains);
+        return familiesOf(property).stream().anyMatch(family -> OPERATIONAL_LIMITS_QUERY.equals(spec(family).updateQuery()));
     }
 
     /**
