@@ -274,8 +274,7 @@ public final class EquipmentExport {
                 // create a new fictitious substation inside this network
                 fictSubstationId = writeFictitiousSubstationFor(network, cimNamespace, writer, context);
             }
-            VoltageLevelEq.write(context.getNamingStrategy().getCgmesId(voltageLevel), voltageLevel.getNameOrId(),
-                    LimitFamily.voltageLimit(voltageLevel, false, IidmStateView.LIVE), LimitFamily.voltageLimit(voltageLevel, true, IidmStateView.LIVE),
+            VoltageLevelEq.write(context.getNamingStrategy().getCgmesId(voltageLevel), voltageLevel.getNameOrId(), voltageLevel.getLowVoltageLimit(), voltageLevel.getHighVoltageLimit(),
                     substationId.orElse(fictSubstationId), baseVoltageId, cimNamespace, writer, context);
         }
     }
@@ -760,8 +759,8 @@ public final class EquipmentExport {
         for (Line line : network.getLines()) {
             double baseVoltage = Math.max(line.getTerminal1().getVoltageLevel().getNominalV(), line.getTerminal2().getVoltageLevel().getNominalV());
             String baseVoltageId = context.getBaseVoltageIdFromNominalV(baseVoltage);
-            AcLineSegmentEq.write(context.getNamingStrategy().getCgmesId(line), line.getNameOrId(), baseVoltageId,
-                LimitFamily.lineImpedance(line, CgmesChangeTranslator.R, IidmStateView.LIVE), LimitFamily.lineImpedance(line, CgmesChangeTranslator.X, IidmStateView.LIVE),
+            AcLineSegmentEq.write(context.getNamingStrategy().getCgmesId(line), line.getNameOrId(), baseVoltageId, line.getR(), line.getX(),
+                // gch = g1 + g2 and bch = b1 + b2: the rule the change export describes a line with, stated once
                 LimitFamily.lineImpedance(line, CgmesChangeTranslator.G1, IidmStateView.LIVE), LimitFamily.lineImpedance(line, CgmesChangeTranslator.B1, IidmStateView.LIVE),
                 cimNamespace, writer, context);
             writeBranchLimits(line, getTerminalId(line.getTerminal1(), context), getTerminalId(line.getTerminal2(), context), cimNamespace,
@@ -1144,10 +1143,7 @@ public final class EquipmentExport {
             // Cast the boundaryLine to an AcLineSegment
             AcLineSegmentEq.write(context.getNamingStrategy().getCgmesId(boundaryLine), boundaryLine.getNameOrId(),
                     context.getBaseVoltageIdFromNominalV(boundaryLine.getTerminal().getVoltageLevel().getNominalV()),
-                    LimitFamily.boundaryLineImpedance(boundaryLine, CgmesChangeTranslator.R, IidmStateView.LIVE),
-                    LimitFamily.boundaryLineImpedance(boundaryLine, CgmesChangeTranslator.X, IidmStateView.LIVE),
-                    LimitFamily.boundaryLineImpedance(boundaryLine, CgmesChangeTranslator.G, IidmStateView.LIVE),
-                    LimitFamily.boundaryLineImpedance(boundaryLine, CgmesChangeTranslator.B, IidmStateView.LIVE), cimNamespace, writer, context);
+                    boundaryLine.getR(), boundaryLine.getX(), boundaryLine.getG(), boundaryLine.getB(), cimNamespace, writer, context);
             writeFlowsLimits(boundaryLine, getTerminalId(boundaryLine.getTerminal(), context), cimNamespace, euNamespace, exportedLimitTypes, writer, context);
         }
     }

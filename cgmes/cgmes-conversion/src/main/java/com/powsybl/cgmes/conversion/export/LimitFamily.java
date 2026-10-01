@@ -652,9 +652,9 @@ public final class LimitFamily extends AbstractFamily {
 
     /**
      * The high or the low voltage limit of a voltage level, read from the given state: the value of its
-     * {@code VoltageLimit} objects, or of the {@code VoltageLevel} attribute, which the full equipment export writes.
+     * {@code VoltageLimit} objects, or of the {@code VoltageLevel} attribute.
      */
-    static double voltageLimit(VoltageLevel voltageLevel, boolean high, IidmStateView state) {
+    private static double voltageLimit(VoltageLevel voltageLevel, boolean high, IidmStateView state) {
         return high ? state.getDouble(voltageLevel, HIGH_VOLTAGE_LIMIT, voltageLevel::getHighVoltageLimit)
                 : state.getDouble(voltageLevel, LOW_VOLTAGE_LIMIT, voltageLevel::getLowVoltageLimit);
     }
@@ -737,7 +737,7 @@ public final class LimitFamily extends AbstractFamily {
     /**
      * An impedance of a line as CGMES holds it, read from the given state: {@code r}, {@code x}, and for a key of
      * either half of the shunt admittance the total of both halves ({@code gch = g1 + g2}, {@code bch = b1 + b2}),
-     * which the import splits equally. The full equipment export writes the same values.
+     * which the import splits equally. The full equipment export reads the shunt admittance here.
      */
     static double lineImpedance(Line line, String key, IidmStateView state) {
         return switch (key) {
@@ -785,9 +785,9 @@ public final class LimitFamily extends AbstractFamily {
 
     /**
      * An impedance of a boundary line as CGMES holds it, read from the given state: its branch carries the shunt
-     * admittance undivided. The full equipment export writes the same values.
+     * admittance undivided.
      */
-    static double boundaryLineImpedance(BoundaryLine boundaryLine, String key, IidmStateView state) {
+    private static double boundaryLineImpedance(BoundaryLine boundaryLine, String key, IidmStateView state) {
         return switch (key) {
             case R -> state.getDouble(boundaryLine, R, boundaryLine::getR);
             case X -> state.getDouble(boundaryLine, X, boundaryLine::getX);
