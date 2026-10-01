@@ -10,6 +10,7 @@ package com.powsybl.cgmes.conversion.elements;
 
 import com.powsybl.cgmes.conversion.Context;
 import com.powsybl.cgmes.conversion.ConversionException;
+import com.powsybl.cgmes.conversion.export.SwitchAndTerminalFamily;
 import com.powsybl.cgmes.model.CgmesNames;
 import com.powsybl.iidm.network.*;
 import com.powsybl.triplestore.api.PropertyBag;
@@ -147,7 +148,8 @@ public class SwitchConversion extends AbstractConductingEquipmentConversion impl
         // In node-breaker models, only the switch status is considered
         boolean isOpenFromAtLeastOneTerminal = sw.getVoltageLevel().getTopologyKind() == TopologyKind.BUS_BREAKER
                 && isOpenFromAtLeastOneTerminal(sw, context).orElse(false);
-        boolean isOpen = cgmesData.asBoolean(CgmesNames.OPEN).orElse(getDefaultIsOpen(sw, context));
+        // The value is read through the family the export writes it from
+        boolean isOpen = SwitchAndTerminalFamily.open(cgmesData, getDefaultIsOpen(sw, context));
         sw.setOpen(isOpen || isOpenFromAtLeastOneTerminal);
     }
 

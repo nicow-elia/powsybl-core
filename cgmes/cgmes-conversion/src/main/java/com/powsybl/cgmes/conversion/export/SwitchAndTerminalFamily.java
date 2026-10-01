@@ -12,6 +12,7 @@ import com.powsybl.cgmes.model.CgmesNames;
 import com.powsybl.commons.util.Result;
 import com.powsybl.iidm.network.DcSwitch;
 import com.powsybl.iidm.network.Switch;
+import com.powsybl.triplestore.api.PropertyBag;
 
 import java.util.List;
 
@@ -31,7 +32,8 @@ import static com.powsybl.commons.util.Result.success;
  * their own in CGMES. A change of such a switch describes every subject of its owner, both terminals.
  *
  * <p>The keys a change is reported under and the blocks the CGMES update reads are declared here; the dispatch of the
- * change export, the description and the capabilities of the in-place import are derived from them.</p>
+ * change export, the description and the capabilities of the in-place import are derived from them, and the
+ * importer's update reads the open state of a switch through {@link #open}.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
@@ -71,6 +73,14 @@ public final class SwitchAndTerminalFamily extends AbstractFamily {
         out.startObject(originalClass != null ? originalClass : CgmesExportUtil.switchClassname(sw.getKind()), cgmesId(sw))
                 .value(SWITCH_OPEN, state.getBoolean(sw, OPEN, sw::isOpen))
                 .endObject();
+    }
+
+    /**
+     * The open state the update query of a switch bound, the given one when it bound none. Whether a disconnected
+     * terminal opens the switch as well is the importer's own rule.
+     */
+    public static boolean open(PropertyBag values, boolean otherwise) {
+        return values.asBoolean(variable(SWITCH_OPEN)).orElse(otherwise);
     }
 
     /** The three CGMES classes an IIDM line or boundary line can have been imported from. */
