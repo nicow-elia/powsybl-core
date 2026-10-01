@@ -29,7 +29,10 @@ import com.powsybl.iidm.network.VoltageLevel;
 import com.powsybl.iidm.network.events.OperationalLimitsInfo;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.SortedSet;
@@ -63,6 +66,16 @@ import static com.powsybl.commons.util.Result.success;
  *
  * <p>The keys a change is reported under and the blocks the in-place import reads or applies are declared here; the
  * dispatch of the change export, the probes and the capabilities of the in-place import are derived from them.</p>
+ *
+ * <p><b>Which IIDM loading limits a CGMES OperationalLimit identifier stands for</b> ({@link #limitSlots}). The CGMES
+ * import stores the master resource identifier of every converted OperationalLimit as a property of the
+ * {@code OperationalLimitsGroup} it landed in, named {@code CGMES.OperationalLimit_<Class>_patl} or
+ * {@code CGMES.OperationalLimit_<Class>_tatl_<duration>}. The change export needs the lookup to find out whether the
+ * identifier it is about to write is shared, which happens when the CGMES set was attached to the <em>equipment</em>
+ * of a line rather than to one of its terminals: the import then creates a group on each side and stores the same
+ * identifiers in both, and a single CGMES value cannot describe two different IIDM values. The in-place import needs
+ * the same lookup to find the IIDM objects a statement about an OperationalLimit touches. Tie lines are not walked:
+ * their limits <em>are</em> the limits of their boundary lines, which is also where a change of them is recorded.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
@@ -102,9 +115,68 @@ public final class LimitFamily extends AbstractFamily {
     public static final Block VOLTAGE_LEVEL = new Block(null, List.of(CgmesNames.VOLTAGE_LEVEL),
             CgmesNames.VOLTAGE_LEVEL + "." + HIGH_VOLTAGE_LIMIT, CgmesNames.VOLTAGE_LEVEL + "." + LOW_VOLTAGE_LIMIT);
 
+    /** What IIDM appends to the attribute of a side's loading limits for a change of the permanent limit. */
+    private static final String PERMANENT_LIMIT_SUFFIX = ".permanentLimit";
+    /** What IIDM appends to the attribute of a side's loading limits for a change of a temporary limit value. */
+    private static final String TEMPORARY_LIMIT_VALUE_SUFFIX = ".temporaryLimit.value";
+    /** {@code CGMES.OperationalLimit_<Class>_patl} and {@code ..._tatl_<duration>}. */
+    private static final Pattern OPERATIONAL_LIMIT_PROPERTY = Pattern.compile(
+            Pattern.quote(Conversion.CGMES_PREFIX_ALIAS_PROPERTIES + CgmesNames.OPERATIONAL_LIMIT + "_")
+                    + "(\\w+?)_(?:patl|tatl_(\\d+))$");
+
+    /**
+     * One place a CGMES OperationalLimit value lands in IIDM.
+     *
+     * @param owner    the branch, three windings transformer or boundary line a change of the limit is recorded on
+     * @param prefix   the attribute name prefix of the side, {@code limits1}, {@code limits2}, {@code limits3} or
+     *                 {@code limits} for a boundary line
+     * @param type     which of the three kinds of loading limits this is
+     * @param groupId  the identifier of the operational limits group holding the limit
+     * @param duration the acceptable duration of the temporary limit, or {@code -1} for the permanent one
+     */
+    public record LimitSlot(Identifiable<?> owner, String prefix, LimitType type, String groupId, int duration) {
+
+        /** The attribute key of a replacement of the whole {@code LoadingLimits} object this limit belongs to. */
+        String wholeKey() {
+            return prefix + "_" + type + EventCompactor.KEY_SEPARATOR + groupId;
+        }
+
+        /** The attribute key of a change of this very limit value. */
+        public String memberKey() {
+            return memberKey(duration);
+        }
+
+        /**
+         * The attribute key of a change of a limit value of the same {@code LoadingLimits} object.
+         *
+         * @param acceptableDuration the acceptable duration of the temporary limit, or {@code -1} for the permanent one
+         */
+        String memberKey(int acceptableDuration) {
+            return acceptableDuration < 0
+                    ? prefix + "_" + type + PERMANENT_LIMIT_SUFFIX + EventCompactor.KEY_SEPARATOR + groupId
+                    : prefix + "_" + type + TEMPORARY_LIMIT_VALUE_SUFFIX + EventCompactor.KEY_SEPARATOR + groupId
+                            + EventCompactor.KEY_SEPARATOR + acceptableDuration;
+        }
+
+        /** The CIM class of the OperationalLimit, which is also the prefix of the property naming its value. */
+        public String className() {
+            return switch (type) {
+                case CURRENT -> CgmesNames.CURRENT_LIMIT;
+                case ACTIVE_POWER -> CgmesNames.ACTIVE_POWER_LIMIT;
+                case APPARENT_POWER -> CgmesNames.APPARENT_POWER_LIMIT;
+                default -> throw new IllegalStateException("Not a loading limit type: " + type);
+            };
+        }
+
+        /** The operational limits group holding the limit, as the network stands; {@code null} when it is gone. */
+        public OperationalLimitsGroup group() {
+            return groupOf(owner, prefix, groupId);
+        }
+    }
+
     private final Network network;
     /** Built on first use, so that a change set without limits never pays for the walk it costs. */
-    private CgmesLimitIndex limitIndex;
+    private Map<String, List<LimitSlot>> limitSlots;
 
     LimitFamily(Network network, CgmesExportContext context, IidmStateView state, Scope scope) {
         super(context, state, scope);
@@ -151,7 +223,7 @@ public final class LimitFamily extends AbstractFamily {
      * @param limits the loading limits of that group and type, read live, {@code null} when there are none
      * @param member whether the key names a single limit rather than the whole {@code LoadingLimits} object
      */
-    private record LimitRef(CgmesLimitIndex.LimitSlot slot, OperationalLimitsGroup group, LoadingLimits limits,
+    private record LimitRef(LimitSlot slot, OperationalLimitsGroup group, LoadingLimits limits,
                             boolean member) {
     }
 
@@ -184,7 +256,7 @@ public final class LimitFamily extends AbstractFamily {
         String tail = matcher.group(4);
         String groupId = tail;
         int duration = -1;
-        if (CgmesLimitIndex.TEMPORARY_LIMIT_VALUE_SUFFIX.equals(suffix)) {
+        if (TEMPORARY_LIMIT_VALUE_SUFFIX.equals(suffix)) {
             int separator = tail.lastIndexOf(EventCompactor.KEY_SEPARATOR.charAt(0));
             if (separator < 0) {
                 return Optional.empty();
@@ -200,7 +272,7 @@ public final class LimitFamily extends AbstractFamily {
         if (group == null) {
             return Optional.empty();
         }
-        return Optional.of(new LimitRef(new CgmesLimitIndex.LimitSlot(owner, prefix, type, groupId, duration), group,
+        return Optional.of(new LimitRef(new LimitSlot(owner, prefix, type, groupId, duration), group,
                 loadingLimits(group, type), suffix != null));
     }
 
@@ -426,12 +498,12 @@ public final class LimitFamily extends AbstractFamily {
      * things, so changing one side alone is not exportable.</p>
      */
     private Optional<String> sharedLimitIdFailure(String limitId, double value) {
-        List<CgmesLimitIndex.LimitSlot> slots = limitIndex().slots(limitId);
+        List<LimitSlot> slots = limitSlots().getOrDefault(limitId, List.of());
         if (slots.size() <= 1) {
             return Optional.empty();
         }
-        for (CgmesLimitIndex.LimitSlot slot : slots) {
-            OperationalLimitsGroup group = groupOf(slot.owner(), slot.prefix(), slot.groupId());
+        for (LimitSlot slot : slots) {
+            OperationalLimitsGroup group = slot.group();
             LoadingLimits limits = group == null ? null : loadingLimits(group, slot.type());
             if (limits == null) {
                 return sharedLimitFailure(limitId);
@@ -455,12 +527,65 @@ public final class LimitFamily extends AbstractFamily {
         return context.getCimVersion() == 16 ? CgmesSubset.EQUIPMENT : CgmesSubset.STEADY_STATE_HYPOTHESIS;
     }
 
-    /** The index of the CGMES limit identifiers of this network, built on first use and shared by both directions. */
-    private CgmesLimitIndex limitIndex() {
-        if (limitIndex == null) {
-            limitIndex = CgmesLimitIndex.of(network);
+    /** The loading limits of every CGMES limit identifier of this network, built on first use. */
+    private Map<String, List<LimitSlot>> limitSlots() {
+        if (limitSlots == null) {
+            limitSlots = limitSlots(network);
         }
-        return limitIndex;
+        return limitSlots;
+    }
+
+    /**
+     * Every IIDM loading limit each CGMES OperationalLimit identifier the network remembers stands for, by identifier:
+     * one pass over the lines, the two and three windings transformers and the boundary lines.
+     */
+    public static Map<String, List<LimitSlot>> limitSlots(Network network) {
+        Map<String, List<LimitSlot>> index = new LinkedHashMap<>();
+        network.getLines().forEach(line -> addBranch(index, line));
+        network.getTwoWindingsTransformers().forEach(transformer -> addBranch(index, transformer));
+        network.getThreeWindingsTransformers().forEach(transformer -> {
+            for (ThreeWindingsTransformer.Leg leg : transformer.getLegs()) {
+                leg.getOperationalLimitsGroups().forEach(group -> addGroup(index, transformer, LIMITS_PREFIX + leg.getSide().getNum(), group));
+            }
+        });
+        network.getBoundaryLines().forEach(boundaryLine -> boundaryLine.getOperationalLimitsGroups()
+                .forEach(group -> addGroup(index, boundaryLine, LIMITS_PREFIX, group)));
+        Map<String, List<LimitSlot>> copy = new HashMap<>();
+        index.forEach((id, slots) -> copy.put(id, List.copyOf(slots)));
+        return Map.copyOf(copy);
+    }
+
+    private static void addBranch(Map<String, List<LimitSlot>> index, Branch<?> branch) {
+        branch.getOperationalLimitsGroups1().forEach(group -> addGroup(index, branch, LIMITS_PREFIX + "1", group));
+        branch.getOperationalLimitsGroups2().forEach(group -> addGroup(index, branch, LIMITS_PREFIX + "2", group));
+    }
+
+    private static void addGroup(Map<String, List<LimitSlot>> index, Identifiable<?> owner, String prefix,
+                                 OperationalLimitsGroup group) {
+        for (String propertyName : group.getPropertyNames()) {
+            Matcher matcher = OPERATIONAL_LIMIT_PROPERTY.matcher(propertyName);
+            LimitType type = matcher.matches() ? limitType(matcher.group(1)) : null;
+            String limitId = type == null ? null : group.getProperty(propertyName);
+            if (limitId != null && !limitId.isEmpty()) {
+                int duration = matcher.group(2) == null ? -1 : Integer.parseInt(matcher.group(2));
+                index.computeIfAbsent(limitId, id -> new ArrayList<>()).add(new LimitSlot(owner, prefix, type, group.getId(), duration));
+            }
+        }
+    }
+
+    private static LimitType limitType(String className) {
+        return switch (className) {
+            case CgmesNames.CURRENT_LIMIT -> LimitType.CURRENT;
+            case CgmesNames.ACTIVE_POWER_LIMIT -> LimitType.ACTIVE_POWER;
+            case CgmesNames.APPARENT_POWER_LIMIT -> LimitType.APPARENT_POWER;
+            default -> null;
+        };
+    }
+
+    /** Whether an IIDM object can carry loading limits at all, which is what {@link #limitSlots} walks. */
+    static boolean holdsLoadingLimits(Identifiable<?> identifiable) {
+        return identifiable instanceof Line || identifiable instanceof TwoWindingsTransformer
+                || identifiable instanceof ThreeWindingsTransformer || identifiable instanceof BoundaryLine;
     }
 
     // Voltage level limits

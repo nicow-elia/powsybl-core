@@ -12,7 +12,8 @@ import com.powsybl.cgmes.conversion.Conversion;
 import com.powsybl.cgmes.conversion.diff.FastRoutePlan.DirectStatement;
 import com.powsybl.cgmes.conversion.diff.FastRoutePlan.PlannedModel;
 import com.powsybl.cgmes.conversion.diff.FastRoutePlan.TypedObject;
-import com.powsybl.cgmes.conversion.export.CgmesLimitIndex;
+import com.powsybl.cgmes.conversion.export.LimitFamily;
+import com.powsybl.cgmes.conversion.export.LimitFamily.LimitSlot;
 import com.powsybl.cgmes.model.CgmesNames;
 import com.powsybl.cgmes.model.CgmesNamespace;
 import com.powsybl.cgmes.model.CgmesSubset;
@@ -21,11 +22,9 @@ import com.powsybl.cgmes.model.diff.DifferenceModelParser;
 import com.powsybl.commons.PowsyblException;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.BoundaryLine;
-import com.powsybl.iidm.network.Branch;
 import com.powsybl.iidm.network.Line;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.OperationalLimitsGroup;
-import com.powsybl.iidm.network.ThreeWindingsTransformer;
 import com.powsybl.iidm.network.VoltageLevel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -214,7 +213,7 @@ final class DirectEqApplier {
                 return;
             }
             // The subject resolution has already built one whenever a limit was resolved through it
-            CgmesLimitIndex index = plan.limitIndex() != null ? plan.limitIndex() : CgmesLimitIndex.of(network);
+            Map<String, List<LimitSlot>> index = plan.limitSlots() != null ? plan.limitSlots() : LimitFamily.limitSlots(network);
             for (CgmesStatement statement : limitStatements) {
                 syncOne(network, index, statement);
             }
@@ -236,9 +235,9 @@ final class DirectEqApplier {
             return statements;
         }
 
-        private static void syncOne(Network network, CgmesLimitIndex index, CgmesStatement statement) {
+        private static void syncOne(Network network, Map<String, List<LimitSlot>> index, CgmesStatement statement) {
             String id = DifferenceModelParser.normalizeId(statement.subjectId());
-            List<CgmesLimitIndex.LimitSlot> slots = index.slots(id);
+            List<LimitSlot> slots = index.getOrDefault(id, List.of());
             if (!slots.isEmpty()) {
                 slots.forEach(slot -> syncLoadingLimit(slot, statement.value()));
                 return;
@@ -246,8 +245,8 @@ final class DirectEqApplier {
             syncVoltageLimit(network, id, statement.value());
         }
 
-        private static void syncLoadingLimit(CgmesLimitIndex.LimitSlot slot, String value) {
-            OperationalLimitsGroup group = groupOf(slot);
+        private static void syncLoadingLimit(LimitSlot slot, String value) {
+            OperationalLimitsGroup group = slot.group();
             if (group == null) {
                 LOGGER.debug("The operational limits group {} of {} is gone, its normal value is not synchronized",
                         slot.groupId(), slot.owner().getId());
@@ -255,30 +254,6 @@ final class DirectEqApplier {
             }
             group.setProperty(Conversion.getOperationalLimitPropertyName(slot.className(), slot.duration() < 0,
                     Math.max(slot.duration(), 0), CgmesNames.NORMAL_VALUE), value);
-        }
-
-        private static OperationalLimitsGroup groupOf(CgmesLimitIndex.LimitSlot slot) {
-            return switch (slot.owner()) {
-                case ThreeWindingsTransformer transformer -> {
-                    ThreeWindingsTransformer.Leg leg = leg(transformer, slot);
-                    yield leg == null ? null : leg.getOperationalLimitsGroup(slot.groupId()).orElse(null);
-                }
-                case Branch<?> branch -> (CgmesLimitIndex.LIMITS_PREFIX + "1").equals(slot.prefix())
-                        ? branch.getOperationalLimitsGroup1(slot.groupId()).orElse(null)
-                        : branch.getOperationalLimitsGroup2(slot.groupId()).orElse(null);
-                case BoundaryLine boundaryLine -> boundaryLine.getOperationalLimitsGroup(slot.groupId()).orElse(null);
-                default -> null;
-            };
-        }
-
-        private static ThreeWindingsTransformer.Leg leg(ThreeWindingsTransformer transformer,
-                                                        CgmesLimitIndex.LimitSlot slot) {
-            return switch (slot.prefix().substring(CgmesLimitIndex.LIMITS_PREFIX.length())) {
-                case "1" -> transformer.getLeg1();
-                case "2" -> transformer.getLeg2();
-                case "3" -> transformer.getLeg3();
-                default -> null;
-            };
         }
 
         /** A voltage limit: the equipment fallback is the aggregate the voltage level now holds. */

@@ -1396,7 +1396,7 @@ public final class EquipmentExport {
      * group: the identifier the import stored, or a deterministic one derived from the terminal and the group.
      *
      * <p>Package private because the difference model export needs the very same identifier for a network that was
-     * not imported from CGMES and therefore carries no stored one, see {@code CgmesLimitIndex}.</p>
+     * not imported from CGMES and therefore carries no stored one, see {@code LimitFamily#limitSlots}.</p>
      *
      * @param terminalId the CGMES identifier of the terminal the set is attached to
      */

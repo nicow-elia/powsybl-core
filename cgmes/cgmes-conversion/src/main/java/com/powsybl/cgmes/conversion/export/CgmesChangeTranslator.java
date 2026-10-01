@@ -141,7 +141,8 @@ class CgmesChangeTranslator {
     static final String PARTICIPATION_FACTOR = "participationFactor";
     static final String REFERENCE_PRIORITY = "referencePriority";
     // Operational limits, voltage limits and branch impedances (equipment profile)
-    static final String LIMITS_PREFIX = CgmesLimitIndex.LIMITS_PREFIX;
+    /** The attribute name prefix of the limits of a side, as {@code OperationalLimitsGroupsImpl} spells it. */
+    static final String LIMITS_PREFIX = "limits";
     static final String HIGH_VOLTAGE_LIMIT = "highVoltageLimit";
     static final String LOW_VOLTAGE_LIMIT = "lowVoltageLimit";
     static final String R = "r";
@@ -415,7 +416,7 @@ class CgmesChangeTranslator {
             case BoundaryLine boundaryLine when LimitFamily.BOUNDARY_LINE_KEYS.contains(attribute) ->
                 limits.boundaryLineImpedanceUpdates(boundaryLine, attribute);
             case Identifiable<?> owner when attribute.startsWith(LIMITS_PREFIX)
-                    && CgmesLimitIndex.holdsLoadingLimits(owner) ->
+                    && LimitFamily.holdsLoadingLimits(owner) ->
                 limits.loadingLimitsUpdates(owner, attribute, event.oldValue());
             // The control mode of a converter is SSH data (qPccControl) and is handled above; for every other holder
             // the mode and the regulating terminal are equipment data, and CGMES has no slope on a RegulatingControl

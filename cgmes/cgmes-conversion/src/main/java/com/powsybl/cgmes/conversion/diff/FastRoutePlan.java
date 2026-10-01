@@ -13,8 +13,8 @@ import com.powsybl.cgmes.conversion.UpdateScope;
 import com.powsybl.cgmes.conversion.diff.DiffSubjectResolver.ResolvedSubject;
 import com.powsybl.cgmes.conversion.diff.FastRouteCapabilities.PropertyGroup;
 import com.powsybl.cgmes.conversion.elements.TerminalConversion;
-import com.powsybl.cgmes.conversion.export.CgmesLimitIndex;
 import com.powsybl.cgmes.conversion.export.CgmesObjectDump;
+import com.powsybl.cgmes.conversion.export.LimitFamily.LimitSlot;
 import com.powsybl.cgmes.extensions.CgmesMetadataModels;
 import com.powsybl.cgmes.model.CgmesMetadataModel;
 import com.powsybl.cgmes.model.CgmesNamespace;
@@ -173,16 +173,16 @@ final class FastRoutePlan {
     private final List<PlannedModel> models;
     private final List<DirectStatement> directStatements;
     private final Set<String> touchedIidmIds;
-    private final CgmesLimitIndex limitIndex;
+    private final Map<String, List<LimitSlot>> limitSlots;
 
     private FastRoutePlan(CgmesDiffImport.Decision decision, List<PlannedModel> models,
                           List<DirectStatement> directStatements, Set<String> touchedIidmIds,
-                          CgmesLimitIndex limitIndex) {
+                          Map<String, List<LimitSlot>> limitSlots) {
         this.decision = decision;
         this.models = models;
         this.directStatements = directStatements;
         this.touchedIidmIds = touchedIidmIds;
-        this.limitIndex = limitIndex;
+        this.limitSlots = limitSlots;
     }
 
     /** A plan that writes nothing: the difference is refused or says nothing. */
@@ -191,11 +191,11 @@ final class FastRoutePlan {
     }
 
     /**
-     * The index of the CGMES limit identifiers the subject resolution built, or {@code null} when it never needed
-     * one. Handing it over saves the applier a second walk over the operational limits groups.
+     * The loading limits of every CGMES limit identifier the subject resolution read, or {@code null} when it never
+     * needed them. Handing them over saves the applier a second walk over the operational limits groups.
      */
-    CgmesLimitIndex limitIndex() {
-        return limitIndex;
+    Map<String, List<LimitSlot>> limitSlots() {
+        return limitSlots;
     }
 
     /** The statements applied with IIDM setters, after the update workflow. */
@@ -312,7 +312,7 @@ final class FastRoutePlan {
                 return refused(new CgmesDiffImport.Decision(CgmesDiffImport.Route.NOOP, List.of()));
             }
             return new FastRoutePlan(new CgmesDiffImport.Decision(CgmesDiffImport.Route.FAST, List.of()),
-                    List.copyOf(models), List.copyOf(directs), Set.copyOf(touched), resolver.limitIndex());
+                    List.copyOf(models), List.copyOf(directs), Set.copyOf(touched), resolver.limitSlots());
         }
 
         private void checkOneCimNamespace() {

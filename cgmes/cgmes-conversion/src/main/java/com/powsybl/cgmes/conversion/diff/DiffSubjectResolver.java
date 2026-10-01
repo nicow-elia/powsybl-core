@@ -11,7 +11,8 @@ import com.powsybl.cgmes.conversion.Conversion;
 import com.powsybl.cgmes.conversion.diff.FastRouteCapabilities.Family;
 import com.powsybl.cgmes.conversion.elements.TerminalConversion;
 import com.powsybl.cgmes.conversion.export.CgmesExportUtil;
-import com.powsybl.cgmes.conversion.export.CgmesLimitIndex;
+import com.powsybl.cgmes.conversion.export.LimitFamily;
+import com.powsybl.cgmes.conversion.export.LimitFamily.LimitSlot;
 import com.powsybl.cgmes.extensions.CgmesTapChanger;
 import com.powsybl.cgmes.extensions.CgmesTapChangers;
 import com.powsybl.cgmes.model.CgmesNames;
@@ -116,8 +117,8 @@ final class DiffSubjectResolver {
 
     /** Subjects that are not equipment: regulating controls, generating units, equivalent injections. */
     private Map<String, ResolvedSubject> secondaryIndex;
-    /** The index of the CGMES limit identifiers, built with the secondary index and shared with the applier. */
-    private CgmesLimitIndex limitIndex;
+    /** The loading limits of every CGMES limit identifier, built with the secondary index and shared with the applier. */
+    private Map<String, List<LimitSlot>> limitSlots;
     /**
      * The fictitious switch of every CGMES terminal that has one, by terminal, built on the first terminal whose switch
      * does not carry the usual identifier: the importer identifies these switches by their properties, and the
@@ -433,11 +434,11 @@ final class DiffSubjectResolver {
      * equipment of a line rather than to one of its terminals.
      */
     private void addOperationalLimits(Map<String, ResolvedSubject> index) {
-        CgmesLimitIndex limits = CgmesLimitIndex.of(network);
-        limitIndex = limits;
-        for (String limitId : limits.limitIds()) {
-            List<CgmesLimitIndex.LimitSlot> slots = limits.slots(limitId);
-            CgmesLimitIndex.LimitSlot first = slots.get(0);
+        limitSlots = LimitFamily.limitSlots(network);
+        for (Map.Entry<String, List<LimitSlot>> limit : limitSlots.entrySet()) {
+            String limitId = limit.getKey();
+            List<LimitSlot> slots = limit.getValue();
+            LimitSlot first = slots.get(0);
             Family family = limitFamily(first.type());
             Set<String> iidmIds = new LinkedHashSet<>();
             slots.forEach(slot -> iidmIds.add(slot.owner().getId()));
@@ -554,8 +555,8 @@ final class DiffSubjectResolver {
                 existing.ownerAttributePrefix(), existing.probeKind(), Set.copyOf(ids));
     }
 
-    /** The index of the CGMES limit identifiers this resolver built, or {@code null} when it never needed one. */
-    CgmesLimitIndex limitIndex() {
-        return limitIndex;
+    /** The loading limits of every CGMES limit identifier this resolver read, or {@code null} when it never needed them. */
+    Map<String, List<LimitSlot>> limitSlots() {
+        return limitSlots;
     }
 }
