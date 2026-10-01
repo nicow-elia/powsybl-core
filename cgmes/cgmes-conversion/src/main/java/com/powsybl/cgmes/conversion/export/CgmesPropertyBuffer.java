@@ -7,11 +7,9 @@
  */
 package com.powsybl.cgmes.conversion.export;
 
-import com.powsybl.cgmes.model.CgmesNames;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 
-import javax.xml.stream.XMLStreamException;
 import javax.xml.stream.XMLStreamWriter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -19,8 +17,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-
-import static com.powsybl.cgmes.model.CgmesNamespace.RDF_NAMESPACE;
 
 /**
  * The CIM properties that a change export has to write, buffered per CGMES object and per profile.
@@ -167,12 +163,13 @@ class CgmesPropertyBuffer implements CgmesPropertySink {
      * Write the steady state hypothesis objects of this buffer, each as one typed element carrying an
      * {@code rdf:about}.
      */
-    void write(String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
-        for (Map.Entry<ObjectKey, ObjectUpdate> entry : updatesByObject.entrySet()) {
-            if (entry.getKey().subset() == CgmesSubset.STEADY_STATE_HYPOTHESIS) {
-                entry.getValue().write(cimNamespace, writer, context);
+    void write(String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) {
+        CgmesPropertySink out = new CgmesPropertySink.Xml(cimNamespace, writer, context);
+        updatesByObject.forEach((key, objectUpdate) -> {
+            if (key.subset() == CgmesSubset.STEADY_STATE_HYPOTHESIS) {
+                objectUpdate.write(out);
             }
-        }
+        });
     }
 
     /**
@@ -226,7 +223,7 @@ class CgmesPropertyBuffer implements CgmesPropertySink {
          * {@code enumValue("VsConverter.qPccControl", "VsQpccControlKind", "voltagePcc")}.
          */
         ObjectUpdate enumValue(String property, String enumerationName, String literal) {
-            properties.put(property, new Property(enumerationName + "." + literal, true));
+            properties.put(property, new Property(literal, enumerationName));
             return this;
         }
 
@@ -242,34 +239,31 @@ class CgmesPropertyBuffer implements CgmesPropertySink {
         }
 
         private ObjectUpdate literal(String property, String value) {
-            properties.put(property, new Property(value, false));
+            properties.put(property, new Property(value, null));
             return this;
         }
 
         private void addStatements(List<CgmesStatement> statements, CgmesExportContext context) {
             String subjectId = CgmesExportUtil.toMasterResourceId(masterResourceId, context);
-            properties.forEach((property, value) -> statements.add(value.enumeration()
-                    ? CgmesStatement.enumeration(subjectId, className, property, value.value())
+            properties.forEach((property, value) -> statements.add(value.enumerationName() != null
+                    ? CgmesStatement.enumeration(subjectId, className, property, value.enumerationName() + "." + value.value())
                     : CgmesStatement.literal(subjectId, className, property, value.value())));
         }
 
-        private void write(String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
-            CgmesExportUtil.writeStartAbout(className, masterResourceId, cimNamespace, writer, context);
-            for (Map.Entry<String, Property> entry : properties.entrySet()) {
-                Property property = entry.getValue();
-                if (property.enumeration()) {
-                    writer.writeEmptyElement(cimNamespace, entry.getKey());
-                    writer.writeAttribute(RDF_NAMESPACE, CgmesNames.RESOURCE, cimNamespace + property.value());
+        private void write(CgmesPropertySink out) {
+            out.startObject(className, masterResourceId);
+            properties.forEach((property, value) -> {
+                if (value.enumerationName() != null) {
+                    out.enumValue(property, value.enumerationName(), value.value());
                 } else {
-                    writer.writeStartElement(cimNamespace, entry.getKey());
-                    writer.writeCharacters(property.value());
-                    writer.writeEndElement();
+                    out.literal(property, value.value());
                 }
-            }
-            writer.writeEndElement();
+            });
+            out.endObject();
         }
     }
 
-    private record Property(String value, boolean enumeration) {
+    /** A lexical value, or a literal of the CIM enumeration {@code enumerationName} ({@code null} for a lexical value). */
+    private record Property(String value, String enumerationName) {
     }
 }
