@@ -35,7 +35,6 @@ import static com.powsybl.cgmes.conversion.Conversion.PROPERTY_GENERATING_UNIT;
 import static com.powsybl.cgmes.conversion.Conversion.PROPERTY_NORMAL_PF;
 import static com.powsybl.cgmes.conversion.Conversion.PROPERTY_REGULATION_CAPABILITY;
 import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.LOCAL_TARGET_Q;
-import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.LOCAL_TARGET_V;
 import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.P0;
 import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.PARTICIPATION_FACTOR;
 import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.Q0;
@@ -45,7 +44,6 @@ import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.TARGET_Q
 import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.TARGET_V;
 import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.VOLTAGE_REGULATION_ON;
 import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.VR_REGULATING;
-import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.VR_TARGET_VALUE;
 import static com.powsybl.cgmes.conversion.export.CgmesExportUtil.obtainCalculatedSynchronousMachineKind;
 import static com.powsybl.cgmes.conversion.export.CgmesExportUtil.obtainCurve;
 import static com.powsybl.cgmes.conversion.export.CgmesExportUtil.obtainSynchronousMachineKind;
@@ -61,7 +59,7 @@ import static com.powsybl.commons.util.Result.success;
  * {@link RegulatingControlFamily}.
  *
  * <p>The keys a change of a machine is reported under and the blocks the CGMES update reads are declared here; the
- * dispatch of the change export, the probes and the capabilities of the in-place import are derived from them.</p>
+ * dispatch of the change export, the description and the capabilities of the in-place import are derived from them.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
@@ -78,15 +76,8 @@ public final class MachineFamily extends AbstractFamily {
     /** The keys of a generator a change of which describes its machine or its control. */
     static final Set<String> GENERATOR_KEYS = Stream.concat(MACHINE_KEYS.stream(), RegulatingControlFamily.GENERATOR_KEYS.stream())
             .collect(Collectors.toUnmodifiableSet());
-    /** Separates the extension name from the attribute name in the key of an extension attribute. */
-    static final String EXTENSION_SEPARATOR = "#";
-    /** What the in-place import asks about a generator: every key, and the extension attributes of its blocks. */
-    public static final List<String> GENERATOR_PROBES = List.of(TARGET_P, LOCAL_TARGET_Q, LOCAL_TARGET_V, VR_TARGET_VALUE,
-            VR_REGULATING, ActivePowerControl.NAME + EXTENSION_SEPARATOR + PARTICIPATION_FACTOR,
-            ReferencePriorities.NAME + EXTENSION_SEPARATOR + REFERENCE_PRIORITY);
-    /** What the in-place import asks about the EquivalentInjection of a boundary line, and the keys a change of it has. */
-    public static final List<String> BOUNDARY_LINE_PROBES = List.of(P0, Q0, TARGET_P, TARGET_Q, TARGET_V, VOLTAGE_REGULATION_ON);
-    static final Set<String> BOUNDARY_LINE_KEYS = Set.copyOf(BOUNDARY_LINE_PROBES);
+    /** The keys of a change of the EquivalentInjection of a boundary line. */
+    static final Set<String> BOUNDARY_LINE_KEYS = Set.of(P0, Q0, TARGET_P, TARGET_Q, TARGET_V, VOLTAGE_REGULATION_ON);
 
     // The blocks the CGMES update reads. The p and q of a SynchronousMachine are two optional blocks of its query, but
     // the conversion only takes either when BOTH are bound (SynchronousMachineConversion: the updated power flow has to

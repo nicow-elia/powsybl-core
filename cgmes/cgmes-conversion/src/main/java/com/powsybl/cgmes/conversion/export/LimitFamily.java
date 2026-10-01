@@ -65,7 +65,7 @@ import static com.powsybl.commons.util.Result.success;
  * admittance).
  *
  * <p>The keys a change is reported under and the blocks the in-place import reads or applies are declared here; the
- * dispatch of the change export, the probes and the capabilities of the in-place import are derived from them.</p>
+ * dispatch of the change export, the description and the capabilities of the in-place import are derived from them.</p>
  *
  * <p><b>Which IIDM loading limits a CGMES OperationalLimit identifier stands for</b> ({@link #limitSlots}). The CGMES
  * import stores the master resource identifier of every converted OperationalLimit as a property of the
@@ -89,13 +89,10 @@ public final class LimitFamily extends AbstractFamily {
     private static final String MERGED_VOLTAGE_LEVEL_ALIAS_PREFIX =
             Conversion.CGMES_PREFIX_ALIAS_PROPERTIES + "MergedVoltageLevel";
 
-    /** What the in-place import asks about a voltage level, a line and a boundary line. */
-    public static final List<String> VOLTAGE_LEVEL_PROBES = List.of(HIGH_VOLTAGE_LIMIT, LOW_VOLTAGE_LIMIT);
-    public static final List<String> LINE_PROBES = List.of(R, X, G1, B1);
-    public static final List<String> BOUNDARY_LINE_PROBES = List.of(R, X, G, B);
-    static final Set<String> VOLTAGE_LEVEL_KEYS = Set.copyOf(VOLTAGE_LEVEL_PROBES);
+    /** The keys of a voltage level, a line and a boundary line the dispatch of the change export reads. */
+    static final Set<String> VOLTAGE_LEVEL_KEYS = Set.of(HIGH_VOLTAGE_LIMIT, LOW_VOLTAGE_LIMIT);
     static final Set<String> LINE_KEYS = Set.of(R, X, G1, G2, B1, B2);
-    static final Set<String> BOUNDARY_LINE_KEYS = Set.copyOf(BOUNDARY_LINE_PROBES);
+    static final Set<String> BOUNDARY_LINE_KEYS = Set.of(R, X, G, B);
     /** Attributes an impedance change of a transformer is reported under, which this exporter cuts. */
     private static final Set<String> TRANSFORMER_IMPEDANCE_KEYS = Set.of(R, X, G, B, "ratedU1", "ratedU2", "ratedU", "ratedS");
 
@@ -142,7 +139,7 @@ public final class LimitFamily extends AbstractFamily {
         }
 
         /** The attribute key of a change of this very limit value. */
-        public String memberKey() {
+        String memberKey() {
             return memberKey(duration);
         }
 
@@ -539,7 +536,7 @@ public final class LimitFamily extends AbstractFamily {
      * Every IIDM loading limit each CGMES OperationalLimit identifier the network remembers stands for, by identifier:
      * one pass over the lines, the two and three windings transformers and the boundary lines.
      */
-    public static Map<String, List<LimitSlot>> limitSlots(Network network) {
+    static Map<String, List<LimitSlot>> limitSlots(Network network) {
         Map<String, List<LimitSlot>> index = new LinkedHashMap<>();
         network.getLines().forEach(line -> addBranch(index, line));
         network.getTwoWindingsTransformers().forEach(transformer -> addBranch(index, transformer));

@@ -57,7 +57,7 @@ import static com.powsybl.commons.util.Result.success;
  * {@link RegulatingControlFamily}.
  *
  * <p>The keys a change is reported under and the blocks the CGMES update reads are declared here; the dispatch of the
- * change export, the probes and the capabilities of the in-place import are derived from them.</p>
+ * change export, the description and the capabilities of the in-place import are derived from them.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
@@ -71,15 +71,13 @@ public final class TapChangerAndShuntFamily extends AbstractFamily {
     /**
      * The keys of a shunt compensator (its section count, the targets and the flag of its control, and the deadband, which
      * the CGMES update reads for shunt compensators and tap changers only) and of a static var compensator (the local
-     * reactive power target too: the single target of its control is the one of its mode), in the order the in-place
-     * import probes them. The dispatch of the change export reads the same keys.
+     * reactive power target too: the single target of its control is the one of its mode), which the dispatch of the
+     * change export reads.
      */
-    public static final List<String> SHUNT_PROBES = List.of(SECTION_COUNT, LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING,
+    static final Set<String> SHUNT_KEYS = Set.of(SECTION_COUNT, LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING,
             VR_TARGET_DEADBAND);
-    public static final List<String> STATIC_VAR_COMPENSATOR_PROBES = List.of(LOCAL_TARGET_Q, LOCAL_TARGET_V, VR_TARGET_VALUE,
+    static final Set<String> STATIC_VAR_COMPENSATOR_KEYS = Set.of(LOCAL_TARGET_Q, LOCAL_TARGET_V, VR_TARGET_VALUE,
             VR_REGULATING);
-    static final Set<String> SHUNT_KEYS = Set.copyOf(SHUNT_PROBES);
-    static final Set<String> STATIC_VAR_COMPENSATOR_KEYS = Set.copyOf(STATIC_VAR_COMPENSATOR_PROBES);
     /** The suffixes of a phase tap changer, which are prefixed by the name a recorded change gives it. */
     private static final List<String> PHASE_TAP_CHANGER_SUFFIXES = List.of(TAP_POSITION_SUFFIX, REGULATING_SUFFIX,
             REGULATION_VALUE_SUFFIX, TARGET_DEADBAND_SUFFIX);
@@ -106,8 +104,11 @@ public final class TapChangerAndShuntFamily extends AbstractFamily {
         this.controls = controls;
     }
 
-    /** The probes of the tap changer the given prefix names ({@code ratioTapChanger2}, {@code phaseTapChanger}). */
-    public static List<String> tapChangerProbes(String prefix) {
+    /**
+     * The keys of the tap changer the given prefix names ({@code ratioTapChanger2}, {@code phaseTapChanger}): its
+     * position first, then the keys of its regulation.
+     */
+    private static List<String> tapChangerKeys(String prefix) {
         return (prefix.startsWith(RATIO_TAP_CHANGER_PREFIX) ? RATIO_TAP_CHANGER_SUFFIXES : PHASE_TAP_CHANGER_SUFFIXES)
                 .stream().map(suffix -> prefix + suffix).toList();
     }
@@ -122,7 +123,7 @@ public final class TapChangerAndShuntFamily extends AbstractFamily {
         for (String end : transformer instanceof ThreeWindingsTransformer ? List.of("1", "2", "3") : List.of("")) {
             for (String prefix : List.of(RATIO_TAP_CHANGER_PREFIX + end, PHASE_TAP_CHANGER_PREFIX + end)) {
                 // The position alone, and the first key of the regulation, which describes the control with it
-                tapChangerProbes(prefix).subList(0, 2).forEach(attribute -> blocks.add(switch (transformer) {
+                tapChangerKeys(prefix).subList(0, 2).forEach(attribute -> blocks.add(switch (transformer) {
                     case TwoWindingsTransformer twoWindings -> twoWindingsTapChangerUpdates(twoWindings, tapChangerAttribute(attribute));
                     case ThreeWindingsTransformer threeWindings -> threeWindingsTapChangerUpdates(threeWindings, tapChangerAttribute(attribute));
                     default -> throw new IllegalStateException("Not a transformer: " + transformer.getId());
@@ -130,16 +131,6 @@ public final class TapChangerAndShuntFamily extends AbstractFamily {
             }
         }
         return blocks;
-    }
-
-    /** Every tap changer probe of a transformer with the given ends ({@code ""} for two windings), ratio first. */
-    public static List<String> transformerProbes(String... ends) {
-        List<String> probes = new ArrayList<>();
-        for (String end : ends) {
-            probes.addAll(tapChangerProbes(RATIO_TAP_CHANGER_PREFIX + end));
-            probes.addAll(tapChangerProbes(PHASE_TAP_CHANGER_PREFIX + end));
-        }
-        return probes;
     }
 
     /**

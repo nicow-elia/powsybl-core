@@ -186,16 +186,18 @@ class MappingCompletenessTest {
         return null;
     }
 
-    /** The keys the families declare: the dispatch of the change export and the probes of the in-place import. */
+    /**
+     * The keys the families declare, which the dispatch of the change export reads, and the extension attributes of a
+     * generator ({@code MachineFamily#extensionUpdates}).
+     */
     private static Set<String> read() {
         Set<String> read = new TreeSet<>(LoadRows.keys());
-        Stream.of(MachineFamily.GENERATOR_PROBES, MachineFamily.BOUNDARY_LINE_PROBES, TapChangerAndShuntFamily.SHUNT_PROBES,
-                        TapChangerAndShuntFamily.STATIC_VAR_COMPENSATOR_PROBES, SwitchAndTerminalFamily.PROBES,
-                        HvdcFamily.LINE_PROBES, HvdcFamily.VSC_STATION_PROBES, HvdcFamily.LCC_STATION_PROBES,
-                        HvdcFamily.CONVERTER_PROBES, List.copyOf(LimitFamily.LINE_KEYS), List.copyOf(LimitFamily.BOUNDARY_LINE_KEYS),
-                        LimitFamily.VOLTAGE_LEVEL_PROBES, List.copyOf(ControlAreaFamily.KEYS))
-                .flatMap(List::stream)
-                .map(key -> key.substring(key.indexOf(MachineFamily.EXTENSION_SEPARATOR) + 1))
+        Stream.of(MachineFamily.GENERATOR_KEYS, MachineFamily.BOUNDARY_LINE_KEYS, TapChangerAndShuntFamily.SHUNT_KEYS,
+                        TapChangerAndShuntFamily.STATIC_VAR_COMPENSATOR_KEYS, Set.of(CgmesChangeTranslator.OPEN),
+                        HvdcFamily.LINE_KEYS, HvdcFamily.CONTROL_KEYS, HvdcFamily.CONVERTER_KEYS, LimitFamily.LINE_KEYS,
+                        LimitFamily.BOUNDARY_LINE_KEYS, LimitFamily.VOLTAGE_LEVEL_KEYS, ControlAreaFamily.KEYS,
+                        Set.of(CgmesChangeTranslator.PARTICIPATION_FACTOR, CgmesChangeTranslator.REFERENCE_PRIORITY))
+                .flatMap(Set::stream)
                 .forEach(read::add);
         RegulatingControlFamily.HOLDER_KEYS.forEach(key -> read.add(key.canonical()));
         return read;

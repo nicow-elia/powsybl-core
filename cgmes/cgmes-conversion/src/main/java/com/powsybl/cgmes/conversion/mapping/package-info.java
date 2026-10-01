@@ -13,7 +13,10 @@
  *
  * <p>The hand-written families &mdash; regulating controls, machines, tap changers, HVDC, limits &mdash; live in
  * {@code com.powsybl.cgmes.conversion.export}, next to the state view and the property sink they read and write; this
- * package holds only what the export and the import read alike.</p>
+ * package holds only what the export and the import read alike. The in-place import reads of the families only the
+ * {@link com.powsybl.cgmes.conversion.mapping.Block}s they declare (and the setpoints of a converter and the slot of a
+ * loading limit), from which it derives its capabilities, and {@code export.Families}: the subject index and the
+ * description of a subject.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */

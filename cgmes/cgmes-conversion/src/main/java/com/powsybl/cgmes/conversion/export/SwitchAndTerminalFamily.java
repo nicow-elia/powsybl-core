@@ -31,7 +31,7 @@ import static com.powsybl.commons.util.Result.success;
  * their own in CGMES. A change of such a switch describes every subject of its owner, both terminals.
  *
  * <p>The keys a change is reported under and the blocks the CGMES update reads are declared here; the dispatch of the
- * change export, the probes and the capabilities of the in-place import are derived from them.</p>
+ * change export, the description and the capabilities of the in-place import are derived from them.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
@@ -39,9 +39,6 @@ public final class SwitchAndTerminalFamily extends AbstractFamily {
 
     private static final String ACDC_TERMINAL_CONNECTED = "ACDCTerminal.connected";
     private static final String SWITCH_OPEN = "Switch.open";
-
-    /** What the in-place import asks about a switch or a DC switch. */
-    public static final List<String> PROBES = List.of(OPEN);
 
     public static final Block SWITCH = new Block("switches", List.of("Switch", "Breaker", "Disconnector", "LoadBreakSwitch",
             "ProtectedSwitch", "GroundDisconnector", "Jumper"), SWITCH_OPEN);

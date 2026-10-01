@@ -61,7 +61,7 @@ import static com.powsybl.commons.util.Result.success;
  * zero.</p>
  *
  * <p>The keys a change is reported under and the blocks the CGMES update reads are declared here; the dispatch of the
- * change export, the probes and the capabilities of the in-place import are derived from them.</p>
+ * change export, the description and the capabilities of the in-place import are derived from them.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
@@ -80,18 +80,14 @@ public final class HvdcFamily extends AbstractFamily {
 
     /**
      * The keys of an HVDC line (the power of the link and which of its ends rectifies), of a converter station and of a
-     * converter of the detailed model whose change this family describes, in the order the in-place import probes them.
+     * converter of the detailed model whose change this family describes; the power factor of a line commutated converter
+     * station is the other key it describes.
      */
-    public static final List<String> LINE_PROBES = List.of(ACTIVE_POWER_SETPOINT, CONVERTERS_MODE);
-    public static final List<String> VSC_STATION_PROBES = List.of(LOCAL_TARGET_Q, LOCAL_TARGET_V, VR_TARGET_VALUE,
-            VR_REGULATING, VR_MODE);
-    public static final List<String> LCC_STATION_PROBES = List.of(POWER_FACTOR);
-    public static final List<String> CONVERTER_PROBES = List.of(TARGET_P, TARGET_VDC, CONTROL_MODE, LOCAL_TARGET_Q,
-            LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING, VR_MODE, POWER_FACTOR);
-    static final Set<String> LINE_KEYS = Set.copyOf(LINE_PROBES);
+    static final Set<String> LINE_KEYS = Set.of(ACTIVE_POWER_SETPOINT, CONVERTERS_MODE);
     /** The keys of a voltage source converter whose change describes its control. */
-    static final Set<String> CONTROL_KEYS = Set.copyOf(VSC_STATION_PROBES);
-    static final Set<String> CONVERTER_KEYS = Set.copyOf(CONVERTER_PROBES);
+    static final Set<String> CONTROL_KEYS = Set.of(LOCAL_TARGET_Q, LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING, VR_MODE);
+    static final Set<String> CONVERTER_KEYS = Set.of(TARGET_P, TARGET_VDC, CONTROL_MODE, LOCAL_TARGET_Q,
+            LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING, VR_MODE, POWER_FACTOR);
 
     /** The setpoint block of any converter: the CGMES update reads these four together (and of both converters of a line). */
     public static final List<String> SETPOINTS = List.of(ACDC_CONVERTER_TARGET_PPCC, ACDC_CONVERTER_TARGET_UDC,
