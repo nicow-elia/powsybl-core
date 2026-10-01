@@ -11,6 +11,7 @@ import com.powsybl.cgmes.conversion.export.PartialSshExport.UnsupportedChangeBeh
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.commons.util.Result;
+import com.powsybl.iidm.network.HvdcLine;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.events.ExtensionUpdateNetworkEvent;
 import com.powsybl.iidm.network.events.NetworkEvent;
@@ -109,19 +110,31 @@ public final class CgmesObjectDump {
                 : new ExtensionUpdateNetworkEvent(identifiableId, attributeKey.substring(0, separator),
                         attributeKey.substring(separator + 1), variantId, null, null);
         return switch (translator().translate(event)) {
-            case Result.Success(CgmesPropertyBuffer buffer) -> {
-                // Both profiles the change mappings write: operational limits are steady state data in CGMES 3 and
-                // equipment data in CGMES 2.4.15, impedances and voltage level limits are always equipment data
-                List<CgmesStatement> statements =
-                        new ArrayList<>(buffer.statements(CgmesSubset.EQUIPMENT, context));
-                statements.addAll(buffer.statements(CgmesSubset.STEADY_STATE_HYPOTHESIS, context));
-                yield Result.success(List.copyOf(statements));
-            }
+            case Result.Success(CgmesPropertyBuffer buffer) -> Result.success(statements(buffer));
             case Result.Failure(String reason) -> {
                 LOGGER.debug("No CGMES mapping for {} of {}: {}", attributeKey, identifiableId, reason);
                 yield Result.failure(reason);
             }
         };
+    }
+
+    /**
+     * The statements of both converters of an HVDC line, as the change export describes a change of the line: the
+     * setpoint blocks of the two converters are one group for the CGMES update of a link. Empty when a converter of
+     * the line cannot be described.
+     */
+    public List<CgmesStatement> linkStatementsFor(String hvdcLineId) {
+        HvdcLine hvdcLine = network.getHvdcLine(Objects.requireNonNull(hvdcLineId));
+        return hvdcLine == null ? List.of()
+                : translator().hvdc.linkUpdates(hvdcLine).fold(this::statements, reason -> List.of());
+    }
+
+    /** Both profiles the change mappings write: operational limits are steady state data in CGMES 3 and equipment data
+     * in CGMES 2.4.15, impedances and voltage level limits are always equipment data. */
+    private List<CgmesStatement> statements(CgmesPropertyBuffer buffer) {
+        List<CgmesStatement> statements = new ArrayList<>(buffer.statements(CgmesSubset.EQUIPMENT, context));
+        statements.addAll(buffer.statements(CgmesSubset.STEADY_STATE_HYPOTHESIS, context));
+        return List.copyOf(statements);
     }
 
     /**

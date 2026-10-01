@@ -138,8 +138,8 @@ final class RegulationKeyRefusals {
             return Optional.empty();
         }
         String source = switch (identifiable) {
-            case VscConverterStation station when station.getVoltageRegulation() == null -> VsConverterControlFamily.Q_PCC_CONTROL;
-            case VoltageSourceConverter converter when converter.getVoltageRegulation() == null -> VsConverterControlFamily.Q_PCC_CONTROL;
+            case VscConverterStation station when station.getVoltageRegulation() == null -> HvdcFamily.Q_PCC_CONTROL;
+            case VoltageSourceConverter converter when converter.getVoltageRegulation() == null -> HvdcFamily.Q_PCC_CONTROL;
             case Generator generator when generator.getVoltageRegulation() == null
                     && generator.hasProperty(PROPERTY_REGULATING_CONTROL) -> "RegulatingControl";
             case ShuntCompensator shunt when shunt.getVoltageRegulation() == null

@@ -413,23 +413,20 @@ final class FastRoutePlan {
          * <p>The CGMES update of the simplified DC model takes the power of the link from the {@code targetPpcc} of
          * whichever converter states one ({@code DCLinkUpdate}, powsybl-core #4057), and the inverter states zero: its
          * block alone brings the link down. The setpoint blocks of both converters of a line are therefore one
-         * consistency group, completed from the receiving network like any other (review 21 round 2, R2-B1). The
-         * probe of the line answers for both converters.</p>
+         * consistency group, completed from the receiving network like any other (review 21 round 2, R2-B1). The HVDC
+         * family describes the line as the blocks of both converters ({@link CgmesObjectDump#linkStatementsFor}).</p>
          */
         private void completeLinkedConverters(CgmesSubset subset, Map<String, TypedObject> objectsBySubject) {
             for (Map.Entry<String, ResolvedSubject> linked : linkedConverters.entrySet()) {
                 ResolvedSubject subject = linked.getValue();
                 Set<String> setpoints = FastRouteCapabilities.AC_DC_CONVERTER_SETPOINTS.properties();
                 Map<String, Map<String, CgmesStatement>> partners = new LinkedHashMap<>();
-                for (Identifiable<?> object : objectsOf(subject)) {
-                    for (String attributeKey : DiffProbes.probesFor(subject, object)) {
-                        for (CgmesStatement statement : dump.statementsFor(object.getId(), attributeKey)) {
-                            if (!statement.subjectId().equals(linked.getKey()) && !statement.isType()
-                                    && setpoints.contains(statement.property())) {
-                                partners.computeIfAbsent(statement.subjectId(), id -> new LinkedHashMap<>())
-                                        .putIfAbsent(statement.property(), statement);
-                            }
-                        }
+                // The family describes a change of the line as the blocks of both converters: the partner's is the other
+                for (CgmesStatement statement : dump.linkStatementsFor(subject.owner().getId())) {
+                    if (!statement.subjectId().equals(linked.getKey()) && !statement.isType()
+                            && setpoints.contains(statement.property())) {
+                        partners.computeIfAbsent(statement.subjectId(), id -> new LinkedHashMap<>())
+                                .putIfAbsent(statement.property(), statement);
                     }
                 }
                 partners.forEach((partnerId, fromNetwork) -> {

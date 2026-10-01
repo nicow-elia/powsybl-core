@@ -389,7 +389,7 @@ public final class SteadyStateHypothesisExport {
             writeAcDcConverter(lccConverter, cimNamespace, writer, context);
         }
         for (VoltageSourceConverter vscConverter : network.getVoltageSourceConverters()) {
-            mapping.describeVoltageSourceConverter(vscConverter, out);
+            mapping.hvdc.describeVoltageSourceConverter(vscConverter, out);
         }
     }
 
@@ -403,7 +403,7 @@ public final class SteadyStateHypothesisExport {
             String pPccControl = CgmesExportUtil.isConverterStationRectifier(converterStation) ? "activePower" : "dcVoltage";
             writeCsConverter(converterId, state.targetPpcc(), state.targetUdc(), state.p(), state.q(), operatingMode, pPccControl, cimNamespace, writer, context);
         } else if (converterStation instanceof VscConverterStation vscConverterStation) {
-            mapping.describeVscConverterStation(vscConverterStation, out);
+            mapping.hvdc.describeVscConverterStation(vscConverterStation, out);
         }
     }
 

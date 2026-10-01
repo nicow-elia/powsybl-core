@@ -7,6 +7,7 @@
  */
 package com.powsybl.cgmes.conversion.diff;
 
+import com.powsybl.cgmes.conversion.export.HvdcFamily;
 import com.powsybl.cgmes.conversion.export.MachineFamily;
 import com.powsybl.cgmes.conversion.export.RegulatingControlFamily;
 import com.powsybl.cgmes.conversion.export.SwitchAndTerminalFamily;
@@ -181,20 +182,12 @@ public final class FastRouteCapabilities {
         }
     }
 
-    private static final String ACDC_CONVERTER_P = "ACDCConverter.p";
-    private static final String ACDC_CONVERTER_Q = "ACDCConverter.q";
-    private static final String ACDC_CONVERTER_TARGET_PPCC = "ACDCConverter.targetPpcc";
-    private static final String ACDC_CONVERTER_TARGET_UDC = "ACDCConverter.targetUdc";
-    private static final String AC_DC_CONVERTERS_QUERY = "acDcConverters";
-
     /** The families whose value lives in the equipment profile in CGMES 2.4.15 and in the steady state in CGMES 3. */
     private static final Set<Family> LIMIT_FAMILIES = Set.of(Family.CURRENT_LIMIT, Family.ACTIVE_POWER_LIMIT,
             Family.APPARENT_POWER_LIMIT, Family.VOLTAGE_LIMIT);
 
-    /** The group every AC/DC converter query reads, whatever kind of converter it is. */
     /** The setpoint block of a converter: the CGMES update reads these four together (and of both converters of a line). */
-    static final PropertyGroup AC_DC_CONVERTER_SETPOINTS = PropertyGroup.of(
-            ACDC_CONVERTER_TARGET_PPCC, ACDC_CONVERTER_TARGET_UDC, ACDC_CONVERTER_P, ACDC_CONVERTER_Q);
+    static final PropertyGroup AC_DC_CONVERTER_SETPOINTS = PropertyGroup.of(HvdcFamily.SETPOINTS.toArray(String[]::new));
 
     /**
      * Properties the update catalogue reads but a difference model can never apply in place, all for the reason
@@ -320,15 +313,8 @@ public final class FastRouteCapabilities {
         table.add(ssh(Family.RATIO_TAP_CHANGER, TapChangerAndShuntFamily.RATIO_TAP_CHANGER, VariantSafety.NETWORK_DEPENDENT));
         table.add(ssh(Family.PHASE_TAP_CHANGER, TapChangerAndShuntFamily.PHASE_TAP_CHANGER, VariantSafety.NETWORK_DEPENDENT));
         table.add(ssh(Family.REGULATING_CONTROL, RegulatingControlFamily.REGULATING_CONTROL, VariantSafety.NETWORK_DEPENDENT));
-        table.add(ssh(Family.CS_CONVERTER, AC_DC_CONVERTERS_QUERY, "CsConverter", Set.of("CsConverter"),
-                List.of(AC_DC_CONVERTER_SETPOINTS,
-                        PropertyGroup.of("CsConverter.operatingMode", "CsConverter.pPccControl")),
-                VariantSafety.UNSAFE));
-        table.add(ssh(Family.VS_CONVERTER, AC_DC_CONVERTERS_QUERY, "VsConverter", Set.of("VsConverter"),
-                List.of(AC_DC_CONVERTER_SETPOINTS,
-                        new PropertyGroup(Set.of("VsConverter.pPccControl", "VsConverter.qPccControl"),
-                                Set.of("VsConverter.targetQpcc", "VsConverter.targetUpcc"))),
-                VariantSafety.NETWORK_DEPENDENT));
+        table.add(converter(Family.CS_CONVERTER, HvdcFamily.CS_CONVERTER, VariantSafety.UNSAFE));
+        table.add(converter(Family.VS_CONVERTER, HvdcFamily.VS_CONVERTER, VariantSafety.NETWORK_DEPENDENT));
         table.add(ssh(Family.CONTROL_AREA, "controlAreas", "ControlArea", Set.of("ControlArea"),
                 List.of(new PropertyGroup(Set.of("ControlArea.netInterchange"), Set.of("ControlArea.pTolerance")))));
         // Operational limit values: equipment data in CIM 2.4.15, steady state data in CIM 3. One OperationalLimit
@@ -356,6 +342,13 @@ public final class FastRouteCapabilities {
     private static FamilySpec ssh(Family family, Block block, VariantSafety variantSafety) {
         return ssh(family, block.updateQuery(), block.cimClasses().get(0), Set.copyOf(block.cimClasses()),
                 List.of(new PropertyGroup(Set.copyOf(block.required()), Set.copyOf(block.optional()))), variantSafety);
+    }
+
+    /** A converter family: the setpoint block every converter has, then the control block of its class. */
+    private static FamilySpec converter(Family family, Block block, VariantSafety variantSafety) {
+        FamilySpec spec = ssh(family, block, variantSafety);
+        return new FamilySpec(family, spec.subsets(), spec.handler(), spec.updateQuery(), spec.canonicalType(), spec.rdfTypes(),
+                List.of(AC_DC_CONVERTER_SETPOINTS, spec.groups().get(0)), variantSafety);
     }
 
     private static FamilySpec ssh(Family family, String query, String canonicalType, Set<String> rdfTypes,

@@ -12,38 +12,20 @@ import com.powsybl.commons.util.Result;
 import com.powsybl.iidm.network.Network;
 import org.junit.jupiter.api.Test;
 
-import java.lang.reflect.Field;
 import java.util.List;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@code DiffProbes} (package {@code diff}) re-declares six attribute keys of {@link CgmesChangeTranslator}, which is
- * package private in {@code export}; this pins that both spell them the same (review 21 finding n3).
+ * The probes of the in-place import come from the families of the mapping ({@code DiffProbes} no longer re-declares the
+ * keys of {@link CgmesChangeTranslator}, review 21 finding n3, so their spelling cannot drift); the extension probes of a
+ * generator are each mapped.
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 class DiffProbesKeysTest {
-
-    @Test
-    void diffProbesUseTheKeysOfTheTranslator() throws ReflectiveOperationException {
-        Class<?> probes = Class.forName("com.powsybl.cgmes.conversion.diff.DiffProbes");
-        Map<String, String> expected = Map.of(
-                "LOCAL_TARGET_Q", CgmesChangeTranslator.LOCAL_TARGET_Q,
-                "LOCAL_TARGET_V", CgmesChangeTranslator.LOCAL_TARGET_V,
-                "VR_TARGET_VALUE", CgmesChangeTranslator.VR_TARGET_VALUE,
-                "VR_REGULATING", CgmesChangeTranslator.VR_REGULATING,
-                "VR_TARGET_DEADBAND", CgmesChangeTranslator.VR_TARGET_DEADBAND,
-                "VR_MODE", CgmesChangeTranslator.VR_MODE);
-        for (Map.Entry<String, String> key : expected.entrySet()) {
-            Field field = probes.getDeclaredField(key.getKey());
-            field.setAccessible(true);
-            assertEquals(key.getValue(), field.get(null), key.getKey());
-        }
-    }
 
     /**
      * Every extension probe of a generator names an extension the translator maps: a probe under another name is

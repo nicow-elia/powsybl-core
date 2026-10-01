@@ -180,10 +180,10 @@ class DescribeObjectTest {
                 PartialSshExport.UnsupportedChangeBehavior.IGNORE);
         String variantId = network.getVariantManager().getWorkingVariantId();
         List<Result<CgmesPropertyBuffer, String>> results = new ArrayList<>();
-        for (String attribute : VsConverterControlFamily.KEYS) {
+        for (String attribute : HvdcFamily.CONTROL_KEYS) {
             results.add(translator.translate(event(station, attribute, variantId)));
         }
-        results.add(translator.converterStationUpdates(station));
+        results.add(translator.hvdc.converterStationUpdates(station));
         for (Result<CgmesPropertyBuffer, String> result : results) {
             assertTrue(result instanceof Result.Failure(String reason) && reason.contains("belongs to no HVDC line"),
                     result::toString);
@@ -229,14 +229,14 @@ class DescribeObjectTest {
             case BoundaryLine boundaryLine -> descriptions.add(translator.machines.boundaryLineUpdates(boundaryLine));
             case Switch sw -> descriptions.add(translator.switches.switchUpdates(sw));
             case HvdcLine line -> {
-                descriptions.add(translator.converterStationUpdates(line.getConverterStation1()));
-                descriptions.add(translator.converterStationUpdates(line.getConverterStation2()));
+                descriptions.add(translator.hvdc.converterStationUpdates(line.getConverterStation1()));
+                descriptions.add(translator.hvdc.converterStationUpdates(line.getConverterStation2()));
             }
             case HvdcConverterStation<?> station -> {
-                descriptions.add(translator.converterStationUpdates(station));
-                station.getOtherConverterStation().ifPresent(other -> descriptions.add(translator.converterStationUpdates(other)));
+                descriptions.add(translator.hvdc.converterStationUpdates(station));
+                station.getOtherConverterStation().ifPresent(other -> descriptions.add(translator.hvdc.converterStationUpdates(other)));
             }
-            case AcDcConverter<?> converter -> descriptions.add(translator.acDcConverterUpdates(converter, null));
+            case AcDcConverter<?> converter -> descriptions.add(translator.hvdc.acDcConverterUpdates(converter, null));
             case TwoWindingsTransformer transformer -> {
                 transformer.getOptionalPhaseTapChanger().ifPresent(ptc -> describeTapChanger(translator, controls, transformer,
                         CgmesExportUtil.tapChangerAliasType(transformer, Conversion.ALIAS_PHASE_TAP_CHANGER1,

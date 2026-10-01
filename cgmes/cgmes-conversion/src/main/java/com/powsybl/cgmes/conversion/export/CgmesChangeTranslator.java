@@ -205,6 +205,7 @@ class CgmesChangeTranslator {
     final MachineFamily machines;
     final TapChangerAndShuntFamily tapChangers;
     final SwitchAndTerminalFamily switches;
+    final HvdcFamily hvdc;
     /** Who reads the description: which objects it may name and which refusals it honours. */
     private final Scope scope;
     /** Built on first use, so that a change set without limits never pays for the walk it costs. */
@@ -252,6 +253,7 @@ class CgmesChangeTranslator {
         this.machines = new MachineFamily(context, state, scope, this.regulatingControls);
         this.tapChangers = new TapChangerAndShuntFamily(context, state, scope, this.regulatingControls);
         this.switches = new SwitchAndTerminalFamily(context, state, scope);
+        this.hvdc = new HvdcFamily(context, state, scope);
     }
 
     /**
@@ -433,14 +435,14 @@ class CgmesChangeTranslator {
             case ThreeWindingsTransformer transformer when tapChangerAttribute != null -> tapChangers.threeWindingsTapChangerUpdates(transformer, tapChangerAttribute);
             case ShuntCompensator shunt when TapChangerAndShuntFamily.SHUNT_KEYS.contains(attribute) -> tapChangers.shuntCompensatorUpdates(shunt, attribute);
             case StaticVarCompensator svc when RegulatingControlFamily.STATIC_VAR_COMPENSATOR_KEYS.contains(attribute) -> tapChangers.staticVarCompensatorUpdates(svc);
-            case HvdcLine hvdcLine when HVDC_LINE_ATTRIBUTES.contains(attribute) -> hvdcLineUpdates(hvdcLine, attribute);
-            case LccConverterStation converter when POWER_FACTOR.equals(attribute) -> lccPowerFactorUpdates(converter);
-            case AcDcConverter<?> converter when AC_DC_CONVERTER_ATTRIBUTES.contains(attribute) -> acDcConverterUpdates(converter, attribute);
-            case VscConverterStation converter when VsConverterControlFamily.KEYS.contains(attribute) -> vscStationUpdates(converter, attribute);
+            case HvdcLine hvdcLine when HvdcFamily.LINE_KEYS.contains(attribute) -> hvdc.hvdcLineUpdates(hvdcLine, attribute);
+            case LccConverterStation converter when POWER_FACTOR.equals(attribute) -> hvdc.lccPowerFactorUpdates(converter);
+            case AcDcConverter<?> converter when HvdcFamily.CONVERTER_KEYS.contains(attribute) -> hvdc.acDcConverterUpdates(converter, attribute);
+            case VscConverterStation converter when HvdcFamily.CONTROL_KEYS.contains(attribute) -> hvdc.vscStationUpdates(converter, attribute);
             // Regulating its own terminal or none is the qPccControl of the station, exported with it
             case VscConverterStation converter when VR_TERMINAL.equals(attribute) ->
-                VsConverterControlFamily.terminalRefusal(converter, event).<Result<CgmesPropertyBuffer, String>>map(Result::failure)
-                        .orElseGet(() -> vscStationUpdates(converter, attribute));
+                HvdcFamily.terminalRefusal(converter, event).<Result<CgmesPropertyBuffer, String>>map(Result::failure)
+                        .orElseGet(() -> hvdc.vscStationUpdates(converter, attribute));
             case VoltageLevel voltageLevel when VOLTAGE_LIMIT_ATTRIBUTES.contains(attribute) ->
                 voltageLimitUpdates(voltageLevel, attribute);
             case Line line when LINE_IMPEDANCE_ATTRIBUTES.contains(attribute) -> lineImpedanceUpdates(line, attribute);

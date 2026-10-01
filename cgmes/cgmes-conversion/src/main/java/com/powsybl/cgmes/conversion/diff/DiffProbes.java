@@ -8,6 +8,7 @@
 package com.powsybl.cgmes.conversion.diff;
 
 import com.powsybl.cgmes.conversion.diff.DiffSubjectResolver.ResolvedSubject;
+import com.powsybl.cgmes.conversion.export.HvdcFamily;
 import com.powsybl.cgmes.conversion.export.MachineFamily;
 import com.powsybl.cgmes.conversion.export.SwitchAndTerminalFamily;
 import com.powsybl.cgmes.conversion.export.TapChangerAndShuntFamily;
@@ -48,19 +49,6 @@ import java.util.List;
  */
 final class DiffProbes {
 
-    // The voltage regulation of IIDM (powsybl-core #3699): local targets on the holder, the rest on its VoltageRegulation
-    private static final String LOCAL_TARGET_Q = "localTargetQ";
-    private static final String LOCAL_TARGET_V = "localTargetV";
-    private static final String VR_TARGET_VALUE = "VoltageRegulation.TargetValue";
-    private static final String VR_REGULATING = "VoltageRegulation.isRegulating";
-    private static final String VR_TARGET_DEADBAND = "VoltageRegulation.TargetDeadband";
-    private static final String VR_MODE = "VoltageRegulation.RegulationMode";
-
-    private static final List<String> HVDC_LINE = List.of("activePowerSetpoint", "convertersMode");
-    private static final List<String> VSC = List.of(LOCAL_TARGET_Q, LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING, VR_MODE);
-    private static final List<String> LCC = List.of("powerFactor");
-    private static final List<String> DETAILED_CONVERTER = List.of("targetP", "targetVdc", "controlMode",
-            LOCAL_TARGET_Q, LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING, VR_MODE, "powerFactor");
     private static final List<String> LINE = List.of("r", "x", "g1", "b1");
     private static final List<String> VOLTAGE_LEVEL = List.of("highVoltageLimit", "lowVoltageLimit");
     private static final List<String> BOUNDARY_LINE_IMPEDANCE = List.of("r", "x", "g", "b");
@@ -103,11 +91,11 @@ final class DiffProbes {
             case VoltageLevel ignored -> VOLTAGE_LEVEL;
             case ShuntCompensator ignored -> TapChangerAndShuntFamily.SHUNT_PROBES;
             case StaticVarCompensator ignored -> TapChangerAndShuntFamily.STATIC_VAR_COMPENSATOR_PROBES;
-            case HvdcLine ignored -> HVDC_LINE;
-            case VscConverterStation ignored -> VSC;
-            case LccConverterStation ignored -> LCC;
-            case VoltageSourceConverter ignored -> DETAILED_CONVERTER;
-            case LineCommutatedConverter ignored -> DETAILED_CONVERTER;
+            case HvdcLine ignored -> HvdcFamily.LINE_PROBES;
+            case VscConverterStation ignored -> HvdcFamily.VSC_STATION_PROBES;
+            case LccConverterStation ignored -> HvdcFamily.LCC_STATION_PROBES;
+            case VoltageSourceConverter ignored -> HvdcFamily.CONVERTER_PROBES;
+            case LineCommutatedConverter ignored -> HvdcFamily.CONVERTER_PROBES;
             case TwoWindingsTransformer ignored -> TapChangerAndShuntFamily.transformerProbes("");
             case ThreeWindingsTransformer ignored -> TapChangerAndShuntFamily.transformerProbes("1", "2", "3");
             case DcSwitch ignored -> SwitchAndTerminalFamily.PROBES;
