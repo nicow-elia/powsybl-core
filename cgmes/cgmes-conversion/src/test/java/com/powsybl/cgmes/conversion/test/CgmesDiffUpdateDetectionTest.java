@@ -8,7 +8,7 @@
 package com.powsybl.cgmes.conversion.test;
 
 import com.powsybl.cgmes.conversion.CgmesImport;
-import com.powsybl.cgmes.conversion.diff.CgmesDiffImport.CgmesDiffNotApplicableException;
+import com.powsybl.cgmes.conversion.diff.CgmesDiffNotApplicableException;
 import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
 import com.powsybl.cgmes.conversion.export.PartialSshExport;
 import com.powsybl.cgmes.model.CgmesModelException;

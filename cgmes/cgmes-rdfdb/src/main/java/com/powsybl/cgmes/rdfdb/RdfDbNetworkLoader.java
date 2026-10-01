@@ -12,7 +12,7 @@ import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.cgmes.conversion.Conversion;
 import com.powsybl.cgmes.conversion.TripleStoreNetworkLoader;
 import com.powsybl.cgmes.conversion.diff.CgmesDiffImport;
-import com.powsybl.cgmes.conversion.diff.CgmesDiffImport.CgmesDiffNotApplicableException;
+import com.powsybl.cgmes.conversion.diff.CgmesDiffNotApplicableException;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;

@@ -8,7 +8,6 @@
 package com.powsybl.cgmes.conversion.diff;
 
 import com.powsybl.cgmes.conversion.CgmesImport;
-import com.powsybl.cgmes.conversion.diff.CgmesDiffImport.CgmesDiffNotApplicableException;
 import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
 import com.powsybl.cgmes.conversion.export.PartialSshExport.UnsupportedChangeBehavior;
 import com.powsybl.cgmes.conversion.test.ConversionUtil;

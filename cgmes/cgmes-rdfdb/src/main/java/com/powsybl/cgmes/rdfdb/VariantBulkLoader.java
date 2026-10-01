@@ -10,7 +10,7 @@ package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conversion.Conversion;
 import com.powsybl.cgmes.conversion.TripleStoreNetworkLoader;
-import com.powsybl.cgmes.conversion.diff.CgmesDiffImport.CgmesDiffNotApplicableException;
+import com.powsybl.cgmes.conversion.diff.CgmesDiffNotApplicableException;
 import com.powsybl.commons.PowsyblException;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Network;
