@@ -59,6 +59,7 @@ public final class SteadyStateHypothesisExport {
     public static void write(Network network, XMLStreamWriter writer, CgmesExportContext context, CgmesMetadataModel model) {
         final Map<String, List<RegulatingControlView>> regulatingControlViews = new HashMap<>();
         String cimNamespace = context.getCim().getNamespace();
+        // The objects are described by the mapping a change export reads too, written straight to the document
         CgmesChangeTranslator mapping = CgmesChangeTranslator.forFullModel(network, context);
         CgmesPropertySink out = new CgmesPropertySink.Xml(cimNamespace, writer, context);
 
