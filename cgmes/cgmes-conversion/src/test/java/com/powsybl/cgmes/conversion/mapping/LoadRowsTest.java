@@ -17,8 +17,6 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * The rows of a load family read back what they write: the import of the values the export writes gives the load it
@@ -41,7 +39,7 @@ class LoadRowsTest {
 
                 Network receiver = EurostagTutorialExample1Factory.create();
                 Load received = receiver.getLoad("LOAD");
-                assertTrue(family.apply(received, written::get));
+                family.apply(received, written::get, row -> Double.NaN);
                 assertEquals(pq[0], received.getP0(), 0.0, family.updateQuery());
                 assertEquals(pq[1], received.getQ0(), 0.0, family.updateQuery());
             }
@@ -49,11 +47,11 @@ class LoadRowsTest {
     }
 
     @Test
-    void anIncompleteGroupSetsNothing() {
+    void anIncompleteGroupIsNotRead() {
         Load load = EurostagTutorialExample1Factory.create().getLoad("LOAD");
-        double p0 = load.getP0();
-        assertFalse(LoadRows.ENERGY_CONSUMER.apply(load, Map.of("p", "1.0")::get));
-        assertEquals(p0, load.getP0(), 0.0);
+        LoadRows.ENERGY_CONSUMER.apply(load, Map.of("p", "1.0")::get, row -> "p".equals(row.variable()) ? 42.0 : 43.0);
+        assertEquals(42.0, load.getP0(), 0.0);
+        assertEquals(43.0, load.getQ0(), 0.0);
     }
 
     @Test

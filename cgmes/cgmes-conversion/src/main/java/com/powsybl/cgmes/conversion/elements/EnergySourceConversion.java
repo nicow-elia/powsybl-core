@@ -46,18 +46,9 @@ public class EnergySourceConversion extends AbstractConductingEquipmentConversio
     public static void update(Load load, PropertyBag cgmesData, Context context) {
         updateTerminals(load, context, load.getTerminal());
 
-        // The values are read through the rows of the family, which the export writes from; the defaults otherwise
-        if (!LoadRows.ENERGY_SOURCE.apply(load, cgmesData::get)) {
-            load.setP0(getDefaultP0(load, context));
-            load.setQ0(getDefaultQ0(load, context));
-        }
-    }
-
-    private static double getDefaultP0(Load load, Context context) {
-        return getDefaultValue(null, load.getP0(), 0.0, Double.NaN, context);
-    }
-
-    private static double getDefaultQ0(Load load, Context context) {
-        return getDefaultValue(null, load.getQ0(), 0.0, Double.NaN, context);
+        // The values are read through the rows of the family, which the export writes from; when the query did not bind
+        // them, each falls back on the default chain (the previous value, zero)
+        LoadRows.ENERGY_SOURCE.apply(load, cgmesData::get,
+            row -> getDefaultValue(null, row.getter().applyAsDouble(load), 0.0, Double.NaN, context));
     }
 }

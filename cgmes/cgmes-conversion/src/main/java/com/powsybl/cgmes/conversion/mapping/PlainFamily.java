@@ -10,6 +10,7 @@ package com.powsybl.cgmes.conversion.mapping;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Function;
+import java.util.function.ToDoubleFunction;
 
 /**
  * A CGMES family that is nothing but plain values: the update query that reads it, the CIM classes it accepts (the
@@ -36,18 +37,17 @@ public record PlainFamily<O>(String updateQuery, List<String> cimClasses, List<P
     }
 
     /**
-     * Set the IIDM values the import reads from the values the update query bound, when it bound all of them.
+     * Set the IIDM values the import reads: from the values the update query bound when it bound all of them, from
+     * the given fallback otherwise (the query binds a group as a whole or not at all).
      *
-     * @param values the lexical value of each variable of the query, {@code null} when it is not bound
-     * @return whether the values were set; when one is missing nothing is set and the caller falls back on its defaults
+     * @param values    the lexical value of each variable of the query, {@code null} when it is not bound
+     * @param otherwise the value of a row the query did not bind, read when the row is set
      */
-    public boolean apply(O owner, Function<String, String> values) {
+    public void apply(O owner, Function<String, String> values, ToDoubleFunction<PlainRow<O>> otherwise) {
         List<PlainRow<O>> read = rows.stream().filter(row -> row.setter() != null).toList();
-        if (read.stream().anyMatch(row -> values.apply(row.variable()) == null)) {
-            return false;
-        }
-        read.forEach(row -> row.setter().accept(owner,
-                row.quantity().decode(row.quantity().parse(values.apply(row.variable())), 1)));
-        return true;
+        boolean bound = read.stream().allMatch(row -> values.apply(row.variable()) != null);
+        read.forEach(row -> row.setter().accept(owner, bound
+                ? row.quantity().decode(row.quantity().parse(values.apply(row.variable())), 1)
+                : otherwise.applyAsDouble(row)));
     }
 }

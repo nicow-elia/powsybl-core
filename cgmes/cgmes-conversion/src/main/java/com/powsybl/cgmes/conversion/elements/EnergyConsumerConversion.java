@@ -142,21 +142,13 @@ public class EnergyConsumerConversion extends AbstractConductingEquipmentConvers
         double pFixed = Double.parseDouble(load.getProperty(PROPERTY_P_FIXED, "0.0"));
         double qFixed = Double.parseDouble(load.getProperty(PROPERTY_Q_FIXED, "0.0"));
 
-        // The values are read through the rows of the family, which the export writes from; the defaults otherwise
-        if (!LoadRows.ENERGY_CONSUMER.apply(load, cgmesData::get)) {
-            load.setP0(getDefaultP0(load, pFixed, context));
-            load.setQ0(getDefaultQ0(load, qFixed, context));
-        }
+        // The values are read through the rows of the family, which the export writes from; when the query did not bind
+        // them, each falls back on the default chain (the fixed power of the equipment model, the previous value, zero)
+        LoadRows.ENERGY_CONSUMER.apply(load, cgmesData::get,
+            row -> getDefaultValue("p".equals(row.variable()) ? pFixed : qFixed, row.getter().applyAsDouble(load), 0.0,
+                Double.NaN, context));
 
         updateLoadDetail(load, load.getProperty(PROPERTY_CGMES_ORIGINAL_CLASS), pFixed, qFixed);
-    }
-
-    private static double getDefaultP0(Load load, double pFixed, Context context) {
-        return getDefaultValue(pFixed, load.getP0(), 0.0, Double.NaN, context);
-    }
-
-    private static double getDefaultQ0(Load load, double qFixed, Context context) {
-        return getDefaultValue(qFixed, load.getQ0(), 0.0, Double.NaN, context);
     }
 
     private static void updateLoadDetail(Load load, String type, double pFixed, double qFixed) {
