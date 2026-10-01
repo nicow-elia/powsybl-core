@@ -8,6 +8,7 @@
 package com.powsybl.cgmes.conversion.diff;
 
 import com.powsybl.cgmes.conversion.diff.DiffSubjectResolver.ResolvedSubject;
+import com.powsybl.cgmes.conversion.mapping.LoadRows;
 import com.powsybl.iidm.network.BoundaryLine;
 import com.powsybl.iidm.network.DcSwitch;
 import com.powsybl.iidm.network.Generator;
@@ -44,7 +45,6 @@ import java.util.List;
  */
 final class DiffProbes {
 
-    private static final List<String> LOAD = List.of("p0", "q0");
     // The voltage regulation of IIDM (powsybl-core #3699): local targets on the holder, the rest on its VoltageRegulation
     private static final String LOCAL_TARGET_Q = "localTargetQ";
     private static final String LOCAL_TARGET_V = "localTargetV";
@@ -110,7 +110,7 @@ final class DiffProbes {
     private static List<String> ownerProbes(Identifiable<?> owner) {
         return switch (owner) {
             case Switch ignored -> SWITCH;
-            case Load ignored -> LOAD;
+            case Load ignored -> LoadRows.keys();
             case Generator ignored -> GENERATOR;
             case BoundaryLine ignored -> concat(BOUNDARY_LINE, BOUNDARY_LINE_IMPEDANCE);
             case Line ignored -> LINE;

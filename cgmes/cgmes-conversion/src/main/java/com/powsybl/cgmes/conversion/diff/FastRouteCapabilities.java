@@ -7,13 +7,17 @@
  */
 package com.powsybl.cgmes.conversion.diff;
 
+import com.powsybl.cgmes.conversion.mapping.LoadRows;
+import com.powsybl.cgmes.conversion.mapping.PlainFamily;
 import com.powsybl.cgmes.model.CgmesNamespace;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
+import com.powsybl.iidm.network.Load;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -280,11 +284,22 @@ public final class FastRouteCapabilities {
         return Map.copyOf(reasons);
     }
 
+    /** The families of an IIDM load, in the order of the table. */
+    static final Map<Family, PlainFamily<Load>> LOAD_FAMILIES = loadFamilies();
+
     private static final List<FamilySpec> TABLE = table0();
     private static final Map<Family, FamilySpec> BY_FAMILY = byFamily();
     private static final Map<String, Set<Family>> BY_PROPERTY = byProperty();
 
     private FastRouteCapabilities() {
+    }
+
+    private static Map<Family, PlainFamily<Load>> loadFamilies() {
+        Map<Family, PlainFamily<Load>> families = new EnumMap<>(Family.class);
+        families.put(Family.ENERGY_CONSUMER, LoadRows.ENERGY_CONSUMER);
+        families.put(Family.ENERGY_SOURCE, LoadRows.ENERGY_SOURCE);
+        families.put(Family.ASYNCHRONOUS_MACHINE, LoadRows.ASYNCHRONOUS_MACHINE);
+        return Collections.unmodifiableMap(families);
     }
 
     private static List<FamilySpec> table0() {
@@ -298,16 +313,10 @@ public final class FastRouteCapabilities {
         table.add(ssh(Family.DC_TERMINAL, "dcTerminals", "DCTerminal",
                 Set.of("DCTerminal", "ACDCConverterDCTerminal"),
                 List.of(PropertyGroup.of(ACDC_TERMINAL_CONNECTED))));
-        table.add(ssh(Family.ENERGY_CONSUMER, "energyConsumers", "EnergyConsumer",
-                Set.of("EnergyConsumer", "ConformLoad", "NonConformLoad", "StationSupply"),
-                List.of(PropertyGroup.of("EnergyConsumer.p", "EnergyConsumer.q"))));
-        table.add(ssh(Family.ENERGY_SOURCE, "energySources", "EnergySource", Set.of("EnergySource"),
-                List.of(PropertyGroup.of("EnergySource.activePower", "EnergySource.reactivePower"))));
-        table.add(ssh(Family.ASYNCHRONOUS_MACHINE, "asynchronousMachines", "AsynchronousMachine",
-                Set.of("AsynchronousMachine"),
-                // The update query reads the four properties as one required block (powsybl-core #4103)
-                List.of(PropertyGroup.of(ROTATING_MACHINE_P, ROTATING_MACHINE_Q,
-                        "AsynchronousMachine.asynchronousMachineType", REGULATING_COND_EQ_CONTROL_ENABLED))));
+        // The families of a load are data rows: query, classes and the one group they are read in come from the rows
+        // (the asynchronous machine's four properties are one required block, powsybl-core #4103)
+        LOAD_FAMILIES.forEach((family, rows) -> table.add(ssh(family, rows.updateQuery(), rows.cimClasses().get(0),
+                Set.copyOf(rows.cimClasses()), List.of(PropertyGroup.of(rows.properties().toArray(String[]::new))))));
         // The query reads p and q in two optional blocks, but the conversion only takes either of them when BOTH
         // are bound (SynchronousMachineConversion: the updated power flow has to be "defined"). A difference that
         // states the active power alone would therefore be read, accepted and silently not applied, so the two

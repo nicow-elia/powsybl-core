@@ -279,17 +279,13 @@ final class DiffSubjectResolver {
     }
 
     private static Optional<Family> loadFamily(Load load, String originalClass) {
-        if (load.isFictitious()) {
+        if (load.isFictitious() || originalClass == null) {
             // Loads created for SvInjections are not CGMES objects
             return Optional.empty();
         }
-        return Optional.ofNullable(switch (originalClass == null ? "" : originalClass) {
-            case CgmesNames.ENERGY_SOURCE -> Family.ENERGY_SOURCE;
-            case CgmesNames.ASYNCHRONOUS_MACHINE -> Family.ASYNCHRONOUS_MACHINE;
-            case CgmesNames.CONFORM_LOAD, CgmesNames.NONCONFORM_LOAD, CgmesNames.STATION_SUPPLY,
-                 CgmesNames.ENERGY_CONSUMER -> Family.ENERGY_CONSUMER;
-            default -> null;
-        });
+        return FastRouteCapabilities.LOAD_FAMILIES.entrySet().stream()
+                .filter(family -> family.getValue().cimClasses().contains(originalClass))
+                .map(Map.Entry::getKey).findFirst();
     }
 
     private static Optional<Family> generatorFamily(String originalClass) {
