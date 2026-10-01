@@ -10,6 +10,10 @@ package com.powsybl.cgmes.conversion.export;
 import com.powsybl.cgmes.conversion.Conversion;
 import com.powsybl.cgmes.conversion.elements.OperationalLimitConversion;
 import com.powsybl.cgmes.conversion.export.PartialSshExport.UnsupportedChangeBehavior;
+import com.powsybl.cgmes.conversion.mapping.LoadRows;
+import com.powsybl.cgmes.conversion.mapping.PlainFamily;
+import com.powsybl.cgmes.conversion.mapping.PlainRow;
+import com.powsybl.cgmes.conversion.mapping.Quantity;
 import com.powsybl.cgmes.extensions.CgmesTapChanger;
 import com.powsybl.cgmes.extensions.CimCharacteristics;
 import com.powsybl.cgmes.model.CgmesNames;
@@ -70,6 +74,7 @@ import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.function.Consumer;
+import java.util.function.ToDoubleFunction;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -207,7 +212,6 @@ class CgmesChangeTranslator {
     private static final String ROTATING_MACHINE_P = "RotatingMachine.p";
     private static final String ROTATING_MACHINE_Q = "RotatingMachine.q";
 
-    private static final Set<String> LOAD_ATTRIBUTES = Set.of(P0, Q0);
     private static final Set<String> GENERATOR_ATTRIBUTES =
             Set.of(TARGET_P, LOCAL_TARGET_Q, LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING);
     private static final Set<String> SHUNT_ATTRIBUTES =
@@ -488,7 +492,7 @@ class CgmesChangeTranslator {
         return switch (identifiable) {
             case Switch sw when OPEN.equals(attribute) -> switchUpdates(sw);
             case DcSwitch dcSwitch when OPEN.equals(attribute) -> dcSwitchUpdates(dcSwitch);
-            case Load load when LOAD_ATTRIBUTES.contains(attribute) -> loadUpdates(load);
+            case Load load when LoadRows.keys().contains(attribute) -> loadUpdates(load);
             case BoundaryLine boundaryLine when BOUNDARY_LINE_ATTRIBUTES.contains(attribute) -> boundaryLineUpdates(boundaryLine);
             case Generator generator when GENERATOR_ATTRIBUTES.contains(attribute) -> generatorUpdates(generator, attribute);
             case TwoWindingsTransformer transformer when tapChangerAttribute != null -> twoWindingsTapChangerUpdates(transformer, tapChangerAttribute);
@@ -675,45 +679,39 @@ class CgmesChangeTranslator {
     }
 
     /**
-     * Describe the steady state hypothesis of a load; false, and nothing described, when its CGMES class has none. The
-     * CGMES import only accepts an injection power when both components are present, so a change of either setpoint
-     * describes both.
+     * Describe the steady state hypothesis of a load from the rows of its family; false, and nothing described, when its
+     * CGMES class has none. The CGMES import reads the rows of a family only together, so a change of either setpoint
+     * describes all of them.
      */
     boolean describeLoad(Load load, CgmesPropertySink out) {
-        return injectionBlock(out, SteadyStateHypothesisExport.obtainLoadClassName(load, context), cgmesId(load),
-                state.getDouble(load, P0, load::getP0), state.getDouble(load, Q0, load::getQ0));
+        String className = SteadyStateHypothesisExport.obtainLoadClassName(load, context);
+        return LoadRows.ofClass(className).map(family -> {
+            plainBlock(out, family, className, cgmesId(load), row -> row.key() == null ? row.getter().applyAsDouble(load)
+                    : state.getDouble(load, row.key(), () -> row.getter().applyAsDouble(load)));
+            return true;
+        }).orElse(false);
     }
 
     /** Describe a fictitious injection of a node or a bus: an EnergySource when it produces, a NonConformLoad otherwise. */
     static void describeFictitiousInjection(String id, double p, double q, CgmesPropertySink out) {
-        injectionBlock(out, p <= 0 ? CgmesNames.ENERGY_SOURCE : CgmesNames.NONCONFORM_LOAD, id, p, q);
+        String className = p <= 0 ? CgmesNames.ENERGY_SOURCE : CgmesNames.NONCONFORM_LOAD;
+        plainBlock(out, LoadRows.ofClass(className).orElseThrow(), className, id, row -> P0.equals(row.key()) ? p : q);
     }
 
-    /** The powers of an injection, in the load convention, as its CGMES class holds them; false when it holds none. */
-    private static boolean injectionBlock(CgmesPropertySink out, String className, String id, double p, double q) {
-        switch (className) {
-            case CgmesNames.ENERGY_SOURCE -> out.startObject(className, id)
-                    .value("EnergySource.activePower", p)
-                    .value("EnergySource.reactivePower", q);
-            case CgmesNames.ENERGY_CONSUMER, CgmesNames.CONFORM_LOAD, CgmesNames.NONCONFORM_LOAD, CgmesNames.STATION_SUPPLY ->
-                out.startObject(className, id)
-                        .value("EnergyConsumer.p", p)
-                        .value("EnergyConsumer.q", q);
-            // An AsynchronousMachine is both a RotatingMachine and a RegulatingCondEq, and the CGMES update reads
-            // its powers only together with the machine kind and the control flag, so the four are exported as one
-            // block. IIDM has no regulation on a load, hence the fixed false.
-            case CgmesNames.ASYNCHRONOUS_MACHINE -> out.startObject(className, id)
-                    .value(ROTATING_MACHINE_P, p)
-                    .value(ROTATING_MACHINE_Q, q)
-                    .value(REGULATING_COND_EQ_CONTROL_ENABLED, false)
-                    .enumValue("AsynchronousMachine.asynchronousMachineType", "AsynchronousMachineKind",
-                            SteadyStateHypothesisExport.obtainAsynchronousMachineKind(p));
-            default -> {
-                return false;
+    /** The rows of a plain family, in their order, each spelled as its quantity says. */
+    private static <O> void plainBlock(CgmesPropertySink out, PlainFamily<O> family, String className, String id,
+                                       ToDoubleFunction<PlainRow<O>> value) {
+        out.startObject(className, id);
+        for (PlainRow<O> row : family.rows()) {
+            Quantity quantity = row.quantity();
+            String lexical = quantity.lexical(quantity.encode(value.applyAsDouble(row), 1));
+            if (quantity.enumeration() == null) {
+                out.literal(row.property(), lexical);
+            } else {
+                out.enumValue(row.property(), quantity.enumeration(), lexical);
             }
         }
         out.endObject();
-        return true;
     }
 
     // Boundary lines

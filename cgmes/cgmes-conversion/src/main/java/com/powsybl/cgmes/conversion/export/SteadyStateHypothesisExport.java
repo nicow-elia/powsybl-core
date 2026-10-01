@@ -610,19 +610,6 @@ public final class SteadyStateHypothesisExport {
         return (originalClassName != null && !context.isExportEquipment()) ? originalClassName : CgmesExportUtil.loadClassName(load);
     }
 
-    /**
-     * The AsynchronousMachineKind of an IIDM load with the given active power (load sign convention).
-     *
-     * <p>Package private so that the change export writes the same kind as the full export.</p>
-     */
-    static String obtainAsynchronousMachineKind(double p) {
-        if (p < 0) {
-            return OPERATING_MODE_GENERATOR;
-        } else {
-            return OPERATING_MODE_MOTOR;
-        }
-    }
-
     private static void writeConverters(Network network, CgmesChangeTranslator mapping, CgmesPropertySink out, String cimNamespace,
                                         XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
         for (HvdcConverterStation<?> converterStation : network.getHvdcConverterStations()) {
