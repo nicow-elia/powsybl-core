@@ -78,10 +78,12 @@ public final class MachineFamily extends AbstractFamily {
     /** The keys of a generator a change of which describes its machine or its control. */
     static final Set<String> GENERATOR_KEYS = Stream.concat(MACHINE_KEYS.stream(), RegulatingControlFamily.GENERATOR_KEYS.stream())
             .collect(Collectors.toUnmodifiableSet());
+    /** Separates the extension name from the attribute name in the key of an extension attribute. */
+    static final String EXTENSION_SEPARATOR = "#";
     /** What the in-place import asks about a generator: every key, and the extension attributes of its blocks. */
     public static final List<String> GENERATOR_PROBES = List.of(TARGET_P, LOCAL_TARGET_Q, LOCAL_TARGET_V, VR_TARGET_VALUE,
-            VR_REGULATING, ActivePowerControl.NAME + CgmesObjectDump.EXTENSION_SEPARATOR + PARTICIPATION_FACTOR,
-            ReferencePriorities.NAME + CgmesObjectDump.EXTENSION_SEPARATOR + REFERENCE_PRIORITY);
+            VR_REGULATING, ActivePowerControl.NAME + EXTENSION_SEPARATOR + PARTICIPATION_FACTOR,
+            ReferencePriorities.NAME + EXTENSION_SEPARATOR + REFERENCE_PRIORITY);
     /** What the in-place import asks about the EquivalentInjection of a boundary line, and the keys a change of it has. */
     public static final List<String> BOUNDARY_LINE_PROBES = List.of(P0, Q0, TARGET_P, TARGET_Q, TARGET_V, VOLTAGE_REGULATION_ON);
     static final Set<String> BOUNDARY_LINE_KEYS = Set.copyOf(BOUNDARY_LINE_PROBES);

@@ -116,7 +116,8 @@ network is never modified in that case: every check runs before the first mutati
    the properties the importer left on the equipment (regulating controls, generating units, equivalent injections)
    &mdash; which also decides the CIM class to write;
 4. properties an update query only reads *together* with others are completed from the receiving network, through the
-   very mapping the change exporter uses (`CgmesObjectDump`), so that a minimal difference of a third party applies;
+   very mapping the change exporter uses (the description of the subject, `Families.describe`), so that a minimal
+   difference of a third party applies;
 5. the result is written as one synthetic partial SSH document per profile into a fresh in-memory triple store and
    handed to the ordinary update workflow;
 6. a difference of the equipment profile alone carries no dated steady state model, so `caseDate` and

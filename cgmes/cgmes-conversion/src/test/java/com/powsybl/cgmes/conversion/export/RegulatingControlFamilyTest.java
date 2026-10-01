@@ -13,6 +13,7 @@ import com.powsybl.iidm.network.RatioTapChanger;
 import com.powsybl.iidm.network.ThreeWindingsTransformer;
 import com.powsybl.iidm.network.VariantManager;
 import com.powsybl.iidm.network.VariantManagerConstants;
+import com.powsybl.iidm.network.events.UpdateNetworkEvent;
 import com.powsybl.iidm.network.regulation.RegulationMode;
 import com.powsybl.iidm.network.test.EurostagTutorialExample1Factory;
 import com.powsybl.iidm.network.test.PhaseShifterTestCaseFactory;
@@ -71,8 +72,10 @@ class RegulatingControlFamilyTest {
     }
 
     private static String refusalOf(Network network, String transformerId, String attribute) {
-        Result.Failure<?, String> failure = assertInstanceOf(Result.Failure.class,
-                new CgmesObjectDump(network).dump(transformerId, attribute));
+        CgmesChangeTranslator translator = new CgmesChangeTranslator(network, new CgmesExportContext(network),
+                PartialSshExport.UnsupportedChangeBehavior.IGNORE);
+        Result.Failure<?, String> failure = assertInstanceOf(Result.Failure.class, translator.translate(new UpdateNetworkEvent(
+                transformerId, attribute, network.getVariantManager().getWorkingVariantId(), null, null)));
         return failure.reason();
     }
 }

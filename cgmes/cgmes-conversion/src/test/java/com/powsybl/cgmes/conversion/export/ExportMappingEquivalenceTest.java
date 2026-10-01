@@ -73,7 +73,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *     <li>the full SSH export is written into memory and read back into {@code (subject, property) -> value};</li>
  *     <li>the shared mapping is asked, in the live state of the same network, about every attribute of every object
  *     it can describe, which covers every consistency group it writes. This is the synthetic full-object request
- *     {@link CgmesObjectDump} makes, without its cache;</li>
+ *     the object dump made before the in-place import described a subject ({@link Families#describe});</li>
  *     <li>every {@code (subject, property)} of either side is compared, numeric literals by value as
  *     {@link StatementDiff#comparable} does, and ends up in exactly one of: equal,
  *     {@link #ONLY_IN_FULL_EXPORT}, {@link #DELIBERATE_DIFFERENCES}, or unexplained, which fails the test. The class
@@ -865,7 +865,7 @@ class ExportMappingEquivalenceTest {
     }
 
     static Shared shared(Network network, CgmesExportContext context) {
-        // Built as CgmesObjectDump builds it, without its cache
+        // Built as the description of a subject builds it (Families)
         CgmesChangeTranslator translator = new CgmesChangeTranslator(network, context,
                 PartialSshExport.UnsupportedChangeBehavior.IGNORE, "an equivalence test",
                 EnumSet.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS), IidmStateView.LIVE, null);
@@ -911,7 +911,7 @@ class ExportMappingEquivalenceTest {
 
     /**
      * Every attribute the shared mapping matches on, per kind of IIDM object: the attribute names of
-     * {@code DiffProbes}, which is what the difference model importer asks, plus every limit of every group. Asking
+     * the probes the difference model importer asked before it described a subject, plus every limit of every group. Asking
      * about an attribute the mapping refuses costs a refusal and nothing else.
      */
     static List<String> probes(Identifiable<?> identifiable) {

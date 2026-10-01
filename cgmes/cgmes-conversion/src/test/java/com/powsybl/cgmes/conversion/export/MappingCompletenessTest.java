@@ -195,7 +195,7 @@ class MappingCompletenessTest {
                         HvdcFamily.CONVERTER_PROBES, List.copyOf(LimitFamily.LINE_KEYS), List.copyOf(LimitFamily.BOUNDARY_LINE_KEYS),
                         LimitFamily.VOLTAGE_LEVEL_PROBES, List.copyOf(ControlAreaFamily.KEYS))
                 .flatMap(List::stream)
-                .map(key -> key.substring(key.indexOf(CgmesObjectDump.EXTENSION_SEPARATOR) + 1))
+                .map(key -> key.substring(key.indexOf(MachineFamily.EXTENSION_SEPARATOR) + 1))
                 .forEach(read::add);
         RegulatingControlFamily.HOLDER_KEYS.forEach(key -> read.add(key.canonical()));
         return read;
