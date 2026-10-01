@@ -373,7 +373,7 @@ public final class LimitFamily extends AbstractFamily {
                 }
             }
             double value = state.getLimitValue(owner, wholeKey, ref.slot().memberKey(duration), duration,
-                    () -> liveValue(live, duration));
+                    () -> limitValue(live, duration));
             if (!Double.isFinite(value) || value < 0) {
                 return failure("limit values must be finite and >= 0, but " + limitId + " would be " + value);
             }
@@ -438,7 +438,7 @@ public final class LimitFamily extends AbstractFamily {
             // Not a whole-object replacement this translator can compare: keep the refusal
             return true;
         }
-        return Double.compare(liveValue(replaced, duration), liveValue(live, duration)) != 0;
+        return Double.compare(limitValue(replaced, duration), limitValue(live, duration)) != 0;
     }
 
     private static SortedSet<Integer> durationsOf(LoadingLimits limits) {
@@ -447,7 +447,12 @@ public final class LimitFamily extends AbstractFamily {
         return durations;
     }
 
-    private static double liveValue(LoadingLimits limits, int acceptableDuration) {
+    /**
+     * The value of one loading limit as IIDM holds it, which is the value of its CGMES OperationalLimit: the permanent
+     * limit for a duration below zero, else the temporary limit of that acceptable duration ({@code NaN} when there is
+     * none). The full equipment export writes the same value.
+     */
+    static double limitValue(LoadingLimits limits, int acceptableDuration) {
         if (acceptableDuration < 0) {
             return limits.getPermanentLimit();
         }
@@ -506,7 +511,7 @@ public final class LimitFamily extends AbstractFamily {
                 return sharedLimitFailure(limitId);
             }
             double slotValue = state.getLimitValue(slot.owner(), slot.wholeKey(), slot.memberKey(), slot.duration(),
-                    () -> liveValue(limits, slot.duration()));
+                    () -> limitValue(limits, slot.duration()));
             if (Double.compare(slotValue, value) != 0) {
                 return sharedLimitFailure(limitId);
             }
@@ -601,14 +606,12 @@ public final class LimitFamily extends AbstractFamily {
      */
     Result<CgmesPropertyBuffer, String> voltageLimitUpdates(VoltageLevel voltageLevel, String attribute) {
         boolean high = HIGH_VOLTAGE_LIMIT.equals(attribute);
-        double value = state.getDouble(voltageLevel, attribute,
-                high ? voltageLevel::getHighVoltageLimit : voltageLevel::getLowVoltageLimit);
+        double value = voltageLimit(voltageLevel, high, state);
         if (!Double.isFinite(value)) {
             return failure("voltage limits must be finite, but " + voltageLevel.getId() + "." + attribute
                     + " would be " + value);
         }
-        double other = state.getDouble(voltageLevel, high ? LOW_VOLTAGE_LIMIT : HIGH_VOLTAGE_LIMIT,
-                high ? voltageLevel::getLowVoltageLimit : voltageLevel::getHighVoltageLimit);
+        double other = voltageLimit(voltageLevel, !high, state);
         double newHigh = high ? value : other;
         double newLow = high ? other : value;
         if (Double.isFinite(newHigh) && Double.isFinite(newLow) && newHigh <= newLow) {
@@ -645,6 +648,15 @@ public final class LimitFamily extends AbstractFamily {
             }
         }
         return success(buffer);
+    }
+
+    /**
+     * The high or the low voltage limit of a voltage level, read from the given state: the value of its
+     * {@code VoltageLimit} objects, or of the {@code VoltageLevel} attribute, which the full equipment export writes.
+     */
+    static double voltageLimit(VoltageLevel voltageLevel, boolean high, IidmStateView state) {
+        return high ? state.getDouble(voltageLevel, HIGH_VOLTAGE_LIMIT, voltageLevel::getHighVoltageLimit)
+                : state.getDouble(voltageLevel, LOW_VOLTAGE_LIMIT, voltageLevel::getLowVoltageLimit);
     }
 
     /**
@@ -690,8 +702,8 @@ public final class LimitFamily extends AbstractFamily {
             // parameters, so the IIDM value is not the value the CGMES file holds
             return failure("the import transforms EquivalentBranch parameters between nominal voltages");
         }
-        double r = state.getDouble(line, R, line::getR);
-        double x = state.getDouble(line, X, line::getX);
+        double r = lineImpedance(line, R, state);
+        double x = lineImpedance(line, X, state);
         Optional<String> problem = seriesImpedanceProblem(originalClass, r, x);
         if (problem.isPresent()) {
             return failure(problem.get());
@@ -718,8 +730,23 @@ public final class LimitFamily extends AbstractFamily {
         }
         return success(newUpdates(CgmesSubset.EQUIPMENT, originalClass, cgmesId(line))
                 .rawLiteral(CgmesNames.AC_LINE_SEGMENT + "." + (conductance ? "gch" : "bch"),
-                        CgmesExportUtil.formatExact(side1 + side2))
+                        CgmesExportUtil.formatExact(lineImpedance(line, attribute, state)))
                 .updates());
+    }
+
+    /**
+     * An impedance of a line as CGMES holds it, read from the given state: {@code r}, {@code x}, and for a key of
+     * either half of the shunt admittance the total of both halves ({@code gch = g1 + g2}, {@code bch = b1 + b2}),
+     * which the import splits equally. The full equipment export writes the same values.
+     */
+    static double lineImpedance(Line line, String key, IidmStateView state) {
+        return switch (key) {
+            case R -> state.getDouble(line, R, line::getR);
+            case X -> state.getDouble(line, X, line::getX);
+            case G1, G2 -> state.getDouble(line, G1, line::getG1) + state.getDouble(line, G2, line::getG2);
+            case B1, B2 -> state.getDouble(line, B1, line::getB1) + state.getDouble(line, B2, line::getB2);
+            default -> throw new IllegalArgumentException("Not an impedance of a line: " + key);
+        };
     }
 
     /**
@@ -732,8 +759,8 @@ public final class LimitFamily extends AbstractFamily {
             return failure(originalClass + " " + boundaryLine.getId()
                     + " is represented as a switch in CGMES or is not a CGMES branch, so it carries no impedance");
         }
-        double r = state.getDouble(boundaryLine, R, boundaryLine::getR);
-        double x = state.getDouble(boundaryLine, X, boundaryLine::getX);
+        double r = boundaryLineImpedance(boundaryLine, R, state);
+        double x = boundaryLineImpedance(boundaryLine, X, state);
         Optional<String> problem = seriesImpedanceProblem(originalClass, r, x);
         if (problem.isPresent()) {
             return failure(problem.get());
@@ -746,8 +773,7 @@ public final class LimitFamily extends AbstractFamily {
             return failure("a " + originalClass + " has no shunt admittance in CGMES");
         }
         boolean conductance = G.equals(attribute);
-        double value = state.getDouble(boundaryLine, attribute,
-                conductance ? boundaryLine::getG : boundaryLine::getB);
+        double value = boundaryLineImpedance(boundaryLine, attribute, state);
         if (!Double.isFinite(value)) {
             return failure("impedance values must be finite (r, x >= 0)");
         }
@@ -755,6 +781,20 @@ public final class LimitFamily extends AbstractFamily {
                 .rawLiteral(CgmesNames.AC_LINE_SEGMENT + "." + (conductance ? "gch" : "bch"),
                         CgmesExportUtil.formatExact(value))
                 .updates());
+    }
+
+    /**
+     * An impedance of a boundary line as CGMES holds it, read from the given state: its branch carries the shunt
+     * admittance undivided. The full equipment export writes the same values.
+     */
+    static double boundaryLineImpedance(BoundaryLine boundaryLine, String key, IidmStateView state) {
+        return switch (key) {
+            case R -> state.getDouble(boundaryLine, R, boundaryLine::getR);
+            case X -> state.getDouble(boundaryLine, X, boundaryLine::getX);
+            case G -> state.getDouble(boundaryLine, G, boundaryLine::getG);
+            case B -> state.getDouble(boundaryLine, B, boundaryLine::getB);
+            default -> throw new IllegalArgumentException("Not an impedance of a boundary line: " + key);
+        };
     }
 
     /**

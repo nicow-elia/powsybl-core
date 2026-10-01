@@ -274,7 +274,8 @@ public final class EquipmentExport {
                 // create a new fictitious substation inside this network
                 fictSubstationId = writeFictitiousSubstationFor(network, cimNamespace, writer, context);
             }
-            VoltageLevelEq.write(context.getNamingStrategy().getCgmesId(voltageLevel), voltageLevel.getNameOrId(), voltageLevel.getLowVoltageLimit(), voltageLevel.getHighVoltageLimit(),
+            VoltageLevelEq.write(context.getNamingStrategy().getCgmesId(voltageLevel), voltageLevel.getNameOrId(),
+                    LimitFamily.voltageLimit(voltageLevel, false, IidmStateView.LIVE), LimitFamily.voltageLimit(voltageLevel, true, IidmStateView.LIVE),
                     substationId.orElse(fictSubstationId), baseVoltageId, cimNamespace, writer, context);
         }
     }
@@ -759,8 +760,10 @@ public final class EquipmentExport {
         for (Line line : network.getLines()) {
             double baseVoltage = Math.max(line.getTerminal1().getVoltageLevel().getNominalV(), line.getTerminal2().getVoltageLevel().getNominalV());
             String baseVoltageId = context.getBaseVoltageIdFromNominalV(baseVoltage);
-            AcLineSegmentEq.write(context.getNamingStrategy().getCgmesId(line), line.getNameOrId(), baseVoltageId, line.getR(), line.getX(),
-                line.getG1() + line.getG2(), line.getB1() + line.getB2(), cimNamespace, writer, context);
+            AcLineSegmentEq.write(context.getNamingStrategy().getCgmesId(line), line.getNameOrId(), baseVoltageId,
+                LimitFamily.lineImpedance(line, CgmesChangeTranslator.R, IidmStateView.LIVE), LimitFamily.lineImpedance(line, CgmesChangeTranslator.X, IidmStateView.LIVE),
+                LimitFamily.lineImpedance(line, CgmesChangeTranslator.G1, IidmStateView.LIVE), LimitFamily.lineImpedance(line, CgmesChangeTranslator.B1, IidmStateView.LIVE),
+                cimNamespace, writer, context);
             writeBranchLimits(line, getTerminalId(line.getTerminal1(), context), getTerminalId(line.getTerminal2(), context), cimNamespace,
                 euNamespace, exportedLimitTypes, writer, context);
         }
@@ -1141,7 +1144,10 @@ public final class EquipmentExport {
             // Cast the boundaryLine to an AcLineSegment
             AcLineSegmentEq.write(context.getNamingStrategy().getCgmesId(boundaryLine), boundaryLine.getNameOrId(),
                     context.getBaseVoltageIdFromNominalV(boundaryLine.getTerminal().getVoltageLevel().getNominalV()),
-                    boundaryLine.getR(), boundaryLine.getX(), boundaryLine.getG(), boundaryLine.getB(), cimNamespace, writer, context);
+                    LimitFamily.boundaryLineImpedance(boundaryLine, CgmesChangeTranslator.R, IidmStateView.LIVE),
+                    LimitFamily.boundaryLineImpedance(boundaryLine, CgmesChangeTranslator.X, IidmStateView.LIVE),
+                    LimitFamily.boundaryLineImpedance(boundaryLine, CgmesChangeTranslator.G, IidmStateView.LIVE),
+                    LimitFamily.boundaryLineImpedance(boundaryLine, CgmesChangeTranslator.B, IidmStateView.LIVE), cimNamespace, writer, context);
             writeFlowsLimits(boundaryLine, getTerminalId(boundaryLine.getTerminal(), context), cimNamespace, euNamespace, exportedLimitTypes, writer, context);
         }
     }
@@ -1443,7 +1449,7 @@ public final class EquipmentExport {
         // Write the permanent limit
         String className = loadingLimitClassName(limits);
         String operationalLimitId = operationalLimitId(operationalLimitSetId, className, -1, context);
-        LoadingLimitEq.write(operationalLimitId, className, "PATL", limits.getPermanentLimit(), operationalLimitTypeId,
+        LoadingLimitEq.write(operationalLimitId, className, "PATL", LimitFamily.limitValue(limits, -1), operationalLimitTypeId,
             operationalLimitSetId, cimNamespace, writer, context);
 
         if (!limits.getTemporaryLimits().isEmpty()) {
@@ -1462,7 +1468,8 @@ public final class EquipmentExport {
                 String temporaryLimitName = temporaryLimit.getName().isEmpty() ?
                     "TATL " + temporaryLimit.getAcceptableDuration() : // If the temporary limit name is empty, write TATL and the acceptable duration
                     temporaryLimit.getName();
-                LoadingLimitEq.write(operationalLimitId, className, temporaryLimitName, temporaryLimit.getValue(), operationalLimitTypeId, operationalLimitSetId, cimNamespace, writer, context);
+                LoadingLimitEq.write(operationalLimitId, className, temporaryLimitName, LimitFamily.limitValue(limits, acceptableDuration),
+                    operationalLimitTypeId, operationalLimitSetId, cimNamespace, writer, context);
             }
         }
     }
