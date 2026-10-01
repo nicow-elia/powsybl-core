@@ -64,10 +64,11 @@ class CgmesDiffRoundTripTest {
     /**
      * Fingerprint keys on which a sender and a receiver legitimately differ, with the reason.
      *
-     * <p>Every entry is a value the CGMES steady state hypothesis has no property for, so it cannot travel: it is the
-     * setpoint of a regulation mode that is not active, which the importer leaves at the value the equipment model
-     * gave it. A partial steady state hypothesis update shows exactly the same difference, which is what the second
-     * test of this class asserts, so these are not defects of the difference path.</p>
+     * <p>Every entry is a value the CGMES steady state hypothesis cannot carry as the sender holds it: either it has
+     * no property for it (the setpoint of a regulation mode that is not active, which the importer leaves at the value
+     * the equipment model gave it), or the sender's value is not a number and the export writes it as {@code 0}. A
+     * partial steady state hypothesis update shows exactly the same difference, which is what the second test of this
+     * class asserts, so these are not defects of the difference path.</p>
      */
     private static final Set<String> KNOWN_IMPORT_NORMALISATIONS = Set.of(
             // The steady state hypothesis has no property for the setpoint of a regulation mode that is not active,
