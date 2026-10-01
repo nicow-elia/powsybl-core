@@ -61,7 +61,7 @@ public final class SteadyStateHypothesisExport {
             }
 
             writeLoads(network, mapping, out, context);
-            writeFictitiousInjections(network, cimNamespace, writer, context);
+            writeFictitiousInjections(network, out, context);
             writeEquivalentInjections(network, mapping, out, context);
             writeTapChangers(network, mapping, regulatingControlViews, out, context);
             writeGenerators(network, mapping, regulatingControlViews, out, context);
@@ -71,11 +71,11 @@ public final class SteadyStateHypothesisExport {
             writeRegulatingControls(regulatingControlViews, out);
             writeGeneratingUnitsParticitationFactors(network, out, context);
             writeConverters(network, mapping, out, cimNamespace, writer, context);
-            writeDCTerminals(network, cimNamespace, writer, context);
+            writeDCTerminals(network, out, context);
             // FIXME open status of retained switches in bus-branch models
             writeSwitches(network, mapping, out, context);
-            writeTerminals(network, cimNamespace, writer, context);
-            writeControlAreas(network, cimNamespace, writer, context);
+            writeTerminals(network, out, context);
+            writeControlAreas(network, mapping, out);
 
             writer.writeEndDocument();
         } catch (XMLStreamException e) {
@@ -94,14 +94,14 @@ public final class SteadyStateHypothesisExport {
         }
     }
 
-    private static void writeTerminalForSwitches(Network network, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) {
+    private static void writeTerminalForSwitches(Network network, CgmesPropertySink out, CgmesExportContext context) {
         for (Switch sw : network.getSwitches()) {
             if (context.isExportedEquipment(sw)) {
                 String switchType = sw.getProperty(PROPERTY_CGMES_ORIGINAL_CLASS); // may be null
                 boolean connected = isConnected(sw, switchType);
 
-                writeTerminal(context.getNamingStrategy().getCgmesIdFromAlias(sw, ALIAS_TERMINAL1), connected, cimNamespace, writer, context);
-                writeTerminal(context.getNamingStrategy().getCgmesIdFromAlias(sw, ALIAS_TERMINAL2), connected, cimNamespace, writer, context);
+                SwitchAndTerminalFamily.describeTerminal(context.getNamingStrategy().getCgmesIdFromAlias(sw, ALIAS_TERMINAL1), connected, out);
+                SwitchAndTerminalFamily.describeTerminal(context.getNamingStrategy().getCgmesIdFromAlias(sw, ALIAS_TERMINAL2), connected, out);
             }
         }
     }
@@ -122,59 +122,59 @@ public final class SteadyStateHypothesisExport {
         }
     }
 
-    private static void writeTerminalForBoundaryLines(Network network, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) {
+    private static void writeTerminalForBoundaryLines(Network network, CgmesPropertySink out, CgmesExportContext context) {
         for (BoundaryLine bl : network.getBoundaryLines(BoundaryLineFilter.ALL)) {
             // Terminal for equivalent injection at boundary is always connected
-            writeTerminal(context.getNamingStrategy().getCgmesIdFromProperty(bl, PROPERTY_EQUIVALENT_INJECTION_TERMINAL), true, cimNamespace, writer, context);
+            SwitchAndTerminalFamily.describeTerminal(context.getNamingStrategy().getCgmesIdFromProperty(bl, PROPERTY_EQUIVALENT_INJECTION_TERMINAL), true, out);
             // Terminal for boundary side of original line/switch is always connected
-            writeTerminal(CgmesExportUtil.getBoundaryLineBoundaryTerminalId(bl, context), true, cimNamespace, writer, context);
+            SwitchAndTerminalFamily.describeTerminal(CgmesExportUtil.getBoundaryLineBoundaryTerminalId(bl, context), true, out);
         }
     }
 
-    private static void writeTerminalForBuses(Network network, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) {
+    private static void writeTerminalForBuses(Network network, CgmesPropertySink out) {
         for (Bus b : network.getBusBreakerView().getBuses()) {
             String bbsTerminals = b.getProperty(PROPERTY_BUSBAR_SECTION_TERMINALS, "");
             if (!bbsTerminals.isEmpty()) {
                 for (String bbsTerminal : bbsTerminals.split(",")) {
-                    writeTerminal(bbsTerminal, true, cimNamespace, writer, context);
+                    SwitchAndTerminalFamily.describeTerminal(bbsTerminal, true, out);
                 }
             }
         }
     }
 
-    private static void writeTerminals(Network network, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) {
+    private static void writeTerminals(Network network, CgmesPropertySink out, CgmesExportContext context) {
         for (Connectable<?> c : network.getConnectables()) { // TODO write boundary terminals for tie lines from CGMES
             if (context.isExportedEquipment(c)) {
                 if (CgmesExportUtil.isEquivalentShuntWithZeroSectionCount(c)) {
                     // Equivalent shunts do not have a section count in SSH, SV profiles,
                     // the only way to make output consistent with IIDM section count == 0 is to disconnect its terminal
-                    writeTerminal(CgmesExportUtil.getTerminalId(c.getTerminals().get(0), context), false, cimNamespace, writer, context);
+                    SwitchAndTerminalFamily.describeTerminal(CgmesExportUtil.getTerminalId(c.getTerminals().get(0), context), false, out);
                 } else {
                     for (Terminal t : c.getTerminals()) {
-                        writeTerminal(t, cimNamespace, writer, context);
+                        SwitchAndTerminalFamily.describeTerminal(CgmesExportUtil.getTerminalId(t, context), t.isConnected(), out);
                     }
                 }
             }
         }
-        writeTerminalForSwitches(network, cimNamespace, writer, context);
-        writeTerminalForBoundaryLines(network, cimNamespace, writer, context);
+        writeTerminalForSwitches(network, out, context);
+        writeTerminalForBoundaryLines(network, out, context);
         // If we are performing an updated export, write recorded busbar section terminals as connected
         if (!context.isExportEquipment()) {
-            writeTerminalForBuses(network, cimNamespace, writer, context);
+            writeTerminalForBuses(network, out);
         }
     }
 
-    private static void writeFictitiousInjections(Network network, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
+    private static void writeFictitiousInjections(Network network, CgmesPropertySink out, CgmesExportContext context) {
         for (VoltageLevel vl : network.getVoltageLevels()) {
             if (vl.getTopologyKind() == TopologyKind.NODE_BREAKER && !context.isBusBranchExport()) {
-                writeNodeBreakerFictitiousInjections(vl, cimNamespace, writer, context);
+                writeNodeBreakerFictitiousInjections(vl, out, context);
             } else {
-                writeBusBranchFictitiousInjections(vl, cimNamespace, writer, context);
+                writeBusBranchFictitiousInjections(vl, out, context);
             }
         }
     }
 
-    private static void writeNodeBreakerFictitiousInjections(VoltageLevel vl, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
+    private static void writeNodeBreakerFictitiousInjections(VoltageLevel vl, CgmesPropertySink out, CgmesExportContext context) {
         VoltageLevel.NodeBreakerView nb = vl.getNodeBreakerView();
         for (int node : nb.getNodes()) {
             double p = nb.getFictitiousP0(node);
@@ -182,29 +182,27 @@ public final class SteadyStateHypothesisExport {
             if (p != 0.0 || q != 0.0) {
                 String loadId = context.getNamingStrategy().getCgmesId(refTyped(vl), FICTITIOUS, ref("NCL"), ref(node));
                 String terminalId = context.getNamingStrategy().getCgmesId(refTyped(vl), FICTITIOUS, TERMINAL, ref(node));
-                writeFictitiousInjection(loadId, terminalId, p, q, cimNamespace, writer, context);
+                writeFictitiousInjection(loadId, terminalId, p, q, out);
             }
         }
     }
 
-    private static void writeBusBranchFictitiousInjections(VoltageLevel vl, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
+    private static void writeBusBranchFictitiousInjections(VoltageLevel vl, CgmesPropertySink out, CgmesExportContext context) {
         for (Bus b : vl.getBusBreakerView().getBuses()) {
             double p = b.getFictitiousP0();
             double q = b.getFictitiousQ0();
             if (p != 0.0 || q != 0.0) {
                 String loadId = context.getNamingStrategy().getCgmesId(refTyped(b), FICTITIOUS, ref("NCL"));
                 String terminalId = context.getNamingStrategy().getCgmesId(refTyped(b), FICTITIOUS, TERMINAL);
-                writeFictitiousInjection(loadId, terminalId, p, q, cimNamespace, writer, context);
+                writeFictitiousInjection(loadId, terminalId, p, q, out);
             }
         }
     }
 
-    private static void writeFictitiousInjection(String loadId, String terminalId, double p, double q,
-                                                 String cimNamespace, XMLStreamWriter writer,
-                                                 CgmesExportContext context) throws XMLStreamException {
-        LoadFamily.describeFictitiousInjection(loadId, p, q, new CgmesPropertySink.Xml(cimNamespace, writer, context));
+    private static void writeFictitiousInjection(String loadId, String terminalId, double p, double q, CgmesPropertySink out) {
+        LoadFamily.describeFictitiousInjection(loadId, p, q, out);
         // Terminal connected state (always connected in SSH for fictitious terminals)
-        writeTerminal(terminalId, true, cimNamespace, writer, context);
+        SwitchAndTerminalFamily.describeTerminal(terminalId, true, out);
     }
 
     private static void writeEquivalentInjections(Network network, CgmesChangeTranslator mapping, CgmesPropertySink out, CgmesExportContext context) {
@@ -355,22 +353,6 @@ public final class SteadyStateHypothesisExport {
         }
     }
 
-    private static void writeTerminal(Terminal t, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) {
-        writeTerminal(CgmesExportUtil.getTerminalId(t, context), t.isConnected(), cimNamespace, writer, context);
-    }
-
-    private static void writeTerminal(String terminalId, boolean connected, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) {
-        try {
-            CgmesExportUtil.writeStartAbout(CgmesNames.TERMINAL, terminalId, cimNamespace, writer, context);
-            writer.writeStartElement(cimNamespace, "ACDCTerminal.connected");
-            writer.writeCharacters(Boolean.toString(connected));
-            writer.writeEndElement();
-            writer.writeEndElement();
-        } catch (XMLStreamException e) {
-            throw new UncheckedXmlStreamException(e);
-        }
-    }
-
     private static void writeLoads(Network network, CgmesChangeTranslator mapping, CgmesPropertySink out, CgmesExportContext context) {
         for (Load load : network.getLoads()) {
             if (context.isExportedEquipment(load) && !mapping.loads.describeLoad(load, out)) {
@@ -401,56 +383,47 @@ public final class SteadyStateHypothesisExport {
         }
     }
 
-    private static void writeDCTerminals(Network network, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
+    private static void writeDCTerminals(Network network, CgmesPropertySink out, CgmesExportContext context) {
         for (HvdcLine line : network.getHvdcLines()) {
-            writeHvdcLineDCTerminals(line, cimNamespace, writer, context);
+            writeHvdcLineDCTerminals(line, out, context);
         }
         for (DcConnectable<?> dcConnectable : network.getDcConnectables()) {
             for (DcTerminal dcTerminal : dcConnectable.getDcTerminals()) {
                 String dcTerminalId = CgmesExportUtil.getDcTerminalId(dcTerminal, context);
                 String className = dcConnectable instanceof AcDcConverter<?> ? ACDC_CONVERTER_DC_TERMINAL : CgmesNames.DC_TERMINAL;
                 boolean connected = dcTerminal.isConnected();
-                writeDCTerminal(dcTerminalId, className, connected, cimNamespace, writer, context);
+                SwitchAndTerminalFamily.describeTerminal(className, dcTerminalId, connected, out);
             }
         }
         for (DcSwitch dcSwitch : network.getDcSwitches()) {
             boolean connected = !dcSwitch.isOpen();
             String dcTerminal1Id = context.getNamingStrategy().getCgmesIdFromAlias(dcSwitch, ALIAS_DC_TERMINAL1);
-            writeDCTerminal(dcTerminal1Id, CgmesNames.DC_TERMINAL, connected, cimNamespace, writer, context);
+            SwitchAndTerminalFamily.describeTerminal(CgmesNames.DC_TERMINAL, dcTerminal1Id, connected, out);
             String dcTerminal2Id = context.getNamingStrategy().getCgmesIdFromAlias(dcSwitch, ALIAS_DC_TERMINAL2);
-            writeDCTerminal(dcTerminal2Id, CgmesNames.DC_TERMINAL, connected, cimNamespace, writer, context);
+            SwitchAndTerminalFamily.describeTerminal(CgmesNames.DC_TERMINAL, dcTerminal2Id, connected, out);
         }
     }
 
-    private static void writeHvdcLineDCTerminals(HvdcLine line, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
+    private static void writeHvdcLineDCTerminals(HvdcLine line, CgmesPropertySink out, CgmesExportContext context) {
         String acdcConverterDcTerminal1 = context.getNamingStrategy().getCgmesIdFromAlias(line.getConverterStation1(), ALIAS_DC_TERMINAL1);
-        writeDCTerminal(acdcConverterDcTerminal1, ACDC_CONVERTER_DC_TERMINAL, true, cimNamespace, writer, context);
+        SwitchAndTerminalFamily.describeTerminal(ACDC_CONVERTER_DC_TERMINAL, acdcConverterDcTerminal1, true, out);
         String acdcConverterDcTerminal1G = context.getNamingStrategy().getCgmesIdFromAlias(line.getConverterStation1(), ALIAS_DC_TERMINAL2);
-        writeDCTerminal(acdcConverterDcTerminal1G, ACDC_CONVERTER_DC_TERMINAL, true, cimNamespace, writer, context);
+        SwitchAndTerminalFamily.describeTerminal(ACDC_CONVERTER_DC_TERMINAL, acdcConverterDcTerminal1G, true, out);
 
         String acdcConverterDcTerminal2 = context.getNamingStrategy().getCgmesIdFromAlias(line.getConverterStation2(), ALIAS_DC_TERMINAL1);
-        writeDCTerminal(acdcConverterDcTerminal2, ACDC_CONVERTER_DC_TERMINAL, true, cimNamespace, writer, context);
+        SwitchAndTerminalFamily.describeTerminal(ACDC_CONVERTER_DC_TERMINAL, acdcConverterDcTerminal2, true, out);
         String acdcConverterDcTerminal2G = context.getNamingStrategy().getCgmesIdFromAlias(line.getConverterStation1(), ALIAS_DC_TERMINAL2);
-        writeDCTerminal(acdcConverterDcTerminal2G, ACDC_CONVERTER_DC_TERMINAL, true, cimNamespace, writer, context);
+        SwitchAndTerminalFamily.describeTerminal(ACDC_CONVERTER_DC_TERMINAL, acdcConverterDcTerminal2G, true, out);
 
         String dcTerminal1 = context.getNamingStrategy().getCgmesIdFromAlias(line, ALIAS_DC_TERMINAL1);
-        writeDCTerminal(dcTerminal1, CgmesNames.DC_TERMINAL, true, cimNamespace, writer, context);
+        SwitchAndTerminalFamily.describeTerminal(CgmesNames.DC_TERMINAL, dcTerminal1, true, out);
         String dcTerminal1G = context.getNamingStrategy().getCgmesId(refTyped(line), DC_TERMINAL, ref("1G"));
-        writeDCTerminal(dcTerminal1G, CgmesNames.DC_TERMINAL, true, cimNamespace, writer, context);
+        SwitchAndTerminalFamily.describeTerminal(CgmesNames.DC_TERMINAL, dcTerminal1G, true, out);
 
         String dcTerminal2 = context.getNamingStrategy().getCgmesIdFromAlias(line, ALIAS_DC_TERMINAL2);
-        writeDCTerminal(dcTerminal2, CgmesNames.DC_TERMINAL, true, cimNamespace, writer, context);
+        SwitchAndTerminalFamily.describeTerminal(CgmesNames.DC_TERMINAL, dcTerminal2, true, out);
         String dcTerminal2G = context.getNamingStrategy().getCgmesId(refTyped(line), DC_TERMINAL, ref("2G"));
-        writeDCTerminal(dcTerminal2G, CgmesNames.DC_TERMINAL, true, cimNamespace, writer, context);
-    }
-
-    private static void writeDCTerminal(String terminalId, String className, boolean connected, String cimNamespace,
-                                        XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
-        CgmesExportUtil.writeStartAbout(className, terminalId, cimNamespace, writer, context);
-        writer.writeStartElement(cimNamespace, "ACDCTerminal.connected");
-        writer.writeCharacters(Boolean.toString(connected));
-        writer.writeEndElement();
-        writer.writeEndElement();
+        SwitchAndTerminalFamily.describeTerminal(CgmesNames.DC_TERMINAL, dcTerminal2G, true, out);
     }
 
     private static void writeGeneratingUnitsParticitationFactors(Network network, CgmesPropertySink out, CgmesExportContext context) {
@@ -479,28 +452,12 @@ public final class SteadyStateHypothesisExport {
         return MachineFamily.generatingUnitForGeneratorAndBatteries(i, context, IidmStateView.LIVE);
     }
 
-    private static void writeControlAreas(Network network, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
+    private static void writeControlAreas(Network network, CgmesChangeTranslator mapping, CgmesPropertySink out) {
         for (Area area : network.getAreas()) {
             if (CgmesNames.CONTROL_AREA_TYPE_KIND_INTERCHANGE.equals(area.getAreaType())) {
-                writeControlArea(area, cimNamespace, writer, context);
+                mapping.controlAreas.describeControlArea(area, out);
             }
         }
-    }
-
-    private static void writeControlArea(Area controlArea, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
-        String areaId = context.getNamingStrategy().getCgmesId(controlArea.getId());
-        CgmesExportUtil.writeStartAbout("ControlArea", areaId, cimNamespace, writer, context);
-        writer.writeStartElement(cimNamespace, "ControlArea.netInterchange");
-        double netInterchange = controlArea.getInterchangeTarget().orElse(Double.NaN);
-        writer.writeCharacters(CgmesExportUtil.format(netInterchange));
-        writer.writeEndElement();
-        if (controlArea.hasProperty("pTolerance")) {
-            double pTolerance = Double.parseDouble(controlArea.getProperty("pTolerance"));
-            writer.writeStartElement(cimNamespace, "ControlArea.pTolerance");
-            writer.writeCharacters(CgmesExportUtil.format(pTolerance));
-            writer.writeEndElement();
-        }
-        writer.writeEndElement();
     }
 
     private static void writeAcDcConverter(AcDcConverter<?> converter, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {

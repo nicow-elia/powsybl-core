@@ -21,7 +21,6 @@ import static com.powsybl.cgmes.conversion.Conversion.ALIAS_TERMINAL1;
 import static com.powsybl.cgmes.conversion.Conversion.ALIAS_TERMINAL2;
 import static com.powsybl.cgmes.conversion.Conversion.PROPERTY_CGMES_ORIGINAL_CLASS;
 import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.OPEN;
-import static com.powsybl.cgmes.conversion.export.CgmesPropertyBuffer.newUpdates;
 import static com.powsybl.commons.util.Result.failure;
 import static com.powsybl.commons.util.Result.success;
 
@@ -86,16 +85,31 @@ public final class SwitchAndTerminalFamily extends AbstractFamily {
 
     private CgmesPropertyBuffer switchTerminalUpdates(Switch sw) {
         boolean connected = !state.getBoolean(sw, OPEN, sw::isOpen);
-        return newUpdates(CgmesNames.TERMINAL, cgmesIdFromAlias(sw, ALIAS_TERMINAL1)).value(ACDC_TERMINAL_CONNECTED, connected)
-                .object(CgmesNames.TERMINAL, cgmesIdFromAlias(sw, ALIAS_TERMINAL2)).value(ACDC_TERMINAL_CONNECTED, connected)
-                .updates();
+        return collect(out -> {
+            describeTerminal(cgmesIdFromAlias(sw, ALIAS_TERMINAL1), connected, out);
+            describeTerminal(cgmesIdFromAlias(sw, ALIAS_TERMINAL2), connected, out);
+        });
     }
 
     Result<CgmesPropertyBuffer, String> dcSwitchUpdates(DcSwitch dcSwitch) {
         // A DCSwitch has no open state in the SSH profile either, it is carried by its two DC terminals.
         boolean connected = !state.getBoolean(dcSwitch, OPEN, dcSwitch::isOpen);
-        return success(newUpdates(CgmesNames.DC_TERMINAL, cgmesIdFromAlias(dcSwitch, ALIAS_DC_TERMINAL1)).value(ACDC_TERMINAL_CONNECTED, connected)
-                .object(CgmesNames.DC_TERMINAL, cgmesIdFromAlias(dcSwitch, ALIAS_DC_TERMINAL2)).value(ACDC_TERMINAL_CONNECTED, connected)
-                .updates());
+        return success(collect(out -> {
+            describeTerminal(CgmesNames.DC_TERMINAL, cgmesIdFromAlias(dcSwitch, ALIAS_DC_TERMINAL1), connected, out);
+            describeTerminal(CgmesNames.DC_TERMINAL, cgmesIdFromAlias(dcSwitch, ALIAS_DC_TERMINAL2), connected, out);
+        }));
+    }
+
+    /** Describe the connection status of a Terminal. */
+    static void describeTerminal(String terminalId, boolean connected, CgmesPropertySink out) {
+        describeTerminal(CgmesNames.TERMINAL, terminalId, connected, out);
+    }
+
+    /**
+     * Describe the connection status of a terminal of the given class: a Terminal, a DCTerminal or the
+     * ACDCConverterDCTerminal of a converter.
+     */
+    static void describeTerminal(String className, String terminalId, boolean connected, CgmesPropertySink out) {
+        out.startObject(className, terminalId).value(ACDC_TERMINAL_CONNECTED, connected).endObject();
     }
 }

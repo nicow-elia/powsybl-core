@@ -76,7 +76,7 @@ import static com.powsybl.commons.util.Result.success;
  * <p>This class is the event loop of the mapping: the variant and subset checks, the refusals that depend on the key
  * of a change ({@link RegulationKeyRefusals}) and the dispatch of a change to the family of its equipment. The families
  * describe the CGMES objects ({@link LoadFamily}, {@link MachineFamily}, {@link TapChangerAndShuntFamily},
- * {@link SwitchAndTerminalFamily}, {@link HvdcFamily}, {@link LimitFamily}; the shared regulating controls
+ * {@link SwitchAndTerminalFamily}, {@link HvdcFamily}, {@link LimitFamily}, {@link ControlAreaFamily}; the shared regulating controls
  * {@link RegulatingControlFamily}); they declare the keys this class dispatches on, and the full steady state hypothesis
  * export describes through the same families ({@link #forFullModel}).</p>
  *
@@ -170,6 +170,7 @@ class CgmesChangeTranslator {
     final SwitchAndTerminalFamily switches;
     final HvdcFamily hvdc;
     final LimitFamily limits;
+    final ControlAreaFamily controlAreas;
     /** Who reads the description: which objects it may name and which refusals it honours. */
     private final Scope scope;
     /** Whether a change that belongs to every variant of the network is refused, see {@link #setRejectSharedChanges}. */
@@ -216,6 +217,7 @@ class CgmesChangeTranslator {
         this.switches = new SwitchAndTerminalFamily(context, state, scope);
         this.hvdc = new HvdcFamily(context, state, scope);
         this.limits = new LimitFamily(network, context, state, scope);
+        this.controlAreas = new ControlAreaFamily(context, state, scope);
     }
 
     /**

@@ -7,6 +7,7 @@
  */
 package com.powsybl.cgmes.conversion.diff;
 
+import com.powsybl.cgmes.conversion.export.ControlAreaFamily;
 import com.powsybl.cgmes.conversion.export.HvdcFamily;
 import com.powsybl.cgmes.conversion.export.LimitFamily;
 import com.powsybl.cgmes.conversion.export.MachineFamily;
@@ -316,8 +317,7 @@ public final class FastRouteCapabilities {
         table.add(ssh(Family.REGULATING_CONTROL, RegulatingControlFamily.REGULATING_CONTROL, VariantSafety.NETWORK_DEPENDENT));
         table.add(converter(Family.CS_CONVERTER, HvdcFamily.CS_CONVERTER, VariantSafety.UNSAFE));
         table.add(converter(Family.VS_CONVERTER, HvdcFamily.VS_CONVERTER, VariantSafety.NETWORK_DEPENDENT));
-        table.add(ssh(Family.CONTROL_AREA, "controlAreas", "ControlArea", Set.of("ControlArea"),
-                List.of(new PropertyGroup(Set.of("ControlArea.netInterchange"), Set.of("ControlArea.pTolerance")))));
+        table.add(ssh(Family.CONTROL_AREA, ControlAreaFamily.CONTROL_AREA, VariantSafety.SAFE));
         // Operational limit values: equipment data in CIM 2.4.15, steady state data in CIM 3. One OperationalLimit
         // is one CGMES object with one value, so every group holds a single property.
         table.add(limit(Family.CURRENT_LIMIT, LimitFamily.CURRENT_LIMIT));
@@ -343,11 +343,6 @@ public final class FastRouteCapabilities {
         FamilySpec spec = ssh(family, block, variantSafety);
         return new FamilySpec(family, spec.subsets(), spec.handler(), spec.updateQuery(), spec.canonicalType(), spec.rdfTypes(),
                 List.of(AC_DC_CONVERTER_SETPOINTS, spec.groups().get(0)), variantSafety);
-    }
-
-    private static FamilySpec ssh(Family family, String query, String canonicalType, Set<String> rdfTypes,
-                                  List<PropertyGroup> groups) {
-        return ssh(family, query, canonicalType, rdfTypes, groups, VariantSafety.SAFE);
     }
 
     private static FamilySpec ssh(Family family, String query, String canonicalType, Set<String> rdfTypes,
