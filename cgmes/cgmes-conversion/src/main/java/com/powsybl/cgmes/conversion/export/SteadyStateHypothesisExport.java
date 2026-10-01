@@ -17,7 +17,6 @@ import com.powsybl.commons.exceptions.UncheckedXmlStreamException;
 import com.powsybl.iidm.network.*;
 import com.powsybl.iidm.network.Identifiable;
 import com.powsybl.iidm.network.extensions.ActivePowerControl;
-import com.powsybl.iidm.network.extensions.ReferencePriority;
 import com.powsybl.iidm.network.regulation.RegulationMode;
 import com.powsybl.iidm.network.regulation.VoltageRegulationHolder;
 import org.slf4j.Logger;
@@ -43,8 +42,6 @@ import static com.powsybl.cgmes.model.CgmesNamespace.RDF_NAMESPACE;
 public final class SteadyStateHypothesisExport {
 
     private static final Logger LOG = LoggerFactory.getLogger(SteadyStateHypothesisExport.class);
-    private static final String ROTATING_MACHINE_P = "RotatingMachine.p";
-    private static final String ROTATING_MACHINE_Q = "RotatingMachine.q";
     private static final String REGULATING_COND_EQ_CONTROL_ENABLED = "RegulatingCondEq.controlEnabled";
     private static final String ACDC_CONVERTER_DC_TERMINAL = "ACDCConverterDCTerminal";
     private static final String OPERATING_MODE_GENERATOR = "generator";
@@ -75,14 +72,14 @@ public final class SteadyStateHypothesisExport {
 
             writeLoads(network, mapping, out, context);
             writeFictitiousInjections(network, cimNamespace, writer, out, context);
-            writeEquivalentInjections(network, cimNamespace, writer, context);
+            writeEquivalentInjections(network, mapping, out, context);
             writeTapChangers(network, cimNamespace, regulatingControlViews, writer, context);
-            writeGenerators(network, cimNamespace, regulatingControlViews, writer, context);
-            writeBatteries(network, cimNamespace, writer, context);
+            writeGenerators(network, mapping, regulatingControlViews, out, context);
+            writeBatteries(network, mapping, out);
             writeShuntCompensators(network, cimNamespace, regulatingControlViews, writer, context);
             writeStaticVarCompensators(network, cimNamespace, regulatingControlViews, writer, context);
             writeRegulatingControls(regulatingControlViews, cimNamespace, writer, context);
-            writeGeneratingUnitsParticitationFactors(network, cimNamespace, writer, context);
+            writeGeneratingUnitsParticitationFactors(network, out, context);
             writeConverters(network, cimNamespace, writer, context);
             writeDCTerminals(network, cimNamespace, writer, context);
             // FIXME open status of retained switches in bus-branch models
@@ -220,28 +217,14 @@ public final class SteadyStateHypothesisExport {
         writeTerminal(terminalId, true, cimNamespace, writer, context);
     }
 
-    private static void writeEquivalentInjections(Network network, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
+    private static void writeEquivalentInjections(Network network, CgmesChangeTranslator mapping, CgmesPropertySink out, CgmesExportContext context) {
         // One equivalent injection for every boundary line
         List<String> exported = new ArrayList<>();
 
         for (BoundaryLine bl : network.getBoundaryLines(BoundaryLineFilter.ALL)) {
             String equivalentInjectionId = context.getNamingStrategy().getCgmesIdFromProperty(bl, PROPERTY_EQUIVALENT_INJECTION);
             if (!exported.contains(equivalentInjectionId)) {
-                // regulationStatus and regulationTarget are optional,
-                // but test cases contain the attributes with disabled and 0
-                boolean regulationStatus = false;
-                double regulationTarget = 0;
-                double p = bl.getP0();
-                double q = bl.getQ0();
-                if (bl.getGeneration() != null) {
-                    regulationStatus = bl.getGeneration().isVoltageRegulationOn();
-                    regulationTarget = bl.getGeneration().getTargetV();
-                    // The import puts the whole injection into the generation (EquivalentInjectionConversion#update):
-                    // the injection is the load of the boundary line less its generation, as the change mapping writes it
-                    p = CgmesChangeTranslator.nonNaN(p) - CgmesChangeTranslator.nonNaN(bl.getGeneration().getTargetP());
-                    q = CgmesChangeTranslator.nonNaN(q) - CgmesChangeTranslator.nonNaN(bl.getGeneration().getTargetQ());
-                }
-                writeEquivalentInjection(equivalentInjectionId, p, q, regulationStatus, regulationTarget, cimNamespace, writer, context);
+                mapping.describeBoundaryInjection(bl, out);
                 exported.add(equivalentInjectionId);
             }
         }
@@ -342,27 +325,21 @@ public final class SteadyStateHypothesisExport {
         }
     }
 
-    private static void writeGenerators(Network network, String cimNamespace, Map<String, List<RegulatingControlView>> regulatingControlViews,
-                                                 XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
+    private static void writeGenerators(Network network, CgmesChangeTranslator mapping, Map<String, List<RegulatingControlView>> regulatingControlViews,
+                                                 CgmesPropertySink out, CgmesExportContext context) {
         for (Generator g : network.getGenerators()) {
             String cgmesOriginalClass = g.getProperty(PROPERTY_CGMES_ORIGINAL_CLASS, CgmesNames.SYNCHRONOUS_MACHINE);
 
-            boolean controlEnabled = g.isRegulating();
             switch (cgmesOriginalClass) {
                 case CgmesNames.EQUIVALENT_INJECTION:
-                    writeEquivalentInjection(context.getNamingStrategy().getCgmesId(g), -g.getTargetP(), -g.getLocalTargetQ(),
-                            controlEnabled, g.getLocalTargetV(), cimNamespace, writer, context);
+                    mapping.describeEquivalentInjection(g, out);
                     break;
                 case CgmesNames.EXTERNAL_NETWORK_INJECTION:
-                    writeExternalNetworkInjection(context.getNamingStrategy().getCgmesId(g), controlEnabled,
-                            -g.getTargetP(), -g.getLocalTargetQ(), ReferencePriority.get(g),
-                            cimNamespace, writer, context);
+                    mapping.describeExternalNetworkInjection(g, out);
                     addRegulatingControlView(RegulationRef.of(g), getRegulatingControlId(g, context), regulatingControlViews, context);
                     break;
                 case CgmesNames.SYNCHRONOUS_MACHINE:
-                    writeSynchronousMachine(context.getNamingStrategy().getCgmesId(g), controlEnabled,
-                            -g.getTargetP(), -g.getLocalTargetQ(), ReferencePriority.get(g), obtainOperatingMode(g, g.getMinP(), g.getMaxP(), g.getTargetP()),
-                            cimNamespace, writer, context);
+                    mapping.describeSynchronousMachine(g, out);
                     addRegulatingControlView(RegulationRef.of(g), getRegulatingControlId(g, context), regulatingControlViews, context);
                     break;
                 default:
@@ -371,56 +348,10 @@ public final class SteadyStateHypothesisExport {
         }
     }
 
-    private static void writeExternalNetworkInjection(String id, boolean controlEnabled, double p, double q, int referencePriority,
-                                                      String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
-        CgmesExportUtil.writeStartAbout(CgmesNames.EXTERNAL_NETWORK_INJECTION, id, cimNamespace, writer, context);
-        writer.writeStartElement(cimNamespace, REGULATING_COND_EQ_CONTROL_ENABLED);
-        writer.writeCharacters(Boolean.toString(controlEnabled));
-        writer.writeEndElement();
-        writer.writeStartElement(cimNamespace, "ExternalNetworkInjection.p");
-        writer.writeCharacters(CgmesExportUtil.format(p));
-        writer.writeEndElement();
-        writer.writeStartElement(cimNamespace, "ExternalNetworkInjection.q");
-        writer.writeCharacters(CgmesExportUtil.format(q));
-        writer.writeEndElement();
-        writer.writeStartElement(cimNamespace, "ExternalNetworkInjection.referencePriority");
-        writer.writeCharacters(Integer.toString(referencePriority)); // reference priority is used for angle reference selection (slack)
-        writer.writeEndElement();
-        writer.writeEndElement();
-    }
-
-    private static void writeSynchronousMachine(String id, boolean controlEnabled, double p, double q, int referencePriority,
-                                                String mode, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
-        CgmesExportUtil.writeStartAbout(CgmesNames.SYNCHRONOUS_MACHINE, id, cimNamespace, writer, context);
-        writer.writeStartElement(cimNamespace, REGULATING_COND_EQ_CONTROL_ENABLED);
-        writer.writeCharacters(Boolean.toString(controlEnabled));
-        writer.writeEndElement();
-        writer.writeStartElement(cimNamespace, ROTATING_MACHINE_P);
-        writer.writeCharacters(CgmesExportUtil.format(p));
-        writer.writeEndElement();
-        writer.writeStartElement(cimNamespace, ROTATING_MACHINE_Q);
-        writer.writeCharacters(CgmesExportUtil.format(q));
-        writer.writeEndElement();
-        writer.writeStartElement(cimNamespace, "SynchronousMachine.referencePriority");
-        // reference priority is used for angle reference selection (slack)
-        writer.writeCharacters(Integer.toString(referencePriority));
-        writer.writeEndElement();
-        writer.writeEmptyElement(cimNamespace, "SynchronousMachine.operatingMode");
-        writer.writeAttribute(RDF_NAMESPACE, CgmesNames.RESOURCE, cimNamespace + "SynchronousMachineOperatingMode." + mode);
-        writer.writeEndElement();
-    }
-
-    private static void writeBatteries(Network network, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
+    private static void writeBatteries(Network network, CgmesChangeTranslator mapping, CgmesPropertySink out) {
         for (Battery b : network.getBatteries()) {
-            boolean controlEnabled = b.getVoltageRegulation() != null && b.getVoltageRegulation().isRegulating();
-            writeSynchronousMachine(context.getNamingStrategy().getCgmesId(b), controlEnabled,
-                    -b.getTargetP(), -b.getRegulatingTargetQ(), ReferencePriority.get(b), obtainOperatingMode(b, b.getMinP(), b.getMaxP(), b.getTargetP()),
-                    cimNamespace, writer, context);
+            mapping.describeBattery(b, out);
         }
-    }
-
-    private static <I extends ReactiveLimitsHolder & Injection<I>> String obtainOperatingMode(I i, double minP, double maxP, double targetP) {
-        return obtainOperatingMode(i, minP, maxP, targetP, IidmStateView.LIVE);
     }
 
     /**
@@ -753,24 +684,6 @@ public final class SteadyStateHypothesisExport {
         }
     }
 
-    private static void writeEquivalentInjection(String cgmesId, double p, double q, boolean regulationStatus, double regulationTarget, String cimNamespace,
-                                                 XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
-        CgmesExportUtil.writeStartAbout(CgmesNames.EQUIVALENT_INJECTION, cgmesId, cimNamespace, writer, context);
-        writer.writeStartElement(cimNamespace, "EquivalentInjection.p");
-        writer.writeCharacters(CgmesExportUtil.format(p));
-        writer.writeEndElement();
-        writer.writeStartElement(cimNamespace, "EquivalentInjection.q");
-        writer.writeCharacters(CgmesExportUtil.format(q));
-        writer.writeEndElement();
-        writer.writeStartElement(cimNamespace, "EquivalentInjection.regulationStatus");
-        writer.writeCharacters(Boolean.toString(regulationStatus));
-        writer.writeEndElement();
-        writer.writeStartElement(cimNamespace, "EquivalentInjection.regulationTarget");
-        writer.writeCharacters(CgmesExportUtil.format(regulationTarget));
-        writer.writeEndElement();
-        writer.writeEndElement();
-    }
-
     private static void writeLoads(Network network, CgmesChangeTranslator mapping, CgmesPropertySink out, CgmesExportContext context) {
         for (Load load : network.getLoads()) {
             if (context.isExportedEquipment(load) && !mapping.describeLoad(load, out)) {
@@ -969,7 +882,7 @@ public final class SteadyStateHypothesisExport {
         return p * Math.sqrt((1 - powerFactor * powerFactor) / (powerFactor * powerFactor));
     }
 
-    private static void writeGeneratingUnitsParticitationFactors(Network network, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
+    private static void writeGeneratingUnitsParticitationFactors(Network network, CgmesPropertySink out, CgmesExportContext context) {
         // Multiple generators may share the same generation unit,
         // we will choose the participation factor from the last generator that references the generating unit
         // We only consider generators and batteries that have participation factors
@@ -987,7 +900,7 @@ public final class SteadyStateHypothesisExport {
             }
         }
         for (GeneratingUnit gu : generatingUnits.values()) {
-            writeGeneratingUnitParticipationFactor(gu, cimNamespace, writer, context);
+            CgmesChangeTranslator.describeGeneratingUnit(gu, out);
         }
     }
 
@@ -1018,14 +931,6 @@ public final class SteadyStateHypothesisExport {
             return gu;
         }
         return null;
-    }
-
-    private static void writeGeneratingUnitParticipationFactor(GeneratingUnit gu, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
-        CgmesExportUtil.writeStartAbout(gu.className, gu.id, cimNamespace, writer, context);
-        writer.writeStartElement(cimNamespace, "GeneratingUnit.normalPF");
-        writer.writeCharacters(CgmesExportUtil.format(gu.participationFactor));
-        writer.writeEndElement();
-        writer.writeEndElement();
     }
 
     private static String generatingUnitClassname(Injection<?> i) {

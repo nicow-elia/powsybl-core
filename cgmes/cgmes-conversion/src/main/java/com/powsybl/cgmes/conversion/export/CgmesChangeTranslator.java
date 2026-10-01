@@ -16,6 +16,7 @@ import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.PowsyblException;
 import com.powsybl.commons.util.Result;
 import com.powsybl.iidm.network.AcDcConverter;
+import com.powsybl.iidm.network.Battery;
 import com.powsybl.iidm.network.BoundaryLine;
 import com.powsybl.iidm.network.Branch;
 import com.powsybl.iidm.network.Connectable;
@@ -67,6 +68,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -725,6 +727,11 @@ class CgmesChangeTranslator {
         if (scope == Scope.CHANGES && !boundaryLine.hasProperty(PROPERTY_EQUIVALENT_INJECTION)) {
             return failure("boundary line " + boundaryLine.getId() + " has no CGMES EquivalentInjection");
         }
+        return success(collect(out -> describeBoundaryInjection(boundaryLine, out)));
+    }
+
+    /** Describe the EquivalentInjection at the boundary of a boundary line, see {@link #boundaryLineUpdates}. */
+    void describeBoundaryInjection(BoundaryLine boundaryLine, CgmesPropertySink out) {
         // Unlike a generator imported from an EquivalentInjection, a boundary line needs no regulation capability:
         // the CGMES update reads the regulation of a boundary EquivalentInjection from the file alone.
         BoundaryLine.Generation generation = boundaryLine.getGeneration();
@@ -735,23 +742,23 @@ class CgmesChangeTranslator {
                 && state.getBoolean(boundaryLine, VOLTAGE_REGULATION_ON, generation::isVoltageRegulationOn);
         double p = nonNaN(state.getDouble(boundaryLine, P0, boundaryLine::getP0)) - nonNaN(targetP);
         double q = nonNaN(state.getDouble(boundaryLine, Q0, boundaryLine::getQ0)) - nonNaN(targetQ);
-        return success(equivalentInjectionBlock(
-                context.getNamingStrategy().getCgmesIdFromProperty(boundaryLine, PROPERTY_EQUIVALENT_INJECTION),
-                p, q, regulationOn, targetV));
+        equivalentInjectionBlock(out, context.getNamingStrategy().getCgmesIdFromProperty(boundaryLine, PROPERTY_EQUIVALENT_INJECTION),
+                p, q, regulationOn, targetV);
     }
 
     /**
      * The EquivalentInjection block: powers in the load convention, the regulation status and the regulation target.
      */
-    private static CgmesPropertyBuffer equivalentInjectionBlock(String id, double p, double q, boolean regulationOn,
-                                                                double targetV) {
-        CgmesPropertyBuffer.ObjectUpdate update = newUpdates(CgmesNames.EQUIVALENT_INJECTION, id)
+    private static void equivalentInjectionBlock(CgmesPropertySink out, String id, double p, double q, boolean regulationOn,
+                                                 double targetV) {
+        out.startObject(CgmesNames.EQUIVALENT_INJECTION, id)
                 .value("EquivalentInjection.p", p)
                 .value("EquivalentInjection.q", q)
-                .value("EquivalentInjection.regulationStatus", regulationOn);
-        // Always written, a target that is not a number as 0, as the full export writes it: left out, the receiver
-        // would keep a target the sender no longer has
-        return update.value("EquivalentInjection.regulationTarget", targetV).updates();
+                .value("EquivalentInjection.regulationStatus", regulationOn)
+                // Always written, a target that is not a number as 0, as the full export writes it: left out, the
+                // receiver would keep a target the sender no longer has
+                .value("EquivalentInjection.regulationTarget", targetV)
+                .endObject();
     }
 
     /** Zero for an undefined value, which is what the CGMES import writes back for one. */
@@ -790,25 +797,50 @@ class CgmesChangeTranslator {
     private Result<CgmesPropertyBuffer, String> generatorMachineUpdates(Generator generator) {
         String originalClass = originalClass(generator);
         return switch (originalClass) {
-            case CgmesNames.SYNCHRONOUS_MACHINE -> success(synchronousMachineUpdates(generator));
-            case CgmesNames.EXTERNAL_NETWORK_INJECTION -> success(externalNetworkInjectionUpdates(generator));
+            case CgmesNames.SYNCHRONOUS_MACHINE -> success(collect(out -> describeSynchronousMachine(generator, out)));
+            case CgmesNames.EXTERNAL_NETWORK_INJECTION -> success(collect(out -> describeExternalNetworkInjection(generator, out)));
             case CgmesNames.EQUIVALENT_INJECTION -> equivalentInjectionUpdates(generator);
             default -> failure("generator " + generator.getId() + " is exported as a " + originalClass
                     + ", which has no steady state setpoints");
         };
     }
 
-    private CgmesPropertyBuffer synchronousMachineUpdates(Generator generator) {
-        // Sign convention: CGMES uses the load convention for machines, IIDM the generator convention.
+    /** Describe the SynchronousMachine of a generator. */
+    void describeSynchronousMachine(Generator generator, CgmesPropertySink out) {
         double targetP = state.getDouble(generator, TARGET_P, generator::getTargetP);
-        return newUpdates(CgmesNames.SYNCHRONOUS_MACHINE, cgmesId(generator))
-                .value(REGULATING_COND_EQ_CONTROL_ENABLED, generatorControlEnabled(generator))
-                .value(ROTATING_MACHINE_P, -targetP)
-                .value(ROTATING_MACHINE_Q, -RegulationRef.of(generator).localTargetQ(state))
-                .value("SynchronousMachine.referencePriority", referencePriority(generator))
-                .enumValue("SynchronousMachine.operatingMode", "SynchronousMachineOperatingMode",
-                        SteadyStateHypothesisExport.obtainOperatingMode(generator, generator.getMinP(), generator.getMaxP(), targetP, state))
-                .updates();
+        synchronousMachineBlock(out, cgmesId(generator), generatorControlEnabled(generator), loadConventionP(generator),
+                loadConventionQ(generator), referencePriority(generator),
+                SteadyStateHypothesisExport.obtainOperatingMode(generator, generator.getMinP(), generator.getMaxP(), targetP, state));
+    }
+
+    /** Describe the SynchronousMachine of a battery, which no change describes: read as the network stands. */
+    void describeBattery(Battery battery, CgmesPropertySink out) {
+        boolean controlEnabled = battery.getVoltageRegulation() != null && battery.getVoltageRegulation().isRegulating();
+        synchronousMachineBlock(out, cgmesId(battery), controlEnabled, -battery.getTargetP(), -battery.getRegulatingTargetQ(),
+                ReferencePriority.get(battery), SteadyStateHypothesisExport.obtainOperatingMode(battery, battery.getMinP(),
+                        battery.getMaxP(), battery.getTargetP(), state));
+    }
+
+    /** The block of a SynchronousMachine, which the CGMES update reads as a whole; powers in the load convention. */
+    private static void synchronousMachineBlock(CgmesPropertySink out, String id, boolean controlEnabled, double p,
+                                                double q, int referencePriority, String operatingMode) {
+        out.startObject(CgmesNames.SYNCHRONOUS_MACHINE, id)
+                .value(REGULATING_COND_EQ_CONTROL_ENABLED, controlEnabled)
+                .value(ROTATING_MACHINE_P, p)
+                .value(ROTATING_MACHINE_Q, q)
+                .value("SynchronousMachine.referencePriority", referencePriority)
+                .enumValue("SynchronousMachine.operatingMode", "SynchronousMachineOperatingMode", operatingMode)
+                .endObject();
+    }
+
+    /** The active power of a generator in the load convention CGMES uses for injections; IIDM uses the generator one. */
+    private double loadConventionP(Generator generator) {
+        return -state.getDouble(generator, TARGET_P, generator::getTargetP);
+    }
+
+    /** The reactive power of a generator in the load convention CGMES uses for injections. */
+    private double loadConventionQ(Generator generator) {
+        return -RegulationRef.of(generator).localTargetQ(state);
     }
 
     /**
@@ -829,14 +861,14 @@ class CgmesChangeTranslator {
                 () -> ReferencePriority.get(generator));
     }
 
-    private CgmesPropertyBuffer externalNetworkInjectionUpdates(Generator generator) {
-        // Sign convention: CGMES uses the load convention for injections, IIDM the generator convention.
-        return newUpdates(CgmesNames.EXTERNAL_NETWORK_INJECTION, cgmesId(generator))
+    /** Describe the ExternalNetworkInjection of a generator. */
+    void describeExternalNetworkInjection(Generator generator, CgmesPropertySink out) {
+        out.startObject(CgmesNames.EXTERNAL_NETWORK_INJECTION, cgmesId(generator))
                 .value(REGULATING_COND_EQ_CONTROL_ENABLED, generatorControlEnabled(generator))
-                .value("ExternalNetworkInjection.p", -state.getDouble(generator, TARGET_P, generator::getTargetP))
-                .value("ExternalNetworkInjection.q", -RegulationRef.of(generator).localTargetQ(state))
+                .value("ExternalNetworkInjection.p", loadConventionP(generator))
+                .value("ExternalNetworkInjection.q", loadConventionQ(generator))
                 .value("ExternalNetworkInjection.referencePriority", referencePriority(generator))
-                .updates();
+                .endObject();
     }
 
     /**
@@ -848,16 +880,20 @@ class CgmesChangeTranslator {
      * no regulation capability can never regulate on the receiving side whatever the file says.</p>
      */
     private Result<CgmesPropertyBuffer, String> equivalentInjectionUpdates(Generator generator) {
-        RegulationRef regulation = RegulationRef.of(generator);
-        boolean regulating = regulation.isRegulating(state);
-        if (regulating && scope.honours(Refusal.NO_REGULATION_CAPABILITY) && !hasRegulationCapability(generator)) {
+        if (RegulationRef.of(generator).isRegulating(state) && scope.honours(Refusal.NO_REGULATION_CAPABILITY)
+                && !hasRegulationCapability(generator)) {
             return failure(Refusal.NO_REGULATION_CAPABILITY.message("the EquivalentInjection has no regulation"
                     + " capability, the CGMES update keeps its regulation off."));
         }
+        return success(collect(out -> describeEquivalentInjection(generator, out)));
+    }
+
+    /** Describe the EquivalentInjection of a generator, see {@link #equivalentInjectionUpdates}. */
+    void describeEquivalentInjection(Generator generator, CgmesPropertySink out) {
+        RegulationRef regulation = RegulationRef.of(generator);
         // The regulation target of an EquivalentInjection is the local voltage target, as the full export writes it
-        return success(equivalentInjectionBlock(cgmesId(generator),
-                -state.getDouble(generator, TARGET_P, generator::getTargetP),
-                -regulation.localTargetQ(state), regulating, regulation.localTargetV(state)));
+        equivalentInjectionBlock(out, cgmesId(generator), loadConventionP(generator), loadConventionQ(generator),
+                regulation.isRegulating(state), regulation.localTargetV(state));
     }
 
     private static boolean hasRegulationCapability(Identifiable<?> identifiable) {
@@ -906,9 +942,14 @@ class CgmesChangeTranslator {
         if (generatingUnit == null) {
             return failure("generator " + generator.getId() + " is a condenser or has no participation factor");
         }
-        return success(newUpdates(generatingUnit.className, generatingUnit.id)
+        return success(collect(out -> describeGeneratingUnit(generatingUnit, out)));
+    }
+
+    /** Describe the participation factor of a GeneratingUnit. */
+    static void describeGeneratingUnit(SteadyStateHypothesisExport.GeneratingUnit generatingUnit, CgmesPropertySink out) {
+        out.startObject(generatingUnit.className, generatingUnit.id)
                 .value("GeneratingUnit.normalPF", generatingUnit.participationFactor)
-                .updates());
+                .endObject();
     }
 
     // Tap changers
@@ -1959,6 +2000,13 @@ class CgmesChangeTranslator {
     }
 
     // Helpers
+
+    /** What a describe function writes, collected in a buffer of its own: the description of a change. */
+    private static CgmesPropertyBuffer collect(Consumer<CgmesPropertySink> description) {
+        CgmesPropertyBuffer buffer = new CgmesPropertyBuffer();
+        description.accept(buffer);
+        return buffer;
+    }
 
     private String cgmesId(Identifiable<?> identifiable) {
         return context.getNamingStrategy().getCgmesId(identifiable);
