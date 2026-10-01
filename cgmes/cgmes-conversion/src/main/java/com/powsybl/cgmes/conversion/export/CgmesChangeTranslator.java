@@ -10,6 +10,7 @@ package com.powsybl.cgmes.conversion.export;
 import com.powsybl.cgmes.conversion.Conversion;
 import com.powsybl.cgmes.conversion.elements.OperationalLimitConversion;
 import com.powsybl.cgmes.conversion.export.PartialSshExport.UnsupportedChangeBehavior;
+import com.powsybl.cgmes.extensions.CgmesTapChanger;
 import com.powsybl.cgmes.extensions.CimCharacteristics;
 import com.powsybl.cgmes.model.CgmesNames;
 import com.powsybl.cgmes.model.CgmesSubset;
@@ -613,10 +614,15 @@ class CgmesChangeTranslator {
             // the CGMES import derives the state of the IIDM switch from the connection status of its terminals.
             return success(switchTerminalUpdates(sw));
         }
-        String className = originalClass != null ? originalClass : CgmesExportUtil.switchClassname(sw.getKind());
-        return success(newUpdates(className, cgmesId(sw))
+        return success(collect(out -> describeSwitch(sw, out)));
+    }
+
+    /** Describe the open state of a switch that is not a CGMES branch, see {@link #switchUpdates}. */
+    void describeSwitch(Switch sw, CgmesPropertySink out) {
+        String originalClass = sw.getProperty(PROPERTY_CGMES_ORIGINAL_CLASS);
+        out.startObject(originalClass != null ? originalClass : CgmesExportUtil.switchClassname(sw.getKind()), cgmesId(sw))
                 .value("Switch.open", state.getBoolean(sw, OPEN, sw::isOpen))
-                .updates());
+                .endObject();
     }
 
     /**
@@ -1042,7 +1048,7 @@ class CgmesChangeTranslator {
             C transformer, String aliasType, String defaultClassName,
             TapChangerRef ref, TapChangerAttribute attribute) {
         TapChanger<?, ?, ?, ?> tapChanger = ref.tapChanger();
-        CgmesPropertyBuffer tapChangerBlock = tapChangerBlock(transformer, aliasType, defaultClassName, ref);
+        CgmesPropertyBuffer tapChangerBlock = collect(out -> describeTapChanger(transformer, aliasType, defaultClassName, ref, out));
         if (TAP_POSITION.equals(attribute.suffix())) {
             return success(tapChangerBlock);
         }
@@ -1071,8 +1077,9 @@ class CgmesChangeTranslator {
                         + transformer.getId() + " has no CGMES tap changer control to carry this change.")));
     }
 
-    private <C extends Connectable<C>> CgmesPropertyBuffer tapChangerBlock(C transformer, String aliasType, String defaultClassName,
-                                                                         TapChangerRef ref) {
+    /** Describe the block of one tap changer: its step and its control flag. */
+    <C extends Connectable<C>> void describeTapChanger(C transformer, String aliasType, String defaultClassName,
+                                                       TapChangerRef ref, CgmesPropertySink out) {
         TapChanger<?, ?, ?, ?> tapChanger = ref.tapChanger();
         String className = defaultClassName;
         if (tapChanger instanceof PhaseTapChanger && !context.isExportEquipment()) {
@@ -1081,10 +1088,25 @@ class CgmesChangeTranslator {
         boolean controlEnabled = tapChanger instanceof RatioTapChanger
                 ? ref.regulation().isRegulating(state)
                 : ref.getBoolean(state, REGULATING_SUFFIX, tapChanger::isRegulating);
-        return newUpdates(className, cgmesIdFromAlias(transformer, aliasType))
+        tapChangerBlock(out, className, cgmesIdFromAlias(transformer, aliasType), controlEnabled,
+                ref.getInt(state, TAP_POSITION_SUFFIX, tapChanger::getTapPosition));
+    }
+
+    /**
+     * Describe the tap changer the import combined into the only one IIDM kept, with the step it recorded: an export
+     * of the steady state hypothesis without the equipment model still has to write it.
+     */
+    static void describeHiddenTapChanger(CgmesTapChanger hiddenTapChanger, String defaultClassName, CgmesPropertySink out) {
+        tapChangerBlock(out, Optional.ofNullable(hiddenTapChanger.getType()).orElse(defaultClassName), hiddenTapChanger.getId(),
+                false, hiddenTapChanger.getStep().orElseThrow(
+                        () -> new PowsyblException("Non null step expected for tap changer " + hiddenTapChanger.getId())));
+    }
+
+    private static void tapChangerBlock(CgmesPropertySink out, String className, String id, boolean controlEnabled, int step) {
+        out.startObject(className, id)
                 .value("TapChanger.controlEnabled", controlEnabled)
-                .value("TapChanger.step", ref.getInt(state, TAP_POSITION_SUFFIX, tapChanger::getTapPosition))
-                .updates();
+                .value("TapChanger.step", step)
+                .endObject();
     }
 
     // Shunt compensators
@@ -1927,10 +1949,15 @@ class CgmesChangeTranslator {
         if (refusal.isPresent()) {
             return failure(refusal.get());
         }
-        return success(newUpdates(shuntClassName(shunt), cgmesId(shunt))
+        return success(collect(out -> describeShunt(shunt, out)));
+    }
+
+    /** Describe the section count and the control flag of a shunt compensator that is not an EquivalentShunt. */
+    void describeShunt(ShuntCompensator shunt, CgmesPropertySink out) {
+        out.startObject(shuntClassName(shunt), cgmesId(shunt))
                 .value("ShuntCompensator.sections", state.getInt(shunt, SECTION_COUNT, shunt::getSectionCount))
                 .value(REGULATING_COND_EQ_CONTROL_ENABLED, RegulationRef.of(shunt).isRegulating(state))
-                .updates());
+                .endObject();
     }
 
     /**
@@ -1942,11 +1969,16 @@ class CgmesChangeTranslator {
         if (refusal.isPresent()) {
             return failure(refusal.get());
         }
+        return success(collect(out -> describeStaticVarCompensator(svc, out)));
+    }
+
+    /** Describe the control flag and the reactive power of a static var compensator. */
+    void describeStaticVarCompensator(StaticVarCompensator svc, CgmesPropertySink out) {
         RegulationRef regulation = RegulationRef.of(svc);
-        return success(newUpdates("StaticVarCompensator", cgmesId(svc))
+        out.startObject("StaticVarCompensator", cgmesId(svc))
                 .value(REGULATING_COND_EQ_CONTROL_ENABLED, regulation.isRegulating(state))
                 .value("StaticVarCompensator.q", regulation.localTargetQ(state))
-                .updates());
+                .endObject();
     }
 
     /** The EquivalentInjection at the boundary of a boundary line. */
@@ -1957,7 +1989,7 @@ class CgmesChangeTranslator {
     /** The block of one tap changer: its step and its control flag. */
     <C extends Connectable<C>> CgmesPropertyBuffer describeTapChanger(C transformer, String aliasType,
                                                                      String defaultClassName, TapChangerRef ref) {
-        return tapChangerBlock(transformer, aliasType, defaultClassName, ref);
+        return collect(out -> describeTapChanger(transformer, aliasType, defaultClassName, ref, out));
     }
 
     /**

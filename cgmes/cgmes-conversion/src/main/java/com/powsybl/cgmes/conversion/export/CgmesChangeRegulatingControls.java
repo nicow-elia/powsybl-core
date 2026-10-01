@@ -44,7 +44,6 @@ import static com.powsybl.cgmes.conversion.Conversion.PROPERTY_IS_EQUIVALENT_SHU
 import static com.powsybl.cgmes.conversion.Conversion.PROPERTY_MODE;
 import static com.powsybl.cgmes.conversion.Conversion.PROPERTY_REGULATING_CONTROL;
 import static com.powsybl.cgmes.conversion.elements.transformers.AbstractTransformerConversion.getCgmesTapChanger;
-import static com.powsybl.cgmes.conversion.export.CgmesPropertyBuffer.newUpdates;
 import static com.powsybl.commons.util.Result.failure;
 import static com.powsybl.commons.util.Result.success;
 
@@ -136,17 +135,23 @@ class CgmesChangeRegulatingControls {
                 .count() > 1;
     }
 
-    private CgmesPropertyBuffer write(RegulatingControlView view) {
-        CgmesPropertyBuffer.ObjectUpdate update =
-                newUpdates(SteadyStateHypothesisExport.regulatingControlClassname(view.type), view.id)
-                        .value("RegulatingControl.discrete", view.discrete)
-                        .value("RegulatingControl.enabled", view.controlEnabled);
+    private static CgmesPropertyBuffer write(RegulatingControlView view) {
+        CgmesPropertyBuffer buffer = new CgmesPropertyBuffer();
+        describeRegulatingControl(view, buffer);
+        return buffer;
+    }
+
+    /** Describe a RegulatingControl or TapChangerControl from the combined view of its users. */
+    static void describeRegulatingControl(RegulatingControlView view, CgmesPropertySink out) {
+        out.startObject(SteadyStateHypothesisExport.regulatingControlClassname(view.type), view.id)
+                .value("RegulatingControl.discrete", view.discrete)
+                .value("RegulatingControl.enabled", view.controlEnabled);
         if (CgmesExportUtil.targetDeadbandIsDefined(view.targetDeadband)) {
-            update.value("RegulatingControl.targetDeadband", view.targetDeadband);
+            out.value("RegulatingControl.targetDeadband", view.targetDeadband);
         }
-        return update.value("RegulatingControl.targetValue", view.targetValue)
+        out.value("RegulatingControl.targetValue", view.targetValue)
                 .enumValue("RegulatingControl.targetValueUnitMultiplier", "UnitMultiplier", view.targetValueUnitMultiplier)
-                .updates();
+                .endObject();
     }
 
     // The index
