@@ -72,6 +72,8 @@ public final class RecordedChangeScenarios {
     private static final String OPERATIONAL_LIMITS_DIR = "/issues/operational-limits/";
 
     private static final String[] SWITCH_FILES = {"switch_EQ.xml", "switch_SSH.xml"};
+    private static final String CONTROL_AREA_DIR = "/update/control-area/";
+    private static final String[] CONTROL_AREA_FILES = {"controlArea_EQ.xml", "controlArea_EQ_BD.xml", "controlArea_SSH.xml"};
     private static final String[] LOAD_FILES = {"load_EQ.xml", "load_SSH.xml"};
     private static final String[] GENERATOR_FILES = {"generator_EQ.xml", "generator_SSH.xml"};
     private static final String[] TRANSFORMER_FILES = {"transformer_EQ.xml", "transformer_SSH.xml"};
@@ -412,6 +414,11 @@ public final class RecordedChangeScenarios {
         scenarios.add(scenario("dcSwitchClosing", detailedDcModel(), DC_DIR, DC_FILES, NOTHING,
                 n -> n.getDcSwitch("DCSW_1_1").setOpen(false),
                 n -> n.getDcSwitch("DCSW_1_1").setOpen(true)));
+
+        // Control areas
+        scenarios.add(scenario("controlAreaInterchangeTarget", CONTROL_AREA_DIR, CONTROL_AREA_FILES,
+                n -> n.getArea("ControlArea").setInterchangeTarget(250.0),
+                n -> n.getArea("ControlArea").setInterchangeTarget(235.0)));
 
         // Loads
         scenarios.add(scenario("loadActivePower", LOAD_DIR, LOAD_FILES,

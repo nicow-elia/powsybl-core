@@ -189,6 +189,22 @@ after dcSwitchClosing	Terminal	T_BR_2_1_1	02f88ad78a65
 after dcSwitchClosing	Terminal	T_BR_2_1_2	02f88ad78a65
 after dcSwitchClosing	Terminal	T_BR_2_2_1	02f88ad78a65
 after dcSwitchClosing	Terminal	T_BR_2_2_2	02f88ad78a65
+/update/control-area/controlArea_EQ.xml,controlArea_EQ_BD.xml,controlArea_SSH.xml	FullModel	header	64f3a11ef695
+/update/control-area/controlArea_EQ.xml,controlArea_EQ_BD.xml,controlArea_SSH.xml	EquivalentInjection	ACLineSegment-1-EquivalentInjection	3c7be0767a76
+/update/control-area/controlArea_EQ.xml,controlArea_EQ_BD.xml,controlArea_SSH.xml	Terminal	ACLineSegment-2-T1	02f88ad78a65
+/update/control-area/controlArea_EQ.xml,controlArea_EQ_BD.xml,controlArea_SSH.xml	Terminal	ACLineSegment-2-T2	f3891d0b3374
+/update/control-area/controlArea_EQ.xml,controlArea_EQ_BD.xml,controlArea_SSH.xml	Terminal	ACLineSegment-1-T1	02f88ad78a65
+/update/control-area/controlArea_EQ.xml,controlArea_EQ_BD.xml,controlArea_SSH.xml	Terminal	ACLineSegment-1-EquivalentInjection-T	02f88ad78a65
+/update/control-area/controlArea_EQ.xml,controlArea_EQ_BD.xml,controlArea_SSH.xml	Terminal	ACLineSegment-1-T2	02f88ad78a65
+/update/control-area/controlArea_EQ.xml,controlArea_EQ_BD.xml,controlArea_SSH.xml	ControlArea	ControlArea	54427368b9b6
+after controlAreaInterchangeTarget	FullModel	header	64f3a11ef695
+after controlAreaInterchangeTarget	EquivalentInjection	ACLineSegment-1-EquivalentInjection	3c7be0767a76
+after controlAreaInterchangeTarget	Terminal	ACLineSegment-2-T1	02f88ad78a65
+after controlAreaInterchangeTarget	Terminal	ACLineSegment-2-T2	f3891d0b3374
+after controlAreaInterchangeTarget	Terminal	ACLineSegment-1-T1	02f88ad78a65
+after controlAreaInterchangeTarget	Terminal	ACLineSegment-1-EquivalentInjection-T	02f88ad78a65
+after controlAreaInterchangeTarget	Terminal	ACLineSegment-1-T2	02f88ad78a65
+after controlAreaInterchangeTarget	ControlArea	ControlArea	d11971254b5e
 /update/load/load_EQ.xml,load_SSH.xml	FullModel	header	49ab1c63ec80
 /update/load/load_EQ.xml,load_SSH.xml	EnergyConsumer	EnergyConsumer	4b33072255ba
 /update/load/load_EQ.xml,load_SSH.xml	EnergyConsumer	EnergyConsumerOnlyEQ	e69f730646d8
@@ -16672,6 +16688,8 @@ after switchOpening	ORDER		15e9c94cc3bc
 after branchModelledAsSwitchClosing	ORDER		15e9c94cc3bc
 /issues/hvdc/mixed_bipole_EQ.xml,mixed_bipole_SSH.xml {iidm.import.cgmes.use-detailed-dc-model=true}	ORDER		53b9096febf6
 after dcSwitchClosing	ORDER		53b9096febf6
+/update/control-area/controlArea_EQ.xml,controlArea_EQ_BD.xml,controlArea_SSH.xml	ORDER		0d7cfe84f47d
+after controlAreaInterchangeTarget	ORDER		0d7cfe84f47d
 /update/load/load_EQ.xml,load_SSH.xml	ORDER		a7f45b8679cb
 after loadActivePower	ORDER		a7f45b8679cb
 after loadSetpoints	ORDER		a7f45b8679cb

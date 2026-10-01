@@ -89,9 +89,7 @@ class MappingCompletenessTest {
             entry("fictitiousP0", "written by the full export as a fictitious NonConformLoad or EnergySource under a"
                     + " generated identifier, which a change cannot name"),
             entry("fictitiousQ0", "written by the full export as a fictitious NonConformLoad or EnergySource under a"
-                    + " generated identifier, which a change cannot name"),
-            entry("interchangeTarget", "ControlArea.netInterchange: not part of the change export yet (P1 lists it as"
-                    + " a behaviour change of its own)")));
+                    + " generated identifier, which a change cannot name")));
 
     /**
      * Calls whose attribute name is built at run time, by the code they appear in, and which mapping covers them.
@@ -195,7 +193,7 @@ class MappingCompletenessTest {
                         TapChangerAndShuntFamily.STATIC_VAR_COMPENSATOR_PROBES, SwitchAndTerminalFamily.PROBES,
                         HvdcFamily.LINE_PROBES, HvdcFamily.VSC_STATION_PROBES, HvdcFamily.LCC_STATION_PROBES,
                         HvdcFamily.CONVERTER_PROBES, List.copyOf(LimitFamily.LINE_KEYS), List.copyOf(LimitFamily.BOUNDARY_LINE_KEYS),
-                        LimitFamily.VOLTAGE_LEVEL_PROBES)
+                        LimitFamily.VOLTAGE_LEVEL_PROBES, List.copyOf(ControlAreaFamily.KEYS))
                 .flatMap(List::stream)
                 .map(key -> key.substring(key.indexOf(CgmesObjectDump.EXTENSION_SEPARATOR) + 1))
                 .forEach(read::add);

@@ -217,6 +217,7 @@ A partial file says what the network looks like now. When the previous state has
 | `LineCommutatedConverter`, `VoltageSourceConverter` (detailed DC model) | `targetP`, `targetVdc`, `controlMode`, `powerFactor`, and of a voltage source converter `localTargetQ`, `localTargetV`, `VoltageRegulation.TargetValue`, `.isRegulating`, `.RegulationMode` | `ACDCConverter.targetPpcc/targetUdc/p/q` plus `CsConverter.operatingMode/pPccControl` or `VsConverter.pPccControl/qPccControl/targetUpcc/targetQpcc` |
 | `Branch`, `ThreeWindingsTransformer` leg, `BoundaryLine`, **CGMES 3 only** | permanent and temporary limit values of its `OperationalLimitsGroup`s | `CurrentLimit.value`, `ActivePowerLimit.value`, `ApparentPowerLimit.value` of the stored mRID |
 | `VoltageLevel`, **CGMES 3 only** | `highVoltageLimit`, `lowVoltageLimit`, when the voltage level was built from `VoltageLimit` objects | `VoltageLimit.value` of every stored identifier |
+| `Area` of type `ControlAreaTypeKind.Interchange` | `interchangeTarget` | `ControlArea.netInterchange`, and `ControlArea.pTolerance` when the import kept one |
 
 The regulation target of an `EquivalentInjection` (of a boundary line or of a generator) is always written, a target that is not a number as `0`, as the full export writes it. A receiver therefore reads `0` where it used to keep the target it held before; its CGMES update turns the regulation off for a target that is not a usable voltage.
 

@@ -13,6 +13,7 @@ import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.PowsyblException;
 import com.powsybl.commons.util.Result;
 import com.powsybl.iidm.network.AcDcConverter;
+import com.powsybl.iidm.network.Area;
 import com.powsybl.iidm.network.BoundaryLine;
 import com.powsybl.iidm.network.DcSwitch;
 import com.powsybl.iidm.network.Generator;
@@ -407,6 +408,7 @@ class CgmesChangeTranslator {
             case AcDcConverter<?> converter when HvdcFamily.CONVERTER_KEYS.contains(attribute) -> hvdc.acDcConverterUpdates(converter, attribute);
             case VscConverterStation converter when HvdcFamily.CONTROL_KEYS.contains(attribute) || VR_TERMINAL.equals(attribute) ->
                 hvdc.vscStationUpdates(converter, attribute, event);
+            case Area area when ControlAreaFamily.KEYS.contains(attribute) -> controlAreas.controlAreaUpdates(area);
             case VoltageLevel voltageLevel when LimitFamily.VOLTAGE_LEVEL_KEYS.contains(attribute) ->
                 limits.voltageLimitUpdates(voltageLevel, attribute);
             case Line line when LimitFamily.LINE_KEYS.contains(attribute) -> limits.lineImpedanceUpdates(line, attribute);

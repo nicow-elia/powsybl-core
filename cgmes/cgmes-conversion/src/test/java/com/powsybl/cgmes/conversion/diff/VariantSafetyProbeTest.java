@@ -104,7 +104,9 @@ class VariantSafetyProbeTest {
             // the power factor of the station, which is a plain field
             "detailedLccPowerFactor", "detailedConverterControlMode",
             // An extension the update would have to create
-            "generatorReferencePriority");
+            "generatorReferencePriority",
+            // The block of a control area carries its tolerance, which the update writes as an IIDM property
+            "controlAreaInterchangeTarget");
 
     /**
      * Refusals the table makes on family grounds although <em>this</em> change happens not to leak.
@@ -121,7 +123,9 @@ class VariantSafetyProbeTest {
             "vscLocalReactiveTargetRectifier",
             // The same for a line commutated converter of the detailed model: only a difference that states the
             // power factor really writes the shared field, and the family is refused as a whole
-            "detailedConverterControlMode");
+            "detailedConverterControlMode",
+            // A change of the interchange target writes the whole ControlArea, its unchanged tolerance included
+            "controlAreaInterchangeTarget");
 
     static List<Scenario> scenarios() {
         return RecordedChangeScenarios.allChanges();

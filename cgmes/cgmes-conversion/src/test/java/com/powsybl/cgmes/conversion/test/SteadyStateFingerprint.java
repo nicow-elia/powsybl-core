@@ -83,6 +83,7 @@ public final class SteadyStateFingerprint {
         network.getLccConverterStations().forEach(station -> put(values, station, "powerFactor", station.getPowerFactor()));
         network.getVoltageSourceConverters().forEach(converter -> detailedVsc(values, converter));
         network.getLineCommutatedConverters().forEach(converter -> detailedLcc(values, converter));
+        network.getAreas().forEach(area -> put(values, area, "interchangeTarget", area.getInterchangeTarget().orElse(Double.NaN)));
         // The connection state of every terminal: it is what a difference carrying cim:ACDCTerminal.connected
         // changes, and what the fictitious switches of a node/breaker import stand for
         network.getConnectableStream().forEach(connectable -> terminals(values, connectable));
