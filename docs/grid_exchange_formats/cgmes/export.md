@@ -553,7 +553,7 @@ Everything the partial SSH export reports as unsupported is unsupported here too
 * **The creation of a `VoltageRegulation`.** IIDM reports neither the creation nor the removal of a `VoltageRegulation` (nor does a deprecated setter that creates one on demand report more than its own attribute), so the export cannot tell that a regulation did not exist before the change set: the reverse statements then describe the regulation the network holds now, with the recorded previous values of what changed. A difference that has to undo the creation of a regulation cannot be produced; create the regulation before the recording starts.
 * **A change is exported only if both directions succeed.** The reported reason is the first failure, the forward one when both fail.
 
-Creations and removals of equipment are out of scope of this release, in both directions, and so is the content of `dm:preconditions`. A difference model produced here is read back by the [difference model update](import.md#cgmes-import-difference-model), which applies it to a loaded network in place and can undo it again.
+Creations and removals of equipment are out of scope of this release, in both directions, and so is the content of `dm:preconditions`. A difference model produced here is read back by the {ref}`difference model update <cgmes-import-difference-model>`, which applies it to a loaded network in place and can undo it again.
 
 ## Topology kind
 

@@ -54,7 +54,7 @@ At the end, PowSyBl will contain the operational data for all 24 hours, with eac
 
 A difference model is an IEC 61970-552 `dm:DifferenceModel` document: it says what a CGMES model said *before* a
 change and what it says *after* it, as two lists of statements. PowSyBl writes such documents from a recorded change
-log (see [difference model export](export.md#cgmes-difference-model-export)) and reads them back here. Difference
+log (see {ref}`difference model export <cgmes-difference-model-export>`) and reads them back here. Difference
 models can also come from an [RDF database](rdf_database.md#difference-models-in-the-database) &mdash; where a
 state is addressed by `(scenario, timestep, version)`, see
 [versioning](rdf_database.md#versioning-snapshots-versions-and-timesteps) and
@@ -211,7 +211,7 @@ as not verifiable and never fails the check.
 - **Transformer impedances are cut.** CGMES holds them per `PowerTransformerEnd` plus the tap step corrections, and
   the import folds both ends into one IIDM value depending on import options the network does not remember, so
   neither direction can be produced faithfully. See the
-  [export limitations](export.md#cgmes-difference-model-export) for the full reasoning.
+  {ref}`export limitations <cgmes-difference-model-export>` for the full reasoning.
 - **A `TieLine` has no impedance of its own**; its two `BoundaryLine`s do, and those are supported.
 - **Adding, removing or renaming a limit, and selecting another operational limits group**, are structural changes
   CGMES models with objects, so they are refused.
