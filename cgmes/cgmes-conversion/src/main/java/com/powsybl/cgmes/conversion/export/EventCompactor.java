@@ -40,7 +40,7 @@ import java.util.Set;
  *
  * <p>An <em>echo</em> is the event a deprecated voltage regulation setter reports under the historical attribute
  * name after writing through the {@code VoltageRegulation} API, which reports the same change under its own name
- * first ({@link LegacyRegulationKeys} says which events are echoes and which canonical values they repeat). The old
+ * first (the keys of {@link RegulatingControlFamily} say which events are echoes and which values they repeat). The old
  * value of an echo is not reliable: {@code ShuntCompensator.setTargetDeadband} reports {@code NaN} whatever the
  * deadband was, {@code StaticVarCompensator.setReactivePowerSetpoint} the voltage target, and
  * {@code Generator.setTargetV(v, local)} the local target as the old value of the remote one. One rule decides what
@@ -94,14 +94,14 @@ final class EventCompactor {
             }
             Identifiable<?> identifiable = event instanceof UpdateNetworkEvent update ? identifiableFor(update, network) : null;
             Set<String> repeated = event instanceof UpdateNetworkEvent update
-                    ? LegacyRegulationKeys.repeatedKeys(identifiable, update.attribute()) : Set.of();
+                    ? RegulatingControlFamily.repeatedKeys(identifiable, update.attribute()) : Set.of();
             if (!repeated.isEmpty()) {
                 keys[index] = echoKey((UpdateNetworkEvent) event, repeated, reported);
             } else {
                 keys[index] = keyOf(event);
                 if (keys[index] != null) {
                     if (event instanceof UpdateNetworkEvent update
-                            && LegacyRegulationKeys.isRepeatable(keys[index].attributeKey())) {
+                            && RegulatingControlFamily.isRepeatable(keys[index].attributeKey())) {
                         reported.computeIfAbsent(keys[index], key -> new HashSet<>()).add(update.newValue());
                     }
                     // Every recorded change of this variant feeds the previous values, including the ones a mapping
@@ -143,7 +143,7 @@ final class EventCompactor {
 
     /** The identifiable a change was reported on, looked up only when it decides whether the change is an echo. */
     private static Identifiable<?> identifiableFor(UpdateNetworkEvent update, Network network) {
-        return network != null && LegacyRegulationKeys.needsIdentifiable(update.attribute())
+        return network != null && RegulatingControlFamily.needsIdentifiable(update.attribute())
                 ? network.getIdentifiable(update.id()) : null;
     }
 
@@ -223,7 +223,7 @@ final class EventCompactor {
      * which is also what makes the mapping able to tell the two apart and refuse the selection change.</p>
      *
      * <p>An echo of a deprecated voltage regulation setter never gets here: the compaction and the translator
-     * recognise it first ({@link LegacyRegulationKeys}).</p>
+     * recognise it first ({@link RegulatingControlFamily#HOLDER_KEYS}).</p>
      *
      * @param event a change of an attribute, that is an {@link UpdateNetworkEvent}
      * @return the key

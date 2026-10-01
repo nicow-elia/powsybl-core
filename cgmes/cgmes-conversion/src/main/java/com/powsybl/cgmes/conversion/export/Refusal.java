@@ -17,7 +17,7 @@ import java.util.Optional;
  * <p>Every refusal names its cause and a remedy: its message is the cause, followed by {@value #REMEDY} and the remedy
  * sentence of its constant, which is unique, so that the constant can be told back from the message ({@link #of}).
  * The detection stays where the condition is known, in {@link CgmesChangeTranslator} and
- * {@link CgmesChangeRegulatingControls}; this type only names the refusal and says which receivers honour it.</p>
+ * {@link RegulatingControlFamily}; this type only names the refusal and says which receivers honour it.</p>
  *
  * <p>A refusal is {@link #changesOnly} when it protects a receiver that already holds a state and applies a change
  * on top of it (a partial SSH, a difference model). A full steady state hypothesis states the whole state and does

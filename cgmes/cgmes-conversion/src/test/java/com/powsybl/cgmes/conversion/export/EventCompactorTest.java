@@ -221,7 +221,7 @@ class EventCompactorTest {
         assertEquals(PartialSshExport.compactEvents(events), EventCompactor.compact(events, null, null).events());
     }
 
-    // The echoes of the deprecated voltage regulation setters (powsybl-core #3699), see LegacyRegulationKeys
+    // The echoes of the deprecated voltage regulation setters (powsybl-core #3699), see the keys of RegulatingControlFamily
 
     /**
      * Rule 1: an echo repeating its canonical event is dropped, whatever lies between them; the old value kept is the

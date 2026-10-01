@@ -66,14 +66,14 @@ final class DifferenceModelBuilder {
 
     /** The difference models of the change log, and the changes that reached them. */
     CgmesDiffExport.Result build() {
-        CgmesChangeRegulatingControls regulatingControls = new CgmesChangeRegulatingControls(network, context);
+        RegulatingControlFamily regulatingControls = new RegulatingControlFamily(network, context);
         // The regulating control index is structure only, so both directions share the single walk over the network
         CgmesChangeTranslator.Translation translation = CgmesChangeTranslator.translateAll(changes.events(),
                 translator(IidmStateView.LIVE, regulatingControls), translator(previousState, regulatingControls));
         return buildFrom(translation.after(), translation.before(), translation.exportedEvents());
     }
 
-    private CgmesChangeTranslator translator(IidmStateView state, CgmesChangeRegulatingControls regulatingControls) {
+    private CgmesChangeTranslator translator(IidmStateView state, RegulatingControlFamily regulatingControls) {
         return new CgmesChangeTranslator(network, context, options.getUnsupportedChangeBehavior(),
                 CgmesDiffExport.DIFFERENCE_MODEL_TARGET, options.getSubsets(), state, regulatingControls)
                 .setRejectSharedChanges(options.isRejectSharedChanges());

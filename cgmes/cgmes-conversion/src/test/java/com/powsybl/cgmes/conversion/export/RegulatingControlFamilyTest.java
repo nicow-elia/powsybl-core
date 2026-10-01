@@ -24,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
-class CgmesChangeRegulatingControlsTest {
+class RegulatingControlFamilyTest {
 
     /**
      * A VoltageRegulation created while another variant is the working one has no mode in the working variant. A
@@ -44,7 +44,7 @@ class CgmesChangeRegulatingControlsTest {
         variants.setWorkingVariant(VariantManagerConstants.INITIAL_VARIANT_ID);
         assertNull(ratioTapChanger.getVoltageRegulation().getMode());
 
-        CgmesChangeRegulatingControls controls = new CgmesChangeRegulatingControls(network, new CgmesExportContext(network));
+        RegulatingControlFamily controls = new RegulatingControlFamily(network, new CgmesExportContext(network));
         String controlId = controls.controlId(transformer, CgmesExportUtil.getRatioTapChangerAliasType("2")).orElseThrow();
         Result<CgmesPropertyBuffer, String> result = controls.updatesFor(controlId, IidmStateView.LIVE);
 

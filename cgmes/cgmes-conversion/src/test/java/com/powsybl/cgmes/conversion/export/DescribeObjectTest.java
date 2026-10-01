@@ -61,7 +61,7 @@ class DescribeObjectTest {
         Network network = fixture.loader().get();
         CgmesExportContext context = new CgmesExportContext(network);
         // The controls the translator reads too, so that a TapChangerControl is described from the same index
-        CgmesChangeRegulatingControls controls = new CgmesChangeRegulatingControls(network, context, Scope.CHANGES);
+        RegulatingControlFamily controls = new RegulatingControlFamily(network, context, Scope.CHANGES);
         CgmesChangeTranslator translator = new CgmesChangeTranslator(network, context,
                 PartialSshExport.UnsupportedChangeBehavior.IGNORE, "a description test",
                 EnumSet.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS), IidmStateView.LIVE, controls);
@@ -121,8 +121,8 @@ class DescribeObjectTest {
         CgmesChangeTranslator changes = new CgmesChangeTranslator(network, context,
                 PartialSshExport.UnsupportedChangeBehavior.IGNORE);
         CgmesChangeTranslator fullModel = CgmesChangeTranslator.forFullModel(network, context);
-        CgmesChangeRegulatingControls changeControls = new CgmesChangeRegulatingControls(network, context, Scope.CHANGES);
-        CgmesChangeRegulatingControls fullModelControls = new CgmesChangeRegulatingControls(network, context, Scope.FULL_MODEL);
+        RegulatingControlFamily changeControls = new RegulatingControlFamily(network, context, Scope.CHANGES);
+        RegulatingControlFamily fullModelControls = new RegulatingControlFamily(network, context, Scope.FULL_MODEL);
         Map<ExportMappingEquivalenceTest.Key, ExportMappingEquivalenceTest.Triple> fullExport =
                 ExportMappingEquivalenceTest.parse(ExportMappingEquivalenceTest.fullSsh(network), context.getCim().getNamespace());
         boolean refusedAsChange = false;
@@ -180,7 +180,7 @@ class DescribeObjectTest {
      * @param controls the regulating controls of the scope of the translator, which describe a TapChangerControl
      */
     static List<Result<CgmesPropertyBuffer, String>> describe(CgmesChangeTranslator translator,
-                                                              CgmesChangeRegulatingControls controls, Identifiable<?> identifiable) {
+                                                              RegulatingControlFamily controls, Identifiable<?> identifiable) {
         List<Result<CgmesPropertyBuffer, String>> descriptions = new ArrayList<>();
         switch (identifiable) {
             case Load load -> descriptions.add(translator.loadUpdates(load));
@@ -191,13 +191,13 @@ class DescribeObjectTest {
                 }
                 if (!CgmesNames.EQUIVALENT_INJECTION.equals(generator.getProperty(Conversion.PROPERTY_CGMES_ORIGINAL_CLASS))
                         && generator.getVoltageRegulation() != null) {
-                    descriptions.add(translator.regulatingControlUpdates(generator));
+                    descriptions.add(controls.updatesOf(generator, IidmStateView.LIVE));
                 }
             }
             case ShuntCompensator shunt -> {
                 descriptions.add(translator.shuntCompensatorUpdates(shunt, CgmesChangeTranslator.SECTION_COUNT));
                 if (shunt.getVoltageRegulation() != null) {
-                    descriptions.add(translator.regulatingControlUpdates(shunt));
+                    descriptions.add(controls.updatesOf(shunt, IidmStateView.LIVE));
                 }
             }
             // The block and the control of a static var compensator, which the update reads as one group
@@ -239,7 +239,7 @@ class DescribeObjectTest {
 
     /** A tap changer: its block and, when the import recorded one, its TapChangerControl. */
     private static <C extends Connectable<C>> void describeTapChanger(CgmesChangeTranslator translator,
-                                                                      CgmesChangeRegulatingControls controls, C transformer,
+                                                                      RegulatingControlFamily controls, C transformer,
                                                                       String aliasType, String defaultClassName,
                                                                       String prefix, TapChanger<?, ?, ?, ?> tapChanger,
                                                                       List<Result<CgmesPropertyBuffer, String>> descriptions) {

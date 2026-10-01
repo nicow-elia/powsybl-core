@@ -88,8 +88,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
  *
  * <p>Since the voltage regulation refactoring of IIDM (powsybl-core #3699) a regulation reports its changes under
  * {@code VoltageRegulation.*} and {@code localTarget*}, and the deprecated setters report the same change once more
- * under their historical name: the canonical event first, then the echo that {@link LegacyRegulationKeys} maps or
- * drops. Both are pinned here, in that order.</p>
+ * under their historical name: the canonical event first, then the echo that the keys of
+ * {@link RegulatingControlFamily} map or drops. Both are pinned here, in that order.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */

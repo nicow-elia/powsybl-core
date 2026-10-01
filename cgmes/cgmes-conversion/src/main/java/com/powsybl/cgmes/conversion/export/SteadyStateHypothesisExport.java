@@ -8,6 +8,7 @@
 package com.powsybl.cgmes.conversion.export;
 
 import com.powsybl.cgmes.conversion.CgmesExport;
+import com.powsybl.cgmes.conversion.export.RegulatingControlFamily.RegulatingControlView;
 import com.powsybl.cgmes.extensions.CgmesTapChanger;
 import com.powsybl.cgmes.model.CgmesMetadataModel;
 import com.powsybl.cgmes.model.CgmesNames;
@@ -18,9 +19,6 @@ import com.powsybl.iidm.network.*;
 import com.powsybl.iidm.network.Identifiable;
 import com.powsybl.iidm.network.extensions.ActivePowerControl;
 import com.powsybl.iidm.network.regulation.RegulationMode;
-import com.powsybl.iidm.network.regulation.VoltageRegulationHolder;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import javax.xml.stream.XMLStreamException;
 import javax.xml.stream.XMLStreamWriter;
@@ -29,7 +27,6 @@ import java.util.*;
 import static com.powsybl.cgmes.conversion.Conversion.*;
 import static com.powsybl.cgmes.conversion.elements.transformers.AbstractTransformerConversion.getCgmesTapChanger;
 import static com.powsybl.cgmes.conversion.export.CgmesExportUtil.*;
-import static com.powsybl.cgmes.conversion.export.elements.RegulatingControlEq.*;
 import static com.powsybl.cgmes.conversion.naming.CgmesObjectReference.Part.*;
 import static com.powsybl.cgmes.conversion.naming.CgmesObjectReference.ref;
 import static com.powsybl.cgmes.conversion.naming.CgmesObjectReference.refTyped;
@@ -41,7 +38,6 @@ import static com.powsybl.cgmes.model.CgmesNamespace.RDF_NAMESPACE;
  */
 public final class SteadyStateHypothesisExport {
 
-    private static final Logger LOG = LoggerFactory.getLogger(SteadyStateHypothesisExport.class);
     private static final String ACDC_CONVERTER_DC_TERMINAL = "ACDCConverterDCTerminal";
     private static final String OPERATING_MODE_GENERATOR = "generator";
     private static final String OPERATING_MODE_MOTOR = "motor";
@@ -275,11 +271,11 @@ public final class SteadyStateHypothesisExport {
 
         mapping.describeTapChanger(twt, aliasType, defaultType, ref, out);
         if (tc instanceof RatioTapChanger) {
-            addRegulatingControlView(regulatingControlView(ref.regulation(), tapChangerControlId, context, IidmStateView.LIVE),
+            addRegulatingControlView(RegulatingControlFamily.regulatingControlView(ref.regulation(), tapChangerControlId, context, IidmStateView.LIVE),
                     regulatingControlViews);
         } else if (tc instanceof PhaseTapChanger ptc) {
             boolean recordedControl = getCgmesTapChanger(twt, cgmesTapChangerId).map(CgmesTapChanger::getControlId).isPresent();
-            addRegulatingControlView(phaseTapChangerView(ptc, tapChangerControlId, recordedControl, ref, context, IidmStateView.LIVE),
+            addRegulatingControlView(RegulatingControlFamily.phaseTapChangerView(ptc, tapChangerControlId, recordedControl, ref, context, IidmStateView.LIVE),
                     regulatingControlViews);
         }
 
@@ -397,185 +393,19 @@ public final class SteadyStateHypothesisExport {
         }
     }
 
-    /**
-     * The TapChangerControl description of a phase tap changer, read from the given state of the network, or
-     * {@code null} when it has no control.
-     *
-     * <p>Package private so that the change export describes a TapChangerControl exactly as the full export does.</p>
-     *
-     * @param ref the tap changer and the name a recorded change of it carries
-     */
-    static RegulatingControlView regulatingControlView(PhaseTapChanger ptc, String controlId, TapChangerRef ref,
-                                                       CgmesExportContext context, IidmStateView state) {
-        PhaseTapChanger.RegulationMode mode = ref.getEnum(state, CgmesChangeTranslator.REGULATION_MODE_SUFFIX,
-                PhaseTapChanger.RegulationMode.class, ptc::getRegulationMode);
-        if (!ptc.hasLoadTapChangingCapabilities() || mode == null) {
-            return null;
-        }
-        return switch (mode) {
-            // The import multiplies the target by the sign of the regulating terminal it recorded
-            // (AbstractTransformerConversion#updatePhaseTapChanger), so the export applies it as well, unless the
-            // equipment model is exported too
-            case PhaseTapChanger.RegulationMode.ACTIVE_POWER_CONTROL ->
-                new RegulatingControlView(controlId, RegulatingControlType.TAP_CHANGER_CONTROL, true,
-                    ref.getBoolean(state, CgmesChangeTranslator.REGULATING_SUFFIX, ptc::isRegulating),
-                    ref.getDouble(state, CgmesChangeTranslator.TARGET_DEADBAND_SUFFIX, ptc::getTargetDeadband),
-                    CgmesExportUtil.exportedTerminalSign(ref.transformer(), ref.end(), context)
-                            * ref.getDouble(state, CgmesChangeTranslator.REGULATION_VALUE_SUFFIX, ptc::getRegulationValue),
-                    "M");
-            case PhaseTapChanger.RegulationMode.CURRENT_LIMITER ->
-                new RegulatingControlView(controlId, RegulatingControlType.TAP_CHANGER_CONTROL,
-                    true, false, 0.0, 0.0, "M");
-        };
-    }
-
-    /**
-     * The TapChangerControl description of a phase tap changer, read from the given state, or {@code null} when it has
-     * none. A phase tap changer limiting current is described with the values it has (a current in Amperes, which
-     * carries no sign, multiplier none) when the steady state hypothesis is read against the equipment model its
-     * import recorded the control from; with an equipment model of its own the export writes the limit as a
-     * CurrentLimit of the regulated terminal and the control keeps upstream's zeros.
-     *
-     * <p>Package private so that the change export describes a TapChangerControl exactly as the full export does.</p>
-     *
-     * @param recordedControl whether the import recorded the TapChangerControl of this tap changer
-     */
-    static RegulatingControlView phaseTapChangerView(PhaseTapChanger ptc, String controlId, boolean recordedControl,
-                                                     TapChangerRef ref, CgmesExportContext context, IidmStateView state) {
-        PhaseTapChanger.RegulationMode mode = ref.getEnum(state, CgmesChangeTranslator.REGULATION_MODE_SUFFIX,
-                PhaseTapChanger.RegulationMode.class, ptc::getRegulationMode);
-        if (mode == PhaseTapChanger.RegulationMode.CURRENT_LIMITER && recordedControl && !context.isExportEquipment()) {
-            return new RegulatingControlView(controlId, RegulatingControlType.TAP_CHANGER_CONTROL, true,
-                    ref.getBoolean(state, CgmesChangeTranslator.REGULATING_SUFFIX, ptc::isRegulating),
-                    ref.getDouble(state, CgmesChangeTranslator.TARGET_DEADBAND_SUFFIX, ptc::getTargetDeadband),
-                    ref.getDouble(state, CgmesChangeTranslator.REGULATION_VALUE_SUFFIX, ptc::getRegulationValue),
-                    "none");
-        }
-        return regulatingControlView(ptc, controlId, ref, context, state);
-    }
-
     private static String getRegulatingControlId(Identifiable<?> identifiable, CgmesExportContext context) {
         return context.getNamingStrategy().getCgmesIdFromProperty(identifiable, PROPERTY_REGULATING_CONTROL);
     }
 
     private static void addRegulatingControlView(RegulationRef regulation, String regulatingControlId,
                                                  Map<String, List<RegulatingControlView>> regulatingControlViews, CgmesExportContext context) {
-        addRegulatingControlView(regulatingControlView(regulation, regulatingControlId, context, IidmStateView.LIVE),
+        addRegulatingControlView(RegulatingControlFamily.regulatingControlView(regulation, regulatingControlId, context, IidmStateView.LIVE),
                 regulatingControlViews);
-    }
-
-    /**
-     * The RegulatingControl description of a voltage regulation holder, read from the given state of the network, or
-     * {@code null} when the holder has no voltage regulation, or one without a mode in this variant.
-     *
-     * <p>Package private so that the change export describes a RegulatingControl exactly as the full export does,
-     * which is what the receiving side of a partial or difference file expects to read.</p>
-     *
-     * @param regulation the holder and the name a recorded change of its regulation carries
-     */
-    static RegulatingControlView regulatingControlView(RegulationRef regulation, String regulatingControlId,
-                                                       CgmesExportContext context, IidmStateView state) {
-        VoltageRegulationHolder<?> regulationHolder = regulation.holder();
-        // A regulation without a mode in this variant (created while another variant was the working one) cannot say
-        // what its control regulates: it describes no view, and the control is written from its other users, if any
-        if (regulation.regulation() != null && regulation.mode(state) != null) {
-            boolean enabled = regulation.isRegulating(state);
-
-            // Only discrete regulation holders can have a non-zero deadband
-            boolean discrete = false;
-            double targetDeadband = 0.0;
-            if (regulationHolder instanceof ShuntCompensator || regulationHolder instanceof RatioTapChanger) {
-                discrete = true;
-                targetDeadband = regulation.targetDeadband(state);
-            }
-
-            // VoltageRegulation Terminal can be left null to force the use of local target instead of the remote one,
-            // thus targets should be determined with VoltageRegulationHolder.getRegulatingTargetQ/V
-            double targetValue;
-            String targetValueUnitMultiplier;
-            String mode = getRegulatingControlMode(regulation.mode(state));
-            if (REGULATING_CONTROL_REACTIVE_POWER.equals(mode)) {
-                // Generator are in generator sign convention in IIDM and load sign convention in CGMES
-                targetValue = regulation.regulatingTargetQ(state);
-                if (regulationHolder instanceof Generator) {
-                    targetValue = -targetValue;
-                }
-                // The import multiplies the target by the sign of the regulating terminal it recorded
-                // (AbstractReactiveLimitsOwnerConversion#updateRegulatingControlReactivePower,
-                // StaticVarCompensatorConversion#updateRegulatingControl), so the export applies it as well, unless
-                // the equipment model is exported too
-                if (regulationHolder instanceof Generator || regulationHolder instanceof StaticVarCompensator
-                        || regulationHolder instanceof RatioTapChanger) {
-                    // AbstractTransformerConversion#updateRatioTapChanger reads the target of a ratio tap changer
-                    // with the sign of the end the tap changer sits on
-                    targetValue *= CgmesExportUtil.exportedTerminalSign(regulation.owner(), regulation.end(), context);
-                }
-                targetValueUnitMultiplier = "M";
-            } else if (REGULATING_CONTROL_VOLTAGE.equals(mode)) {
-                targetValue = regulation.regulatingTargetV(state);
-                if (regulationHolder instanceof Generator && context.isExportGeneratorsInLocalRegulationMode()) {
-                    targetValue = regulation.localTargetV(state);
-                }
-                targetValueUnitMultiplier = "k";
-            } else {
-                throw new IllegalStateException("Unexpected regulation mode: " + mode);
-            }
-
-            // RatioTapChanger VoltageRegulation is exported to a specialized class
-            RegulatingControlType regulatingControlType = RegulatingControlType.REGULATING_CONTROL;
-            if (regulationHolder instanceof RatioTapChanger) {
-                regulatingControlType = RegulatingControlType.TAP_CHANGER_CONTROL;
-            }
-
-            return new RegulatingControlView(regulatingControlId, regulatingControlType,
-                discrete, enabled, targetDeadband, targetValue, targetValueUnitMultiplier);
-        }
-        return null;
     }
 
     private static void writeRegulatingControls(Map<String, List<RegulatingControlView>> regulatingControlViews, CgmesPropertySink out) {
         for (List<RegulatingControlView> views : regulatingControlViews.values()) {
-            CgmesChangeRegulatingControls.describeRegulatingControl(combineRegulatingControlViews(views), out);
-        }
-    }
-
-    /**
-     * Combine the descriptions that every user of the same RegulatingControl produces into the single description
-     * the object gets.
-     *
-     * <p>Package private so that the change export combines shared controls exactly as the full export does.</p>
-     */
-    static RegulatingControlView combineRegulatingControlViews(List<RegulatingControlView> rcs) {
-        RegulatingControlView combined = rcs.get(0);
-        if (rcs.size() > 1 && LOG.isWarnEnabled()) {
-            LOG.warn("Multiple views ({}) for regulating control {} are combined", rcs.size(), rcs.get(0).id);
-        }
-        for (int k = 1; k < rcs.size(); k++) {
-            RegulatingControlView current = rcs.get(k);
-            if (combinedTargetDeadbandMustBeUpdated(current.targetDeadband, combined.targetDeadband)) {
-                combined.targetDeadband = current.targetDeadband;
-            }
-            if (!combined.discrete && current.discrete) {
-                combined.discrete = true;
-            }
-            if (!combined.controlEnabled && current.controlEnabled) {
-                combined.controlEnabled = true;
-            }
-        }
-        return combined;
-    }
-
-    private static boolean combinedTargetDeadbandMustBeUpdated(double currentTargetDeadband, double combinedTargetDeadband) {
-        return currentTargetDeadband == 0 && (Double.isNaN(combinedTargetDeadband) || combinedTargetDeadband < 0)
-                || currentTargetDeadband > 0 && (combinedTargetDeadband == 0 || currentTargetDeadband < combinedTargetDeadband);
-    }
-
-    /** Package private so that the change export names a RegulatingControl as the full export does. */
-    static String regulatingControlClassname(RegulatingControlType type) {
-        if (type == RegulatingControlType.TAP_CHANGER_CONTROL) {
-            return "TapChangerControl";
-        } else {
-            return "RegulatingControl";
+            RegulatingControlFamily.describe(views, out);
         }
     }
 
@@ -635,34 +465,6 @@ public final class SteadyStateHypothesisExport {
         } else if (converterStation instanceof VscConverterStation vscConverterStation) {
             mapping.describeVscConverterStation(vscConverterStation, out);
         }
-    }
-
-    /**
-     * The VsConverter.targetQpcc of a converter station of the simplified DC model: the reactive power target whenever
-     * {@link #vscQpccControl} writes {@code reactivePcc}, that is whenever the station does not regulate voltage, and
-     * zero otherwise.
-     *
-     * <p>A station in voltage mode that does not regulate (the deprecated {@code setVoltageRegulatorOn(false)} since
-     * powsybl-core #3699) is written {@code reactivePcc}, and the import then reads this value as its reactive power
-     * target: it is the local reactive power target the station holds, not zero (review 21 round 2, R2-M4).</p>
-     *
-     * <p>Package private so that the change export writes the same value as the full export.</p>
-     */
-    static double vscTargetQpcc(RegulationRef regulation, CgmesExportContext context, IidmStateView state) {
-        // To be consistent with the import, which reads the target as -terminalSign * targetQpcc
-        // (HvdcConverterConversion#getValidTargetQ)
-        return !regulation.isRegulatingWithMode(RegulationMode.VOLTAGE, state)
-                ? -CgmesExportUtil.exportedTerminalSign(regulation.owner(), "", context) * regulation.regulatingTargetQ(state) : 0;
-    }
-
-    /** The VsConverter.targetUpcc of a converter station: the voltage target when the station regulates voltage, zero otherwise. */
-    static double vscTargetUpcc(RegulationRef regulation, IidmStateView state) {
-        return regulation.isWithMode(RegulationMode.VOLTAGE, state) ? regulation.regulatingTargetV(state) : 0;
-    }
-
-    /** The VsConverter.qPccControl of a converter station of the simplified DC model. */
-    static String vscQpccControl(RegulationRef regulation, IidmStateView state) {
-        return regulation.isRegulatingWithMode(RegulationMode.VOLTAGE, state) ? "voltagePcc" : "reactivePcc";
     }
 
     /** The four quantities the CGMES import reads as a single block for any converter. */
@@ -918,11 +720,10 @@ public final class SteadyStateHypothesisExport {
         double p = converter.getPccTerminal().getP();
         if (converter instanceof VoltageSourceConverter vsc) {
             RegulationRef regulation = RegulationRef.of(vsc);
-            double targetQpcc = regulation.isWithMode(RegulationMode.REACTIVE_POWER, state) ? regulation.regulatingTargetQ(state) : 0;
-            double targetUpcc = regulation.isWithMode(RegulationMode.VOLTAGE, state) ? regulation.regulatingTargetV(state) : 0;
-            String qPccControl = regulation.isWithMode(RegulationMode.VOLTAGE, state) ? "voltagePcc" : "reactivePcc";
             return new AcDcConverterState(targetPpcc, targetUdc, p, regulation.localTargetQ(state),
-                    activePowerControl ? "pPcc" : "udc", qPccControl, targetQpcc, targetUpcc);
+                    activePowerControl ? "pPcc" : "udc", VsConverterControlFamily.qPccControl(regulation, true, state),
+                    VsConverterControlFamily.targetQpcc(regulation, true, null, state),
+                    VsConverterControlFamily.targetUpcc(regulation, state));
         }
         double q = converter.getPccTerminal().getQ();
         return new AcDcConverterState(targetPpcc, targetUdc, p, q, activePowerControl ? "activePower" : "dcVoltage",
@@ -968,34 +769,9 @@ public final class SteadyStateHypothesisExport {
         writer.writeEndElement();
     }
 
-    enum RegulatingControlType {
-        REGULATING_CONTROL, TAP_CHANGER_CONTROL
-    }
-
     static final class GeneratingUnit {
         String id;
         String className;
         double participationFactor;
-    }
-
-    static class RegulatingControlView {
-        String id;
-        RegulatingControlType type;
-        boolean discrete;
-        boolean controlEnabled;
-        double targetDeadband;
-        double targetValue;
-        String targetValueUnitMultiplier;
-
-        RegulatingControlView(String id, RegulatingControlType type, boolean discrete, boolean controlEnabled,
-                              double targetDeadband, double targetValue, String targetValueUnitMultiplier) {
-            this.id = id;
-            this.type = type;
-            this.discrete = discrete;
-            this.controlEnabled = controlEnabled;
-            this.targetDeadband = targetDeadband;
-            this.targetValue = targetValue;
-            this.targetValueUnitMultiplier = targetValueUnitMultiplier;
-        }
     }
 }

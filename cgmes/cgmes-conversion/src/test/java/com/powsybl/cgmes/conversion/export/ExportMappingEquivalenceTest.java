@@ -66,7 +66,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * database and the object dump exports have to say the same thing about every object both of them describe.
  *
  * <p>The two are separate implementations of one piece of knowledge: {@link SteadyStateHypothesisExport} writes the
- * state of the whole network, {@link CgmesChangeTranslator} (with {@link CgmesChangeRegulatingControls}) describes
+ * state of the whole network, {@link CgmesChangeTranslator} (with {@link RegulatingControlFamily}) describes
  * the objects a change touches. They share their helpers but write the property by property mapping twice. This test
  * asserts that the two copies agree, fixture by fixture:</p>
  * <ol>
