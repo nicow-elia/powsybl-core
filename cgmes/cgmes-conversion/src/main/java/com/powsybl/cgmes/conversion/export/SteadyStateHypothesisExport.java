@@ -80,7 +80,7 @@ public final class SteadyStateHypothesisExport {
             writeStaticVarCompensators(network, mapping, regulatingControlViews, out, context);
             writeRegulatingControls(regulatingControlViews, out);
             writeGeneratingUnitsParticitationFactors(network, out, context);
-            writeConverters(network, cimNamespace, writer, context);
+            writeConverters(network, mapping, out, cimNamespace, writer, context);
             writeDCTerminals(network, cimNamespace, writer, context);
             // FIXME open status of retained switches in bus-branch models
             writeSwitches(network, mapping, out, context);
@@ -623,19 +623,21 @@ public final class SteadyStateHypothesisExport {
         }
     }
 
-    private static void writeConverters(Network network, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
+    private static void writeConverters(Network network, CgmesChangeTranslator mapping, CgmesPropertySink out, String cimNamespace,
+                                        XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
         for (HvdcConverterStation<?> converterStation : network.getHvdcConverterStations()) {
-            writeConverterStation(converterStation, cimNamespace, writer, context);
+            writeConverterStation(converterStation, mapping, out, cimNamespace, writer, context);
         }
         for (LineCommutatedConverter lccConverter : network.getLineCommutatedConverters()) {
             writeAcDcConverter(lccConverter, cimNamespace, writer, context);
         }
         for (VoltageSourceConverter vscConverter : network.getVoltageSourceConverters()) {
-            writeAcDcConverter(vscConverter, cimNamespace, writer, context);
+            mapping.describeVoltageSourceConverter(vscConverter, out);
         }
     }
 
-    private static void writeConverterStation(HvdcConverterStation<?> converterStation, String cimNamespace,
+    private static void writeConverterStation(HvdcConverterStation<?> converterStation, CgmesChangeTranslator mapping,
+                                              CgmesPropertySink out, String cimNamespace,
                                               XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
         String converterId = context.getNamingStrategy().getCgmesId(converterStation);
         ConverterState state = computeConverterState(converterStation, IidmStateView.LIVE);
@@ -644,12 +646,7 @@ public final class SteadyStateHypothesisExport {
             String pPccControl = CgmesExportUtil.isConverterStationRectifier(converterStation) ? "activePower" : "dcVoltage";
             writeCsConverter(converterId, state.targetPpcc(), state.targetUdc(), state.p(), state.q(), operatingMode, pPccControl, cimNamespace, writer, context);
         } else if (converterStation instanceof VscConverterStation vscConverterStation) {
-            RegulationRef regulation = RegulationRef.of(vscConverterStation);
-            double targetQpcc = vscTargetQpcc(regulation, context, IidmStateView.LIVE);
-            double targetUpcc = vscTargetUpcc(regulation, IidmStateView.LIVE);
-            String pPccControl = CgmesExportUtil.isConverterStationRectifier(converterStation) ? "pPcc" : "udc";
-            String qPccControl = vscQpccControl(regulation, IidmStateView.LIVE);
-            writeVsConverter(converterId, state.targetPpcc(), state.targetUdc(), targetQpcc, targetUpcc, state.p(), state.q(), pPccControl, qPccControl, cimNamespace, writer, context);
+            mapping.describeVscConverterStation(vscConverterStation, true, true, out);
         }
     }
 
@@ -897,9 +894,6 @@ public final class SteadyStateHypothesisExport {
         if (converter instanceof LineCommutatedConverter) {
             writeCsConverter(converterId, state.targetPpcc(), state.targetUdc(), state.p(), state.q(),
                     state.operatingModeOrQpccControl(), state.pPccControl(), cimNamespace, writer, context);
-        } else if (converter instanceof VoltageSourceConverter) {
-            writeVsConverter(converterId, state.targetPpcc(), state.targetUdc(), state.targetQpcc(), state.targetUpcc(),
-                    state.p(), state.q(), state.pPccControl(), state.operatingModeOrQpccControl(), cimNamespace, writer, context);
         }
     }
 
@@ -948,6 +942,8 @@ public final class SteadyStateHypothesisExport {
                 targetPpcc > 0.0 ? "rectifier" : "inverter", Double.NaN, Double.NaN);
     }
 
+    // A CsConverter keeps this writer until B4 (owner decision O2b) decides how the powers of a detailed line commutated
+    // converter are written; every other converter is described by the change mapping
     private static void writeCsConverter(String converterId, double targetPpcc, double targetUdc,
                                          double p, double q, String operatingMode, String pPccControl,
                                          String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
@@ -966,33 +962,6 @@ public final class SteadyStateHypothesisExport {
         writer.writeAttribute(RDF_NAMESPACE, CgmesNames.RESOURCE, cimNamespace + "CsOperatingModeKind." + operatingMode);
         writer.writeEmptyElement(cimNamespace, "CsConverter.pPccControl");
         writer.writeAttribute(RDF_NAMESPACE, CgmesNames.RESOURCE, cimNamespace + "CsPpccControlKind." + pPccControl);
-        writer.writeEndElement();
-    }
-
-    private static void writeVsConverter(String converterId, double targetPpcc, double targetUdc, double targetQpcc, double targetUpcc,
-                                         double p, double q, String pPccControl, String qPccControl,
-                                         String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
-        CgmesExportUtil.writeStartAbout(CgmesNames.VS_CONVERTER, converterId, cimNamespace, writer, context);
-        writeCommonAcDcConverter(targetPpcc, targetUdc, p, q, cimNamespace, writer);
-        writer.writeStartElement(cimNamespace, "VsConverter.droop");
-        writer.writeCharacters(CgmesExportUtil.format(0.0));
-        writer.writeEndElement();
-        writer.writeStartElement(cimNamespace, "VsConverter.droopCompensation");
-        writer.writeCharacters(CgmesExportUtil.format(0.0));
-        writer.writeEndElement();
-        writer.writeStartElement(cimNamespace, "VsConverter.qShare");
-        writer.writeCharacters(CgmesExportUtil.format(0.0));
-        writer.writeEndElement();
-        writer.writeStartElement(cimNamespace, "VsConverter.targetQpcc");
-        writer.writeCharacters(CgmesExportUtil.format(targetQpcc));
-        writer.writeEndElement();
-        writer.writeStartElement(cimNamespace, "VsConverter.targetUpcc");
-        writer.writeCharacters(CgmesExportUtil.format(targetUpcc));
-        writer.writeEndElement();
-        writer.writeEmptyElement(cimNamespace, "VsConverter.pPccControl");
-        writer.writeAttribute(RDF_NAMESPACE, CgmesNames.RESOURCE, cimNamespace + "VsPpccControlKind." + pPccControl);
-        writer.writeEmptyElement(cimNamespace, "VsConverter.qPccControl");
-        writer.writeAttribute(RDF_NAMESPACE, CgmesNames.RESOURCE, cimNamespace + "VsQpccControlKind." + qPccControl);
         writer.writeEndElement();
     }
 

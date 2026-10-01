@@ -31,8 +31,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The change mapping describes an object without an event ({@code CgmesChangeTranslator.describe*}), and that
- * description is the one the event path writes.
+ * The change mapping describes an object without an event (the change of each object family,
+ * {@code CgmesChangeTranslator.*Updates}, which asks the object refusals and then the one describe function of the
+ * family), and that description is the one the event path writes.
  *
  * <p>In {@link Scope#CHANGES}, for every object of every fixture of {@link ExportMappingEquivalenceTest}: every
  * statement the event path writes for a probe of the object (the probes of the guard, one per attribute the translator
@@ -40,7 +41,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * object the description refuses (a holder the import would give a regulation to, a generator in another mode than
  * the CGMES mode its import recorded) is refused by every path of the event mapping too, the extension probes
  * included. The description may say more than the event path where the event path writes a block only together with a
- * control it refuses (a static var compensator, whose block and control the update reads as one group).</p>
+ * control it refuses.</p>
  *
  * <p>In {@link Scope#FULL_MODEL}, objects a change export refuses but a full export writes are described, and their
  * description equals what the full export writes: a generator without a recorded control (the battery network), a
@@ -62,10 +63,11 @@ class DescribeObjectTest {
         CgmesChangeTranslator translator = new CgmesChangeTranslator(network, context,
                 PartialSshExport.UnsupportedChangeBehavior.IGNORE, "a description test",
                 EnumSet.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS), IidmStateView.LIVE, null);
+        CgmesChangeRegulatingControls controls = new CgmesChangeRegulatingControls(network, context, Scope.CHANGES);
         String variantId = network.getVariantManager().getWorkingVariantId();
         List<String> problems = new ArrayList<>();
         for (Identifiable<?> identifiable : network.getIdentifiables()) {
-            List<Result<CgmesPropertyBuffer, String>> descriptions = describe(translator, identifiable);
+            List<Result<CgmesPropertyBuffer, String>> descriptions = describe(translator, controls, identifiable);
             if (descriptions.isEmpty()) {
                 continue;
             }
@@ -118,15 +120,17 @@ class DescribeObjectTest {
         CgmesChangeTranslator changes = new CgmesChangeTranslator(network, context,
                 PartialSshExport.UnsupportedChangeBehavior.IGNORE);
         CgmesChangeTranslator fullModel = CgmesChangeTranslator.forFullModel(network, context);
+        CgmesChangeRegulatingControls changeControls = new CgmesChangeRegulatingControls(network, context, Scope.CHANGES);
+        CgmesChangeRegulatingControls fullModelControls = new CgmesChangeRegulatingControls(network, context, Scope.FULL_MODEL);
         Map<ExportMappingEquivalenceTest.Key, ExportMappingEquivalenceTest.Triple> fullExport =
                 ExportMappingEquivalenceTest.parse(ExportMappingEquivalenceTest.fullSsh(network), context.getCim().getNamespace());
         boolean refusedAsChange = false;
         for (String id : ids) {
             Identifiable<?> identifiable = network.getIdentifiable(id);
-            List<Result<CgmesPropertyBuffer, String>> descriptions = describe(fullModel, identifiable);
+            List<Result<CgmesPropertyBuffer, String>> descriptions = describe(fullModel, fullModelControls, identifiable);
             assertTrue(!descriptions.isEmpty() && descriptions.stream().allMatch(Result.Success.class::isInstance),
                     () -> id + " is not described by a full model: " + descriptions);
-            refusedAsChange |= describe(changes, identifiable).stream().anyMatch(Result.Failure.class::isInstance);
+            refusedAsChange |= describe(changes, changeControls, identifiable).stream().anyMatch(Result.Failure.class::isInstance);
             Map<CgmesStatement.Key, Value> described = statements(descriptions, context);
             assertTrue(!described.isEmpty(), id);
             described.forEach((key, value) -> {
@@ -169,60 +173,61 @@ class DescribeObjectTest {
                         probe.substring(separator + 1), variantId, null, null);
     }
 
-    /** The descriptions of one object, as the describe entries give them; none for an object they do not cover. */
-    static List<Result<CgmesPropertyBuffer, String>> describe(CgmesChangeTranslator translator, Identifiable<?> identifiable) {
+    /**
+     * The descriptions of one object, as the change of each family gives them; none for an object they do not cover.
+     *
+     * @param controls the regulating controls of the scope of the translator, which describe a TapChangerControl
+     */
+    static List<Result<CgmesPropertyBuffer, String>> describe(CgmesChangeTranslator translator,
+                                                              CgmesChangeRegulatingControls controls, Identifiable<?> identifiable) {
         List<Result<CgmesPropertyBuffer, String>> descriptions = new ArrayList<>();
         switch (identifiable) {
-            case Load load -> descriptions.add(translator.describeLoad(load));
+            case Load load -> descriptions.add(translator.loadUpdates(load));
             case Generator generator -> {
-                descriptions.add(translator.describeGenerator(generator));
+                descriptions.add(translator.generatorMachineUpdates(generator));
                 if (generator.hasProperty(Conversion.PROPERTY_GENERATING_UNIT)) {
-                    descriptions.add(translator.describeGeneratingUnit(generator));
+                    descriptions.add(translator.participationFactorUpdates(generator, null));
                 }
                 if (!CgmesNames.EQUIVALENT_INJECTION.equals(generator.getProperty(Conversion.PROPERTY_CGMES_ORIGINAL_CLASS))
                         && generator.getVoltageRegulation() != null) {
-                    descriptions.add(translator.describedControlId(generator).flatMap(translator::describeRegulatingControl));
+                    descriptions.add(translator.regulatingControlUpdates(generator));
                 }
             }
             case ShuntCompensator shunt -> {
-                descriptions.add(translator.describeShunt(shunt));
+                descriptions.add(translator.shuntCompensatorUpdates(shunt, CgmesChangeTranslator.SECTION_COUNT));
                 if (shunt.getVoltageRegulation() != null) {
-                    descriptions.add(translator.describedControlId(shunt).flatMap(translator::describeRegulatingControl));
+                    descriptions.add(translator.regulatingControlUpdates(shunt));
                 }
             }
-            case StaticVarCompensator svc -> {
-                descriptions.add(translator.describeStaticVarCompensator(svc));
-                if (svc.getVoltageRegulation() != null) {
-                    descriptions.add(translator.describedControlId(svc).flatMap(translator::describeRegulatingControl));
-                }
-            }
-            case BoundaryLine boundaryLine -> descriptions.add(translator.describeBoundaryInjection(boundaryLine));
-            case Switch sw -> descriptions.add(translator.describeSwitch(sw));
+            // The block and the control of a static var compensator, which the update reads as one group
+            case StaticVarCompensator svc -> descriptions.add(translator.staticVarCompensatorUpdates(svc));
+            case BoundaryLine boundaryLine -> descriptions.add(translator.boundaryLineUpdates(boundaryLine));
+            case Switch sw -> descriptions.add(translator.switchUpdates(sw));
             case HvdcLine line -> {
-                descriptions.add(translator.describeConverterStation(line.getConverterStation1()));
-                descriptions.add(translator.describeConverterStation(line.getConverterStation2()));
+                descriptions.add(translator.converterStationUpdates(line.getConverterStation1()));
+                descriptions.add(translator.converterStationUpdates(line.getConverterStation2()));
             }
             case HvdcConverterStation<?> station -> {
-                descriptions.add(translator.describeConverterStation(station));
-                station.getOtherConverterStation().ifPresent(other -> descriptions.add(translator.describeConverterStation(other)));
+                descriptions.add(translator.converterStationUpdates(station));
+                station.getOtherConverterStation().ifPresent(other -> descriptions.add(translator.converterStationUpdates(other)));
             }
-            case AcDcConverter<?> converter -> descriptions.add(translator.describeAcDcConverter(converter));
+            case AcDcConverter<?> converter -> descriptions.add(translator.acDcConverterUpdates(converter, null));
             case TwoWindingsTransformer transformer -> {
-                transformer.getOptionalPhaseTapChanger().ifPresent(ptc -> describeTapChanger(translator, transformer,
+                transformer.getOptionalPhaseTapChanger().ifPresent(ptc -> describeTapChanger(translator, controls, transformer,
                         CgmesExportUtil.tapChangerAliasType(transformer, Conversion.ALIAS_PHASE_TAP_CHANGER1,
                                 Conversion.ALIAS_PHASE_TAP_CHANGER2),
                         CgmesNames.PHASE_TAP_CHANGER_TABULAR, CgmesChangeTranslator.PHASE_TAP_CHANGER_PREFIX, ptc, descriptions));
-                transformer.getOptionalRatioTapChanger().ifPresent(rtc -> describeTapChanger(translator, transformer,
+                transformer.getOptionalRatioTapChanger().ifPresent(rtc -> describeTapChanger(translator, controls, transformer,
                         CgmesExportUtil.tapChangerAliasType(transformer, Conversion.ALIAS_RATIO_TAP_CHANGER1,
                                 Conversion.ALIAS_RATIO_TAP_CHANGER2),
                         CgmesNames.RATIO_TAP_CHANGER, CgmesChangeTranslator.RATIO_TAP_CHANGER_PREFIX, rtc, descriptions));
             }
             case ThreeWindingsTransformer transformer -> transformer.getLegs().forEach(leg -> {
                 String end = Integer.toString(leg.getSide().getNum());
-                leg.getOptionalPhaseTapChanger().ifPresent(ptc -> describeTapChanger(translator, transformer,
+                leg.getOptionalPhaseTapChanger().ifPresent(ptc -> describeTapChanger(translator, controls, transformer,
                         CgmesExportUtil.getPhaseTapChangerAliasType(end), CgmesNames.PHASE_TAP_CHANGER_TABULAR,
                         CgmesChangeTranslator.PHASE_TAP_CHANGER_PREFIX + end, ptc, descriptions));
-                leg.getOptionalRatioTapChanger().ifPresent(rtc -> describeTapChanger(translator, transformer,
+                leg.getOptionalRatioTapChanger().ifPresent(rtc -> describeTapChanger(translator, controls, transformer,
                         CgmesExportUtil.getRatioTapChangerAliasType(end), CgmesNames.RATIO_TAP_CHANGER,
                         CgmesChangeTranslator.RATIO_TAP_CHANGER_PREFIX + end, rtc, descriptions));
             });
@@ -232,14 +237,16 @@ class DescribeObjectTest {
     }
 
     /** A tap changer: its block and, when the import recorded one, its TapChangerControl. */
-    private static <C extends Connectable<C>> void describeTapChanger(CgmesChangeTranslator translator, C transformer,
+    private static <C extends Connectable<C>> void describeTapChanger(CgmesChangeTranslator translator,
+                                                                      CgmesChangeRegulatingControls controls, C transformer,
                                                                       String aliasType, String defaultClassName,
                                                                       String prefix, TapChanger<?, ?, ?, ?> tapChanger,
                                                                       List<Result<CgmesPropertyBuffer, String>> descriptions) {
-        descriptions.add(Result.success(translator.describeTapChanger(transformer, aliasType, defaultClassName,
-                new TapChangerRef(transformer, prefix, tapChanger))));
-        translator.describedTapChangerControlId(transformer, aliasType)
-                .ifPresent(controlId -> descriptions.add(translator.describeRegulatingControl(controlId)));
+        CgmesPropertyBuffer block = new CgmesPropertyBuffer();
+        translator.describeTapChanger(transformer, aliasType, defaultClassName, new TapChangerRef(transformer, prefix, tapChanger), block);
+        descriptions.add(Result.success(block));
+        controls.controlId(transformer, aliasType)
+                .ifPresent(controlId -> descriptions.add(controls.updatesFor(controlId, IidmStateView.LIVE)));
     }
 
     /** The steady state statements of the successful descriptions, by subject and property. */

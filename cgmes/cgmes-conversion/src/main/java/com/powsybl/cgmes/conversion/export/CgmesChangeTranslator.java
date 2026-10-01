@@ -447,7 +447,7 @@ class CgmesChangeTranslator {
 
     /** The machine block together with its regulating control, which a change of the regulation itself needs. */
     private Result<CgmesPropertyBuffer, String> machineAndControlUpdates(Generator generator) {
-        return describeGenerator(generator).flatMap(machine ->
+        return generatorMachineUpdates(generator).flatMap(machine ->
                 regulatingControlUpdates(generator).map(regulatingControl -> merge(machine, regulatingControl)));
     }
 
@@ -602,7 +602,7 @@ class CgmesChangeTranslator {
     }
 
     // AC switches
-    private Result<CgmesPropertyBuffer, String> switchUpdates(Switch sw) {
+    Result<CgmesPropertyBuffer, String> switchUpdates(Switch sw) {
         if (!context.isExportedEquipment(sw)) {
             return failure("switch " + sw.getId() + " has no counterpart in the CGMES equipment model"
                     + " (it was created by the import, for instance to represent a disconnected terminal),"
@@ -665,7 +665,7 @@ class CgmesChangeTranslator {
 
     // Loads
 
-    private Result<CgmesPropertyBuffer, String> loadUpdates(Load load) {
+    Result<CgmesPropertyBuffer, String> loadUpdates(Load load) {
         if (!context.isExportedEquipment(load)) {
             return failure("load " + load.getId() + " has no counterpart in the CGMES equipment model");
         }
@@ -728,7 +728,7 @@ class CgmesChangeTranslator {
      * <p>A paired boundary line, one half of a tie line, is described the same way: each half has an
      * EquivalentInjection of its own at its own boundary.</p>
      */
-    private Result<CgmesPropertyBuffer, String> boundaryLineUpdates(BoundaryLine boundaryLine) {
+    Result<CgmesPropertyBuffer, String> boundaryLineUpdates(BoundaryLine boundaryLine) {
         // A full model writes the EquivalentInjection under a generated identifier, as the equipment export names it
         if (scope == Scope.CHANGES && !boundaryLine.hasProperty(PROPERTY_EQUIVALENT_INJECTION)) {
             return failure("boundary line " + boundaryLine.getId() + " has no CGMES EquivalentInjection");
@@ -780,7 +780,7 @@ class CgmesChangeTranslator {
             return equivalentInjectionUpdates(generator);
         }
         return switch (attribute) {
-            case TARGET_P, LOCAL_TARGET_Q -> describeGenerator(generator);
+            case TARGET_P, LOCAL_TARGET_Q -> generatorMachineUpdates(generator);
             // The regulation target lives entirely on the RegulatingControl, it must not restate the machine powers
             case LOCAL_TARGET_V, VR_TARGET_VALUE -> regulatingControlUpdates(generator);
             // The CGMES update reads the control flag of a machine only together with its powers, its reference
@@ -800,7 +800,11 @@ class CgmesChangeTranslator {
      * <p>The CGMES update reads the properties of a machine as a single group, so the whole group is written
      * whatever the change was.</p>
      */
-    private Result<CgmesPropertyBuffer, String> generatorMachineUpdates(Generator generator) {
+    Result<CgmesPropertyBuffer, String> generatorMachineUpdates(Generator generator) {
+        Optional<String> refusal = generatorRefusal(generator);
+        if (refusal.isPresent()) {
+            return failure(refusal.get());
+        }
         String originalClass = originalClass(generator);
         return switch (originalClass) {
             case CgmesNames.SYNCHRONOUS_MACHINE -> success(collect(out -> describeSynchronousMachine(generator, out)));
@@ -919,14 +923,14 @@ class CgmesChangeTranslator {
             return failure("generator " + generator.getId()
                     + " is exported as an EquivalentInjection, which has no reference priority");
         }
-        return describeGenerator(generator);
+        return generatorMachineUpdates(generator);
     }
 
     /**
      * The participation factor of a generator is a property of the CGMES GeneratingUnit it belongs to, not of the
      * machine, so a change of it describes that unit.
      */
-    private Result<CgmesPropertyBuffer, String> participationFactorUpdates(Identifiable<?> identifiable, String attribute) {
+    Result<CgmesPropertyBuffer, String> participationFactorUpdates(Identifiable<?> identifiable, String attribute) {
         if (attribute != null && !PARTICIPATION_FACTOR.equals(attribute)) {
             return failure("no CGMES steady state property corresponds to the " + attribute
                     + " of an active power control");
@@ -1111,10 +1115,14 @@ class CgmesChangeTranslator {
 
     // Shunt compensators
 
-    private Result<CgmesPropertyBuffer, String> shuntCompensatorUpdates(ShuntCompensator shunt, String attribute) {
+    Result<CgmesPropertyBuffer, String> shuntCompensatorUpdates(ShuntCompensator shunt, String attribute) {
         // The CGMES update reads the section count and the control flag of a shunt as one block, so every change
         // of either writes both. Only a change of the regulation itself also describes the RegulatingControl.
-        return describeShunt(shunt).flatMap(shuntBlock -> switch (attribute) {
+        Optional<String> refusal = Boolean.parseBoolean(shunt.getProperty(PROPERTY_IS_EQUIVALENT_SHUNT))
+                ? Optional.of(Refusal.EQUIVALENT_SHUNT.message("shunt compensator " + shunt.getId()
+                    + " is exported as an EquivalentShunt, which has no steady state properties."))
+                : objectRefusal(shunt);
+        return unlessRefused(refusal, out -> describeShunt(shunt, out)).flatMap(shuntBlock -> switch (attribute) {
             case SECTION_COUNT -> success(shuntBlock);
             case LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING, VR_TARGET_DEADBAND -> regulatingControlUpdates(shunt)
                     .map(regulatingControl -> merge(shuntBlock, regulatingControl));
@@ -1131,12 +1139,12 @@ class CgmesChangeTranslator {
 
     // Static var compensators
 
-    private Result<CgmesPropertyBuffer, String> staticVarCompensatorUpdates(StaticVarCompensator svc) {
+    Result<CgmesPropertyBuffer, String> staticVarCompensatorUpdates(StaticVarCompensator svc) {
         // The CGMES update reads the reactive power and the control flag of a compensator as one block, and the
         // single target of its RegulatingControl is the one matching the current mode, so a change of the target
         // of the other mode is not observable in the SSH profile. StaticVarCompensator.q is the local reactive power
         // target in both directions since powsybl-core #3699.
-        return describeStaticVarCompensator(svc).flatMap(svcBlock -> regulatingControlUpdates(svc)
+        return unlessRefused(objectRefusal(svc), out -> describeStaticVarCompensator(svc, out)).flatMap(svcBlock -> regulatingControlUpdates(svc)
                 .map(regulatingControl -> merge(svcBlock, regulatingControl)));
     }
 
@@ -1207,43 +1215,54 @@ class CgmesChangeTranslator {
         // The CGMES import reads targetPpcc, targetUdc, p and q as a single block, and derives the power factor of
         // a line commutated converter from p and q, so the four quantities are always exported together. They are
         // computed exactly as the full SSH export computes them.
-        SteadyStateHypothesisExport.ConverterState converterState =
-                SteadyStateHypothesisExport.computeConverterState(converter, state);
-        boolean rectifier = CgmesExportUtil.isConverterStationRectifier(converter, state);
-        return switch (converter) {
-            case LccConverterStation lcc -> converterStateUpdate(CgmesNames.CS_CONVERTER, cgmesId(lcc), converterState)
-                    .enumValue("CsConverter.operatingMode", "CsOperatingModeKind", rectifier ? "rectifier" : "inverter")
-                    .enumValue("CsConverter.pPccControl", "CsPpccControlKind", rectifier ? "activePower" : "dcVoltage")
-                    .updates();
-            case VscConverterStation vsc -> merge(converterStateUpdate(CgmesNames.VS_CONVERTER, cgmesId(vsc), converterState).updates(),
-                    vscControlModeUpdates(vsc));
-            default -> throw new IllegalStateException("Unhandled converter station " + converter.getClass().getSimpleName());
-        };
+        return collect(out -> {
+            switch (converter) {
+                case LccConverterStation lcc -> {
+                    boolean rectifier = CgmesExportUtil.isConverterStationRectifier(lcc, state);
+                    csConverterBlock(out, cgmesId(lcc), SteadyStateHypothesisExport.computeConverterState(lcc, state),
+                            rectifier ? "rectifier" : "inverter", rectifier ? "activePower" : "dcVoltage");
+                }
+                case VscConverterStation vsc -> describeVscConverterStation(vsc, true, false, out);
+                default -> throw new IllegalStateException("Unhandled converter station " + converter.getClass().getSimpleName());
+            }
+        });
     }
 
     /**
      * The four quantities the CGMES import reads as a single block for any converter, of the simplified model as
      * well as of the detailed one.
      */
-    private static CgmesPropertyBuffer.ObjectUpdate converterStateUpdate(String className, String masterResourceId,
-                                                                       SteadyStateHypothesisExport.ConverterSetpoints setpoints) {
-        return newUpdates(className, masterResourceId)
-                .value("ACDCConverter.targetPpcc", setpoints.targetPpcc())
+    private static CgmesPropertySink converterSetpoints(CgmesPropertySink out, SteadyStateHypothesisExport.ConverterSetpoints setpoints) {
+        return out.value("ACDCConverter.targetPpcc", setpoints.targetPpcc())
                 .value("ACDCConverter.targetUdc", setpoints.targetUdc())
                 .value("ACDCConverter.p", setpoints.p())
                 .value("ACDCConverter.q", setpoints.q());
     }
 
     /**
-     * The block describing the control of a voltage source converter station: both control modes, which the CGMES
-     * import only reads together, and both targets as the full export writes them.
+     * A CsConverter as a change describes it. The full export keeps its own writer, which writes the powers of a
+     * detailed line commutated converter differently (B4, owner decision O2b), until that is decided.
+     */
+    private static void csConverterBlock(CgmesPropertySink out, String id, SteadyStateHypothesisExport.ConverterSetpoints setpoints,
+                                         String operatingMode, String pPccControl) {
+        converterSetpoints(out.startObject(CgmesNames.CS_CONVERTER, id), setpoints)
+                .enumValue("CsConverter.operatingMode", "CsOperatingModeKind", operatingMode)
+                .enumValue("CsConverter.pPccControl", "CsPpccControlKind", pPccControl)
+                .endObject();
+    }
+
+    /**
+     * The control of a voltage source converter station: both control modes, which the CGMES import only reads
+     * together, and both targets as the full export writes them.
      *
      * <p>IIDM holds one regulation target and a mode since powsybl-core #3699: the target of the mode the station is
      * not in is written as zero, and the import rebuilds the whole VoltageRegulation from {@code qPccControl} and the
      * target of that mode. The reactive power of the station, {@code ACDCConverter.q}, is its local reactive power
      * target, so a change of it writes the converter blocks of both stations of the line.</p>
+     *
+     * @param attribute the changed attribute, {@code null} for the whole station (its setpoints, targets and modes)
      */
-    private Result<CgmesPropertyBuffer, String> vscStationUpdates(VscConverterStation converter, String attribute) {
+    Result<CgmesPropertyBuffer, String> vscStationUpdates(VscConverterStation converter, String attribute) {
         RegulationRef regulation = RegulationRef.of(converter);
         Optional<String> unregulated = converter.getHvdcLine() != null
                 ? unregulatedConverterOf(converter.getHvdcLine()) : unregulatedConverter(converter);
@@ -1254,16 +1273,61 @@ class CgmesChangeTranslator {
             return failure(Refusal.NO_MODE.message("the voltage regulation of converter " + converter.getId()
                     + " has no mode in this variant, so qPccControl cannot be written."));
         }
-        CgmesPropertyBuffer control = vscControlModeUpdates(converter).object(CgmesNames.VS_CONVERTER, cgmesId(converter))
-                .value("VsConverter.targetUpcc", SteadyStateHypothesisExport.vscTargetUpcc(regulation, state))
-                .value("VsConverter.targetQpcc", SteadyStateHypothesisExport.vscTargetQpcc(regulation, context, state))
-                .updates();
+        CgmesPropertyBuffer control = collect(out -> describeVscConverterStation(converter, attribute == null, true, out));
         if (!LOCAL_TARGET_Q.equals(attribute) || converter.getHvdcLine() == null) {
             return success(control);
         }
         // ACDCConverter.q travels in one block with targetPpcc, and the import takes a targetPpcc stated on either side
         // as the power of the link (powsybl-core #4057): the zero of the inverter alone would bring the link down
         return success(merge(control, bothConverterUpdates(converter.getHvdcLine())));
+    }
+
+    /**
+     * Describe the VsConverter of a converter station of the simplified DC model, in the order of its CIM class. A
+     * change writes the part it touches: the setpoints of the line, or the targets; the control modes always.
+     */
+    void describeVscConverterStation(VscConverterStation converter, boolean withSetpoints, boolean withTargets,
+                                     CgmesPropertySink out) {
+        RegulationRef regulation = RegulationRef.of(converter);
+        out.startObject(CgmesNames.VS_CONVERTER, cgmesId(converter));
+        if (withSetpoints) {
+            vsConverterSetpoints(out, SteadyStateHypothesisExport.computeConverterState(converter, state));
+        }
+        if (withTargets) {
+            vsConverterTargets(out, SteadyStateHypothesisExport.vscTargetQpcc(regulation, context, state),
+                    SteadyStateHypothesisExport.vscTargetUpcc(regulation, state));
+        }
+        vsConverterControlModes(out, CgmesExportUtil.isConverterStationRectifier(converter, state) ? "pPcc" : "udc",
+                SteadyStateHypothesisExport.vscQpccControl(regulation, state));
+    }
+
+    /** Describe a voltage source converter of the detailed DC model, in the order of its CIM class. */
+    void describeVoltageSourceConverter(VoltageSourceConverter converter, CgmesPropertySink out) {
+        SteadyStateHypothesisExport.AcDcConverterState converterState =
+                SteadyStateHypothesisExport.computeAcDcConverterState(converter, state);
+        vsConverterSetpoints(out.startObject(CgmesNames.VS_CONVERTER, cgmesId(converter)), converterState);
+        vsConverterTargets(out, converterState.targetQpcc(), converterState.targetUpcc());
+        vsConverterControlModes(out, converterState.pPccControl(), converterState.operatingModeOrQpccControl());
+    }
+
+    /** The setpoints of a VsConverter, and in a full model the constants of the class, which no change touches. */
+    private void vsConverterSetpoints(CgmesPropertySink out, SteadyStateHypothesisExport.ConverterSetpoints setpoints) {
+        converterSetpoints(out, setpoints);
+        if (scope == Scope.FULL_MODEL) {
+            out.value("VsConverter.droop", 0.0).value("VsConverter.droopCompensation", 0.0).value("VsConverter.qShare", 0.0);
+        }
+    }
+
+    /** Both targets of a VsConverter: the one of the mode it is not in is zero. */
+    private static void vsConverterTargets(CgmesPropertySink out, double targetQpcc, double targetUpcc) {
+        out.value("VsConverter.targetQpcc", targetQpcc).value("VsConverter.targetUpcc", targetUpcc);
+    }
+
+    /** Both control modes of a VsConverter, with which the CGMES import reads its targets; the end of the object. */
+    private static void vsConverterControlModes(CgmesPropertySink out, String pPccControl, String qPccControl) {
+        out.enumValue("VsConverter.pPccControl", "VsPpccControlKind", pPccControl)
+                .enumValue("VsConverter.qPccControl", "VsQpccControlKind", qPccControl)
+                .endObject();
     }
 
     // Detailed DC model converters
@@ -1277,13 +1341,12 @@ class CgmesChangeTranslator {
      * profile carries its active and reactive power, from which the import derives the factor back, so a power
      * factor is only transportable next to a power that is not zero.</p>
      */
-    private Result<CgmesPropertyBuffer, String> acDcConverterUpdates(AcDcConverter<?> converter, String attribute) {
+    Result<CgmesPropertyBuffer, String> acDcConverterUpdates(AcDcConverter<?> converter, String attribute) {
         SteadyStateHypothesisExport.AcDcConverterState converterState =
                 SteadyStateHypothesisExport.computeAcDcConverterState(converter, state);
         return switch (converter) {
             case LineCommutatedConverter lcc -> lineCommutatedConverterUpdates(lcc, converterState, attribute);
-            case VoltageSourceConverter vsc -> unregulatedConverter(vsc).<Result<CgmesPropertyBuffer, String>>map(Result::failure)
-                    .orElseGet(() -> success(voltageSourceConverterUpdates(vsc, converterState)));
+            case VoltageSourceConverter vsc -> unlessRefused(unregulatedConverter(vsc), out -> describeVoltageSourceConverter(vsc, out));
             default -> failure("converter " + converter.getId() + " is a "
                     + converter.getClass().getSimpleName() + ", which has no steady state setpoints");
         };
@@ -1291,20 +1354,20 @@ class CgmesChangeTranslator {
 
     private Result<CgmesPropertyBuffer, String> lineCommutatedConverterUpdates(
             LineCommutatedConverter converter, SteadyStateHypothesisExport.AcDcConverterState converterState, String attribute) {
-        CgmesPropertyBuffer.ObjectUpdate update = converterStateUpdate(CgmesNames.CS_CONVERTER, cgmesId(converter), converterState)
-                .enumValue("CsConverter.operatingMode", "CsOperatingModeKind", converterState.operatingModeOrQpccControl())
-                .enumValue("CsConverter.pPccControl", "CsPpccControlKind", converterState.pPccControl());
         double referenceP = lineCommutatedConverterReferenceP(converterState);
         double powerFactor = state.getDouble(converter, POWER_FACTOR, converter::getPowerFactor);
+        SteadyStateHypothesisExport.ConverterSetpoints setpoints = converterState;
         if (referenceP != 0 && powerFactor > 0) {
-            update.value("ACDCConverter.p", referenceP)
-                    .value("ACDCConverter.q", Math.abs(referenceP) * Math.sqrt(1 - powerFactor * powerFactor) / powerFactor);
+            setpoints = new SteadyStateHypothesisExport.ConverterState(converterState.targetPpcc(), converterState.targetUdc(),
+                    referenceP, Math.abs(referenceP) * Math.sqrt(1 - powerFactor * powerFactor) / powerFactor);
         } else if (POWER_FACTOR.equals(attribute)) {
             // A power factor of zero would make the reactive power infinite, and there is no power to express it
             // against anyway
             return failure("the power factor is carried by ACDCConverter.p and q, which are zero");
         }
-        return success(update.updates());
+        SteadyStateHypothesisExport.ConverterSetpoints described = setpoints;
+        return success(collect(out -> csConverterBlock(out, cgmesId(converter), described,
+                converterState.operatingModeOrQpccControl(), converterState.pPccControl())));
     }
 
     /** The active power the power factor of a line commutated converter is expressed against, or zero if it has none. */
@@ -1313,27 +1376,6 @@ class CgmesChangeTranslator {
             return converterState.targetPpcc();
         }
         return Double.isFinite(converterState.p()) ? converterState.p() : 0.0;
-    }
-
-    private CgmesPropertyBuffer voltageSourceConverterUpdates(VoltageSourceConverter converter,
-                                                            SteadyStateHypothesisExport.AcDcConverterState converterState) {
-        CgmesPropertyBuffer.ObjectUpdate update = converterStateUpdate(CgmesNames.VS_CONVERTER, cgmesId(converter), converterState)
-                .enumValue("VsConverter.pPccControl", "VsPpccControlKind", converterState.pPccControl())
-                .enumValue("VsConverter.qPccControl", "VsQpccControlKind", converterState.operatingModeOrQpccControl());
-        // Both targets as the full export writes them: the one of the other mode is zero
-        return update.value("VsConverter.targetQpcc", converterState.targetQpcc())
-                .value("VsConverter.targetUpcc", converterState.targetUpcc())
-                .updates();
-    }
-
-    /** The CGMES import only reads the targets of a voltage source converter when both control modes are present. */
-    private CgmesPropertyBuffer vscControlModeUpdates(VscConverterStation converter) {
-        return newUpdates(CgmesNames.VS_CONVERTER, cgmesId(converter))
-                .enumValue("VsConverter.pPccControl", "VsPpccControlKind",
-                        CgmesExportUtil.isConverterStationRectifier(converter, state) ? "pPcc" : "udc")
-                .enumValue("VsConverter.qPccControl", "VsQpccControlKind",
-                        SteadyStateHypothesisExport.vscQpccControl(RegulationRef.of(converter), state))
-                .updates();
     }
 
     // Operational limits (equipment values, CIM16 EQ / CIM100 SSH)
@@ -1878,7 +1920,7 @@ class CgmesChangeTranslator {
      * <p>A RegulatingControl is shared, so the description holds the combined state of every equipment regulating
      * through it, not only of the one that changed: see {@link CgmesChangeRegulatingControls}.</p>
      */
-    private Result<CgmesPropertyBuffer, String> regulatingControlUpdates(Identifiable<?> identifiable) {
+    Result<CgmesPropertyBuffer, String> regulatingControlUpdates(Identifiable<?> identifiable) {
         return regulatingControlId(identifiable).flatMap(id -> regulatingControls.updatesFor(id, state));
     }
 
@@ -1897,8 +1939,8 @@ class CgmesChangeTranslator {
         return success(context.getNamingStrategy().getCgmesIdFromProperty(identifiable, PROPERTY_REGULATING_CONTROL));
     }
 
-    // What the mapping says about one object, without an event. The attribute paths above describe an object through
-    // these entries, so that an object refusal holds on every path; a full export asks them for every object
+    // The object refusals of the changes scope, which the change of an object checks before its describe function
+    // writes; a full export calls the describe functions (describeX(x, sink)) for every object, without them
 
     /**
      * Why the given object cannot be described at all in this scope, empty when it can. The one place for the
@@ -1906,20 +1948,6 @@ class CgmesChangeTranslator {
      */
     private Optional<String> objectRefusal(Identifiable<?> identifiable) {
         return regulationTheImportRebuilds(identifiable);
-    }
-
-    /** The steady state hypothesis of a load, or why its CGMES class has none. */
-    Result<CgmesPropertyBuffer, String> describeLoad(Load load) {
-        return loadUpdates(load);
-    }
-
-    /**
-     * The machine block of a generator (SynchronousMachine, ExternalNetworkInjection or EquivalentInjection), or why
-     * the generator cannot be described.
-     */
-    Result<CgmesPropertyBuffer, String> describeGenerator(Generator generator) {
-        return generatorRefusal(generator).<Result<CgmesPropertyBuffer, String>>map(Result::failure)
-                .orElseGet(() -> generatorMachineUpdates(generator));
     }
 
     /**
@@ -1934,25 +1962,10 @@ class CgmesChangeTranslator {
                 : Optional.empty());
     }
 
-    /** The GeneratingUnit of a generator, which carries its participation factor. */
-    Result<CgmesPropertyBuffer, String> describeGeneratingUnit(Generator generator) {
-        return participationFactorUpdates(generator, null);
-    }
-
-    /** The section count and the control flag of a shunt compensator, the block the CGMES update reads as a whole. */
-    Result<CgmesPropertyBuffer, String> describeShunt(ShuntCompensator shunt) {
-        if (Boolean.parseBoolean(shunt.getProperty(PROPERTY_IS_EQUIVALENT_SHUNT))) {
-            return failure(Refusal.EQUIVALENT_SHUNT.message("shunt compensator " + shunt.getId()
-                    + " is exported as an EquivalentShunt, which has no steady state properties."));
-        }
-        Optional<String> refusal = objectRefusal(shunt);
-        if (refusal.isPresent()) {
-            return failure(refusal.get());
-        }
-        return success(collect(out -> describeShunt(shunt, out)));
-    }
-
-    /** Describe the section count and the control flag of a shunt compensator that is not an EquivalentShunt. */
+    /**
+     * Describe the section count and the control flag of a shunt compensator that is not an EquivalentShunt, the block
+     * the CGMES update reads as a whole.
+     */
     void describeShunt(ShuntCompensator shunt, CgmesPropertySink out) {
         out.startObject(shuntClassName(shunt), cgmesId(shunt))
                 .value("ShuntCompensator.sections", state.getInt(shunt, SECTION_COUNT, shunt::getSectionCount))
@@ -1961,18 +1974,9 @@ class CgmesChangeTranslator {
     }
 
     /**
-     * The control flag and the reactive power of a static var compensator, the block the CGMES update reads as a
-     * whole. StaticVarCompensator.q is the local reactive power target in both directions since powsybl-core #3699.
+     * Describe the control flag and the reactive power of a static var compensator, the block the CGMES update reads
+     * as a whole. StaticVarCompensator.q is the local reactive power target in both directions since powsybl-core #3699.
      */
-    Result<CgmesPropertyBuffer, String> describeStaticVarCompensator(StaticVarCompensator svc) {
-        Optional<String> refusal = objectRefusal(svc);
-        if (refusal.isPresent()) {
-            return failure(refusal.get());
-        }
-        return success(collect(out -> describeStaticVarCompensator(svc, out)));
-    }
-
-    /** Describe the control flag and the reactive power of a static var compensator. */
     void describeStaticVarCompensator(StaticVarCompensator svc, CgmesPropertySink out) {
         RegulationRef regulation = RegulationRef.of(svc);
         out.startObject("StaticVarCompensator", cgmesId(svc))
@@ -1981,57 +1985,27 @@ class CgmesChangeTranslator {
                 .endObject();
     }
 
-    /** The EquivalentInjection at the boundary of a boundary line. */
-    Result<CgmesPropertyBuffer, String> describeBoundaryInjection(BoundaryLine boundaryLine) {
-        return boundaryLineUpdates(boundaryLine);
-    }
-
-    /** The block of one tap changer: its step and its control flag. */
-    <C extends Connectable<C>> CgmesPropertyBuffer describeTapChanger(C transformer, String aliasType,
-                                                                     String defaultClassName, TapChangerRef ref) {
-        return collect(out -> describeTapChanger(transformer, aliasType, defaultClassName, ref, out));
-    }
-
     /**
-     * The block of a converter station of the simplified DC model: the four quantities of its line and its control
-     * modes, and for a voltage source converter its targets; or why a converter of its line cannot be described.
+     * The block of a converter station of the simplified DC model: the four quantities of its line, its control modes
+     * and for a voltage source converter its targets; or why a converter of its line cannot be described.
      */
-    Result<CgmesPropertyBuffer, String> describeConverterStation(HvdcConverterStation<?> converter) {
+    Result<CgmesPropertyBuffer, String> converterStationUpdates(HvdcConverterStation<?> converter) {
         if (converter.getHvdcLine() == null) {
             return failure("converter " + converter.getId() + " belongs to no HVDC line, which holds its power");
         }
-        if (converter instanceof VscConverterStation vsc) {
-            return vscStationUpdates(vsc, null).map(targets -> merge(converterActivePowerUpdates(vsc), targets));
-        }
-        return success(converterActivePowerUpdates(converter));
-    }
-
-    /** The block of a converter of the detailed DC model, or why it cannot be described. */
-    Result<CgmesPropertyBuffer, String> describeAcDcConverter(AcDcConverter<?> converter) {
-        return acDcConverterUpdates(converter, null);
-    }
-
-    /** The open state of a switch, or the connection status of the terminals of a switch that is a CGMES branch. */
-    Result<CgmesPropertyBuffer, String> describeSwitch(Switch sw) {
-        return switchUpdates(sw);
-    }
-
-    /** The RegulatingControl or TapChangerControl with the given identifier, combining every equipment using it. */
-    Result<CgmesPropertyBuffer, String> describeRegulatingControl(String controlId) {
-        return regulatingControls.updatesFor(controlId, state);
-    }
-
-    /** The identifier of the TapChangerControl the import recorded for the tap changer the alias points at. */
-    <C extends Connectable<C>> Optional<String> describedTapChangerControlId(C transformer, String aliasType) {
-        return regulatingControls.controlId(transformer, aliasType);
-    }
-
-    /** The identifier of the RegulatingControl of a voltage regulation holder in this scope, or why it has none. */
-    Result<String, String> describedControlId(Identifiable<?> holder) {
-        return regulatingControlId(holder);
+        return converter instanceof VscConverterStation vsc ? vscStationUpdates(vsc, null) : success(converterActivePowerUpdates(converter));
     }
 
     // Helpers
+
+    /**
+     * The description of an object for the changes scope: the refusal of the object when there is one, else what its
+     * describe function writes, collected in a buffer of its own.
+     */
+    private static Result<CgmesPropertyBuffer, String> unlessRefused(Optional<String> refusal,
+                                                                     Consumer<CgmesPropertySink> description) {
+        return refusal.<Result<CgmesPropertyBuffer, String>>map(Result::failure).orElseGet(() -> success(collect(description)));
+    }
 
     /** What a describe function writes, collected in a buffer of its own: the description of a change. */
     private static CgmesPropertyBuffer collect(Consumer<CgmesPropertySink> description) {

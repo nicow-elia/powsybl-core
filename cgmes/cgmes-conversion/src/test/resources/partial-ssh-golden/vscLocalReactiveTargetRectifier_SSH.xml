@@ -10,10 +10,10 @@
         <md:Model.modelingAuthoritySet>https://www.powsybl.org/</md:Model.modelingAuthoritySet>
     </md:FullModel>
     <cim:VsConverter rdf:about="#_DCLineSegment-Vsc-VscConverter-2">
+        <cim:VsConverter.targetQpcc>0</cim:VsConverter.targetQpcc>
+        <cim:VsConverter.targetUpcc>392.54</cim:VsConverter.targetUpcc>
         <cim:VsConverter.pPccControl rdf:resource="http://iec.ch/TC57/CIM100#VsPpccControlKind.pPcc"/>
         <cim:VsConverter.qPccControl rdf:resource="http://iec.ch/TC57/CIM100#VsQpccControlKind.voltagePcc"/>
-        <cim:VsConverter.targetUpcc>392.54</cim:VsConverter.targetUpcc>
-        <cim:VsConverter.targetQpcc>0</cim:VsConverter.targetQpcc>
         <cim:ACDCConverter.targetPpcc>497.7</cim:ACDCConverter.targetPpcc>
         <cim:ACDCConverter.targetUdc>0</cim:ACDCConverter.targetUdc>
         <cim:ACDCConverter.p>0</cim:ACDCConverter.p>
