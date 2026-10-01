@@ -73,8 +73,12 @@ import static com.powsybl.commons.util.Result.success;
  *     were going to arrive.</li>
  * </ul>
  *
- * <p>Regulating controls are shared between pieces of equipment, so they are described by
- * {@link RegulatingControlFamily} rather than here.</p>
+ * <p>This class is the event loop of the mapping: the variant and subset checks, the refusals that depend on the key
+ * of a change ({@link RegulationKeyRefusals}) and the dispatch of a change to the family of its equipment. The families
+ * describe the CGMES objects ({@link LoadFamily}, {@link MachineFamily}, {@link TapChangerAndShuntFamily},
+ * {@link SwitchAndTerminalFamily}, {@link HvdcFamily}, {@link LimitFamily}; the shared regulating controls
+ * {@link RegulatingControlFamily}); they declare the keys this class dispatches on, and the full steady state hypothesis
+ * export describes through the same families ({@link #forFullModel}).</p>
  *
  * <p>Every value a change log can speak about is read through an {@link IidmStateView}; structure is read live. A
  * value the previous state needs but the change log never recorded makes the change unsupported rather than wrong,
@@ -159,6 +163,7 @@ class CgmesChangeTranslator {
     private final Set<CgmesSubset> allowedSubsets;
 
     private final RegulatingControlFamily regulatingControls;
+    // The families a change is dispatched to, which the full export describes through as well
     final LoadFamily loads;
     final MachineFamily machines;
     final TapChangerAndShuntFamily tapChangers;
