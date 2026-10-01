@@ -8,6 +8,7 @@ rdf_database.md
 import.md
 post_processor.md
 export.md
+mapping.md
 examples.md
 ```
 
