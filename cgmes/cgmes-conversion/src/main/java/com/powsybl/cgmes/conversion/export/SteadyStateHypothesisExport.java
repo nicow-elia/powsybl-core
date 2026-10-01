@@ -240,17 +240,13 @@ public final class SteadyStateHypothesisExport {
                     regulationTarget = bl.getGeneration().getTargetV();
                     // The import puts the whole injection into the generation (EquivalentInjectionConversion#update):
                     // the injection is the load of the boundary line less its generation, as the change mapping writes it
-                    p = zeroIfNaN(p) - zeroIfNaN(bl.getGeneration().getTargetP());
-                    q = zeroIfNaN(q) - zeroIfNaN(bl.getGeneration().getTargetQ());
+                    p = CgmesChangeTranslator.nonNaN(p) - CgmesChangeTranslator.nonNaN(bl.getGeneration().getTargetP());
+                    q = CgmesChangeTranslator.nonNaN(q) - CgmesChangeTranslator.nonNaN(bl.getGeneration().getTargetQ());
                 }
                 writeEquivalentInjection(equivalentInjectionId, p, q, regulationStatus, regulationTarget, cimNamespace, writer, context);
                 exported.add(equivalentInjectionId);
             }
         }
-    }
-
-    private static double zeroIfNaN(double value) {
-        return Double.isNaN(value) ? 0.0 : value;
     }
 
     private static void writeTapChangers(Network network, String cimNamespace,

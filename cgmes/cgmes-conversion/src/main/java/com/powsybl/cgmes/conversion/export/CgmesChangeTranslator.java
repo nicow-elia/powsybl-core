@@ -743,7 +743,7 @@ class CgmesChangeTranslator {
     }
 
     /** Zero for an undefined value, which is what the CGMES import writes back for one. */
-    private static double nonNaN(double value) {
+    static double nonNaN(double value) {
         return Double.isNaN(value) ? 0.0 : value;
     }
 
