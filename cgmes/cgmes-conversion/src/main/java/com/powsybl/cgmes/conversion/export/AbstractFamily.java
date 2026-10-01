@@ -58,6 +58,11 @@ abstract class AbstractFamily {
         return context.getNamingStrategy().getCgmesIdFromAlias(identifiable, aliasType);
     }
 
+    /** The variable the update query of a family binds a property to: the property without its class. */
+    static String variable(String property) {
+        return property.substring(property.indexOf('.') + 1);
+    }
+
     /** What a describe function writes, collected in a buffer of its own: the description of a change. */
     static CgmesPropertyBuffer collect(Consumer<CgmesPropertySink> description) {
         CgmesPropertyBuffer buffer = new CgmesPropertyBuffer();

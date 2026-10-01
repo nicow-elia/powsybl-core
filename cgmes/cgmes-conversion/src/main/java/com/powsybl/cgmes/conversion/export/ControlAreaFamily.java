@@ -11,6 +11,7 @@ import com.powsybl.cgmes.conversion.mapping.Block;
 import com.powsybl.cgmes.model.CgmesNames;
 import com.powsybl.commons.util.Result;
 import com.powsybl.iidm.network.Area;
+import com.powsybl.triplestore.api.PropertyBag;
 
 import java.util.List;
 import java.util.Set;
@@ -24,7 +25,8 @@ import static com.powsybl.commons.util.Result.success;
  * interchange target describes the whole ControlArea, the block the CGMES update reads.
  *
  * <p>The key a change is reported under and the block the CGMES update reads are declared here; the dispatch of the
- * change export and the capabilities of the in-place import are derived from them.</p>
+ * change export and the capabilities of the in-place import are derived from them, and the importer's update sets
+ * the values the block was read into through {@link #apply}.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
@@ -54,6 +56,17 @@ public final class ControlAreaFamily extends AbstractFamily {
                     + CgmesNames.CONTROL_AREA_TYPE_KIND_INTERCHANGE + " is a CGMES ControlArea");
         }
         return success(collect(out -> describeControlArea(area, out)));
+    }
+
+    /**
+     * Set what the update query of a ControlArea bound: the interchange target, the given one when the query bound
+     * none, and the tolerance, kept as the property {@link #describeControlArea} reads, when it bound one.
+     */
+    public static void apply(Area area, PropertyBag values, double otherwise) {
+        area.setInterchangeTarget(values.asDouble(variable(NET_INTERCHANGE), otherwise));
+        if (values.containsKey(variable(P_TOLERANCE))) {
+            area.setProperty(P_TOLERANCE_PROPERTY, values.get(variable(P_TOLERANCE)));
+        }
     }
 
     /** Describe the net interchange of a control area, and its tolerance when the import kept one. */
