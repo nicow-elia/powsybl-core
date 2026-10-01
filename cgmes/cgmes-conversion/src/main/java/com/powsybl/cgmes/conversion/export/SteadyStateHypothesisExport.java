@@ -646,7 +646,7 @@ public final class SteadyStateHypothesisExport {
             String pPccControl = CgmesExportUtil.isConverterStationRectifier(converterStation) ? "activePower" : "dcVoltage";
             writeCsConverter(converterId, state.targetPpcc(), state.targetUdc(), state.p(), state.q(), operatingMode, pPccControl, cimNamespace, writer, context);
         } else if (converterStation instanceof VscConverterStation vscConverterStation) {
-            mapping.describeVscConverterStation(vscConverterStation, true, true, out);
+            mapping.describeVscConverterStation(vscConverterStation, out);
         }
     }
 

@@ -1222,7 +1222,7 @@ class CgmesChangeTranslator {
                     csConverterBlock(out, cgmesId(lcc), SteadyStateHypothesisExport.computeConverterState(lcc, state),
                             rectifier ? "rectifier" : "inverter", rectifier ? "activePower" : "dcVoltage");
                 }
-                case VscConverterStation vsc -> describeVscConverterStation(vsc, true, false, out);
+                case VscConverterStation vsc -> vsConverterStationBlock(vsc, true, false, out);
                 default -> throw new IllegalStateException("Unhandled converter station " + converter.getClass().getSimpleName());
             }
         });
@@ -1258,14 +1258,17 @@ class CgmesChangeTranslator {
      * <p>IIDM holds one regulation target and a mode since powsybl-core #3699: the target of the mode the station is
      * not in is written as zero, and the import rebuilds the whole VoltageRegulation from {@code qPccControl} and the
      * target of that mode. The reactive power of the station, {@code ACDCConverter.q}, is its local reactive power
-     * target, so a change of it writes the converter blocks of both stations of the line.</p>
+     * target, so a change of it writes the converter blocks of both stations of the line. A station that belongs to
+     * no line is refused: the line holds the setpoints of the station and says which of its ends rectifies.</p>
      *
      * @param attribute the changed attribute, {@code null} for the whole station (its setpoints, targets and modes)
      */
     Result<CgmesPropertyBuffer, String> vscStationUpdates(VscConverterStation converter, String attribute) {
+        if (converter.getHvdcLine() == null) {
+            return failure(noHvdcLine(converter));
+        }
         RegulationRef regulation = RegulationRef.of(converter);
-        Optional<String> unregulated = converter.getHvdcLine() != null
-                ? unregulatedConverterOf(converter.getHvdcLine()) : unregulatedConverter(converter);
+        Optional<String> unregulated = unregulatedConverterOf(converter.getHvdcLine());
         if (unregulated.isPresent()) {
             return failure(unregulated.get());
         }
@@ -1273,8 +1276,8 @@ class CgmesChangeTranslator {
             return failure(Refusal.NO_MODE.message("the voltage regulation of converter " + converter.getId()
                     + " has no mode in this variant, so qPccControl cannot be written."));
         }
-        CgmesPropertyBuffer control = collect(out -> describeVscConverterStation(converter, attribute == null, true, out));
-        if (!LOCAL_TARGET_Q.equals(attribute) || converter.getHvdcLine() == null) {
+        CgmesPropertyBuffer control = collect(out -> vsConverterStationBlock(converter, attribute == null, true, out));
+        if (!LOCAL_TARGET_Q.equals(attribute)) {
             return success(control);
         }
         // ACDCConverter.q travels in one block with targetPpcc, and the import takes a targetPpcc stated on either side
@@ -1282,12 +1285,24 @@ class CgmesChangeTranslator {
         return success(merge(control, bothConverterUpdates(converter.getHvdcLine())));
     }
 
+    private static String noHvdcLine(HvdcConverterStation<?> converter) {
+        return "converter " + converter.getId() + " belongs to no HVDC line, which holds its power";
+    }
+
     /**
-     * Describe the VsConverter of a converter station of the simplified DC model, in the order of its CIM class. A
-     * change writes the part it touches: the setpoints of the line, or the targets; the control modes always.
+     * Describe the VsConverter of a converter station of the simplified DC model: its setpoints, its targets and its
+     * control modes, in the order of its CIM class. The station must belong to an HVDC line.
      */
-    void describeVscConverterStation(VscConverterStation converter, boolean withSetpoints, boolean withTargets,
-                                     CgmesPropertySink out) {
+    void describeVscConverterStation(VscConverterStation converter, CgmesPropertySink out) {
+        vsConverterStationBlock(converter, true, true, out);
+    }
+
+    /**
+     * The VsConverter of a converter station, or the part of it a change touches: the setpoints of the line, or the
+     * targets; the control modes always, which the CGMES import reads the targets with.
+     */
+    private void vsConverterStationBlock(VscConverterStation converter, boolean withSetpoints, boolean withTargets,
+                                         CgmesPropertySink out) {
         RegulationRef regulation = RegulationRef.of(converter);
         out.startObject(CgmesNames.VS_CONVERTER, cgmesId(converter));
         if (withSetpoints) {
@@ -1991,7 +2006,7 @@ class CgmesChangeTranslator {
      */
     Result<CgmesPropertyBuffer, String> converterStationUpdates(HvdcConverterStation<?> converter) {
         if (converter.getHvdcLine() == null) {
-            return failure("converter " + converter.getId() + " belongs to no HVDC line, which holds its power");
+            return failure(noHvdcLine(converter));
         }
         return converter instanceof VscConverterStation vsc ? vscStationUpdates(vsc, null) : success(converterActivePowerUpdates(converter));
     }
