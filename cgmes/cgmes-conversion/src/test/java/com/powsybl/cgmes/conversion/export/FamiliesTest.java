@@ -12,6 +12,7 @@ import com.powsybl.cgmes.conversion.Conversion;
 import com.powsybl.cgmes.conversion.test.RecordedChangeScenarios;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
+import com.powsybl.iidm.network.Line;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.events.NetworkEvent;
 import org.junit.jupiter.api.Test;
@@ -24,6 +25,7 @@ import java.util.function.Consumer;
 
 import static com.powsybl.cgmes.conversion.test.ConversionUtil.readCgmesResources;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -118,6 +120,26 @@ class FamiliesTest {
         assertEquals(List.of(), description.statements());
         assertTrue(description.refusal().map(reason -> Refusal.of(reason).orElse(null) == Refusal.IMPORT_GIVES_REGULATION)
                 .orElse(false), description::toString);
+    }
+
+    /**
+     * A subject some of whose blocks the mapping refuses keeps the statements of the others and gives the reason of
+     * the first refused block: a line with an asymmetric shunt admittance describes its series impedance, and says
+     * why its shunt admittance has no CGMES value. The in-place import names that reason when it cannot complete a
+     * group.
+     */
+    @Test
+    void theDescriptionKeepsTheBlocksItCanAndNamesTheFirstRefusedOne() {
+        Network network = readCgmesResources("/update/line/", "line_EQ.xml", "line_SSH.xml");
+        Line line = network.getLine("ACLineSegment");
+        line.setG1(line.getG2() + 1e-4);
+        Families families = new Families(network);
+        Families.Description description = families.describe(families.resolve("ACLineSegment", null).orElseThrow());
+        Map<String, String> described = byKey(description.statements());
+        assertTrue(described.containsKey("ACLineSegment ACLineSegment.r") && described.containsKey("ACLineSegment ACLineSegment.x"),
+                described::toString);
+        assertFalse(described.containsKey("ACLineSegment ACLineSegment.gch"), described::toString);
+        assertTrue(description.refusal().orElse("").contains("g1 == g2 and b1 == b2 are required"), description::toString);
     }
 
     /**
