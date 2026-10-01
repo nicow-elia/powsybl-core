@@ -198,8 +198,7 @@ public final class TapChangerAndShuntFamily extends AbstractFamily {
     /** The name a recorded change gives the given tap changer, which is how its previous values are looked up. */
     private static TapChangerRef tapChangerRef(Identifiable<?> transformer, TapChangerAttribute attribute,
                                                TapChanger<?, ?, ?, ?> tapChanger) {
-        return new TapChangerRef(transformer,
-                (attribute.phase() ? PHASE_TAP_CHANGER_PREFIX : RATIO_TAP_CHANGER_PREFIX) + attribute.end(), tapChanger);
+        return TapChangerRef.of(transformer, attribute.end(), tapChanger);
     }
 
     /**

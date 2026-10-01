@@ -35,6 +35,15 @@ import java.util.function.Supplier;
  */
 record TapChangerRef(Identifiable<?> transformer, String attributePrefix, TapChanger<?, ?, ?, ?> tapChanger) {
 
+    /**
+     * The reference of a tap changer by the end it sits on: {@code ""} for a two windings transformer, the number of the
+     * leg for a three windings transformer. The kind of the tap changer gives the rest of the name.
+     */
+    static TapChangerRef of(Identifiable<?> transformer, String end, TapChanger<?, ?, ?, ?> tapChanger) {
+        return new TapChangerRef(transformer, (tapChanger instanceof RatioTapChanger
+                ? CgmesChangeTranslator.RATIO_TAP_CHANGER_PREFIX : CgmesChangeTranslator.PHASE_TAP_CHANGER_PREFIX) + end, tapChanger);
+    }
+
     /** The end the tap changer sits on, {@code ""} for a two windings transformer, taken from its attribute prefix. */
     String end() {
         int length = attributePrefix.length();

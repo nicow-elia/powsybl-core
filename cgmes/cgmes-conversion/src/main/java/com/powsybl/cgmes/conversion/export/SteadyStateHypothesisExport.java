@@ -260,8 +260,7 @@ public final class SteadyStateHypothesisExport {
         String cgmesTapChangerId = twt.getAliasFromType(aliasType).orElse(null);
         String tapChangerControlId = getTapChangerControlId(twt, part, endNumber, cgmesTapChangerId, context);
         String end = twt instanceof ThreeWindingsTransformer ? Integer.toString(endNumber) : "";
-        TapChangerRef ref = new TapChangerRef(twt, (tc instanceof RatioTapChanger
-                ? CgmesChangeTranslator.RATIO_TAP_CHANGER_PREFIX : CgmesChangeTranslator.PHASE_TAP_CHANGER_PREFIX) + end, tc);
+        TapChangerRef ref = TapChangerRef.of(twt, end, tc);
 
         mapping.tapChangers.describeTapChanger(twt, aliasType, defaultType, ref, out);
         if (tc instanceof RatioTapChanger) {
