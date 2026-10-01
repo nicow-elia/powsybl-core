@@ -721,7 +721,7 @@ public final class SteadyStateHypothesisExport {
             RegulationRef regulation = RegulationRef.of(vsc);
             return new AcDcConverterState(targetPpcc, targetUdc, p, regulation.localTargetQ(state),
                     activePowerControl ? "pPcc" : "udc", VsConverterControlFamily.qPccControl(regulation, true, state),
-                    VsConverterControlFamily.targetQpcc(regulation, true, null, state),
+                    VsConverterControlFamily.converterTargetQpcc(regulation, state),
                     VsConverterControlFamily.targetUpcc(regulation, state));
         }
         double q = converter.getPccTerminal().getQ();

@@ -1159,7 +1159,7 @@ class CgmesChangeTranslator {
             vsConverterSetpoints(out, SteadyStateHypothesisExport.computeConverterState(converter, state));
         }
         if (withTargets) {
-            VsConverterControlFamily.describeTargets(out, VsConverterControlFamily.targetQpcc(regulation, false, context, state),
+            VsConverterControlFamily.describeTargets(out, VsConverterControlFamily.stationTargetQpcc(regulation, context, state),
                     VsConverterControlFamily.targetUpcc(regulation, state));
         }
         VsConverterControlFamily.describeControlModes(out, CgmesExportUtil.isConverterStationRectifier(converter, state) ? "pPcc" : "udc",

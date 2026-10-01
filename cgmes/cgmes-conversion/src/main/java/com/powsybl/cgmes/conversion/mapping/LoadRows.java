@@ -13,6 +13,7 @@ import com.powsybl.iidm.network.Load;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.ToDoubleFunction;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -40,7 +41,7 @@ public final class LoadRows {
     public static final PlainFamily<Load> ASYNCHRONOUS_MACHINE = new PlainFamily<>("asynchronousMachines",
             List.of(CgmesNames.ASYNCHRONOUS_MACHINE),
             List.of(p("RotatingMachine.p"), q("RotatingMachine.q"),
-                    new PlainRow<>("RegulatingCondEq.controlEnabled", "controlEnabled", null, Quantity.FLAG, load -> 0, null),
+                    constant("RegulatingCondEq.controlEnabled", "controlEnabled", Quantity.FLAG, load -> 0),
                     new PlainRow<>("AsynchronousMachine.asynchronousMachineType", "type", P0,
                             Quantity.ASYNCHRONOUS_MACHINE_KIND, Load::getP0, null)));
 
@@ -62,6 +63,11 @@ public final class LoadRows {
     /** The attributes of a load a change of which one of its families describes. */
     public static List<String> keys() {
         return KEYS;
+    }
+
+    /** A row the import does not read and no change is reported under: written as the getter says. */
+    private static PlainRow<Load> constant(String property, String variable, Quantity quantity, ToDoubleFunction<Load> getter) {
+        return new PlainRow<>(property, variable, null, quantity, getter, null);
     }
 
     private static PlainRow<Load> p(String property) {

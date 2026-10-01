@@ -47,22 +47,23 @@ final class VsConverterControlFamily {
     }
 
     /**
-     * The VsConverter.targetQpcc of a converter. Of a station of the simplified model: the reactive power target
-     * whenever {@link #qPccControl} writes {@code reactivePcc}, that is whenever the station does not regulate voltage,
-     * and zero otherwise; the import reads it as {@code -terminalSign * targetQpcc}
-     * (HvdcConverterConversion#getValidTargetQ). A station in voltage mode that does not regulate (the deprecated
-     * {@code setVoltageRegulatorOn(false)}) is written {@code reactivePcc}, and its target is the local reactive power
-     * target it holds, not zero (review 21 round 2, R2-M4). Of the detailed model: the target of the reactive power
-     * mode, as it stands.
+     * The VsConverter.targetQpcc of a converter station of the simplified model: the reactive power target whenever
+     * {@link #qPccControl} writes {@code reactivePcc}, that is whenever the station does not regulate voltage, and zero
+     * otherwise; the import reads it as {@code -terminalSign * targetQpcc} (HvdcConverterConversion#getValidTargetQ). A
+     * station in voltage mode that does not regulate (the deprecated {@code setVoltageRegulatorOn(false)}) is written
+     * {@code reactivePcc}, and its target is the local reactive power target it holds, not zero (review 21 round 2,
+     * R2-M4).
      */
-    static double targetQpcc(RegulationRef regulation, boolean detailed, CgmesExportContext context, IidmStateView state) {
-        if (detailed) {
-            return regulation.isWithMode(RegulationMode.REACTIVE_POWER, state) ? regulation.regulatingTargetQ(state) : 0;
-        }
+    static double stationTargetQpcc(RegulationRef regulation, CgmesExportContext context, IidmStateView state) {
         return !regulation.isRegulatingWithMode(RegulationMode.VOLTAGE, state)
                 ? Quantity.MVAR_MACHINE_TARGET.encode(regulation.regulatingTargetQ(state),
                         CgmesExportUtil.exportedTerminalSign(regulation.owner(), "", context))
                 : 0;
+    }
+
+    /** The VsConverter.targetQpcc of a converter of the detailed model: the target of the reactive power mode, as it stands. */
+    static double converterTargetQpcc(RegulationRef regulation, IidmStateView state) {
+        return regulation.isWithMode(RegulationMode.REACTIVE_POWER, state) ? regulation.regulatingTargetQ(state) : 0;
     }
 
     /** The VsConverter.targetUpcc of a converter: the voltage target in voltage mode, zero otherwise. */

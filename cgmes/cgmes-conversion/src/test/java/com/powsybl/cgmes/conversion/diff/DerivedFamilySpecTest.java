@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
-class FamiliesTest {
+class DerivedFamilySpecTest {
 
     @Test
     void theCapabilityOfALoadFamilyIsTheOneTheTableHeld() {
