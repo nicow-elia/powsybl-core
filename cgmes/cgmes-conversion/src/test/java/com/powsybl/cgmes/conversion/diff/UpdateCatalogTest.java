@@ -128,13 +128,11 @@ class UpdateCatalogTest {
                     problems.add(spec.family() + ": the required properties " + group.required() + " are read in "
                             + required.size() + " blocks of " + spec.updateQuery());
                 }
-                Read block = required.isEmpty() ? null : required.iterator().next();
                 for (String property : group.optional()) {
                     Read read = read(query, property);
                     if (read == null) {
                         problems.add(spec.family() + ": " + spec.updateQuery() + " does not read " + property + " into a variable");
-                    } else if (block != null && !NOT_ONE_BLOCK.containsKey(spec.family())
-                            && !(read.depth() > block.depth() && read.blocks().startsWith(block.blocks()))) {
+                    } else if (!required.isEmpty() && !nestedInARequiredBlock(read, required, spec.family())) {
                         problems.add(spec.family() + ": the optional " + property + " is not read in an OPTIONAL nested in"
                                 + " the block of " + group.required());
                     }
@@ -230,6 +228,16 @@ class UpdateCatalogTest {
                 .filter(property -> both.contains("cim:" + property + " "))
                 .toList();
         assertEquals(List.of(), duplicated);
+    }
+
+    /**
+     * Whether an optional property is read in an {@code OPTIONAL} nested in the block of the required properties; for a
+     * family of {@link #NOT_ONE_BLOCK}, whose required properties are read in several blocks, in or under one of them.
+     */
+    private static boolean nestedInARequiredBlock(Read read, Set<Read> required, Family family) {
+        boolean several = NOT_ONE_BLOCK.containsKey(family);
+        return required.stream().anyMatch(block -> read.blocks().startsWith(block.blocks())
+                && (several ? read.depth() >= block.depth() : read.depth() > block.depth()));
     }
 
     /**
