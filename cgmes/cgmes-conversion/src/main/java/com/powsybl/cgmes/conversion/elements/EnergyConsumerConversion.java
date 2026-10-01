@@ -9,8 +9,8 @@
 package com.powsybl.cgmes.conversion.elements;
 
 import com.powsybl.cgmes.conversion.Context;
+import com.powsybl.cgmes.conversion.mapping.LoadRows;
 import com.powsybl.cgmes.model.CgmesNames;
-import com.powsybl.cgmes.model.PowerFlow;
 import com.powsybl.iidm.network.*;
 import com.powsybl.iidm.network.extensions.LoadDetail;
 import com.powsybl.iidm.network.extensions.LoadDetailAdder;
@@ -142,9 +142,11 @@ public class EnergyConsumerConversion extends AbstractConductingEquipmentConvers
         double pFixed = Double.parseDouble(load.getProperty(PROPERTY_P_FIXED, "0.0"));
         double qFixed = Double.parseDouble(load.getProperty(PROPERTY_Q_FIXED, "0.0"));
 
-        PowerFlow updatedPowerFlow = updatedPowerFlow(cgmesData);
-        load.setP0(updatedPowerFlow.defined() ? updatedPowerFlow.p() : getDefaultP0(load, pFixed, context));
-        load.setQ0(updatedPowerFlow.defined() ? updatedPowerFlow.q() : getDefaultQ0(load, qFixed, context));
+        // The values are read through the rows of the family, which the export writes from; the defaults otherwise
+        if (!LoadRows.ENERGY_CONSUMER.apply(load, cgmesData::get)) {
+            load.setP0(getDefaultP0(load, pFixed, context));
+            load.setQ0(getDefaultQ0(load, qFixed, context));
+        }
 
         updateLoadDetail(load, load.getProperty(PROPERTY_CGMES_ORIGINAL_CLASS), pFixed, qFixed);
     }

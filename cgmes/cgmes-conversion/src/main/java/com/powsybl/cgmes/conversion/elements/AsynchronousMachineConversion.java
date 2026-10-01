@@ -9,8 +9,8 @@
 package com.powsybl.cgmes.conversion.elements;
 
 import com.powsybl.cgmes.conversion.Context;
+import com.powsybl.cgmes.conversion.mapping.LoadRows;
 import com.powsybl.cgmes.model.CgmesNames;
-import com.powsybl.cgmes.model.PowerFlow;
 import com.powsybl.iidm.network.Load;
 import com.powsybl.iidm.network.LoadAdder;
 import com.powsybl.iidm.network.LoadType;
@@ -50,9 +50,11 @@ public class AsynchronousMachineConversion extends AbstractConductingEquipmentCo
     public static void update(Load load, PropertyBag cgmesData, Context context) {
         updateTerminals(load, context, load.getTerminal());
 
-        PowerFlow updatedPowerFlow = updatedPowerFlow(cgmesData);
-        load.setP0(updatedPowerFlow.defined() ? updatedPowerFlow.p() : getDefaultP0(load, context));
-        load.setQ0(updatedPowerFlow.defined() ? updatedPowerFlow.q() : getDefaultQ0(load, context));
+        // The values are read through the rows of the family, which the export writes from; the defaults otherwise
+        if (!LoadRows.ASYNCHRONOUS_MACHINE.apply(load, cgmesData::get)) {
+            load.setP0(getDefaultP0(load, context));
+            load.setQ0(getDefaultQ0(load, context));
+        }
     }
 
     private static double getDefaultP0(Load load, Context context) {
