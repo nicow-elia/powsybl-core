@@ -58,7 +58,11 @@ abstract class AbstractFamily {
         return context.getNamingStrategy().getCgmesIdFromAlias(identifiable, aliasType);
     }
 
-    /** The variable the update query of a family binds a property to: the property without its class. */
+    /**
+     * The variable the update query of a family binds a property to: the property without its class
+     * ({@code ControlArea.netInterchange} is bound to {@code ?netInterchange}), which is the key the importer reads
+     * the value under.
+     */
     static String variable(String property) {
         return property.substring(property.indexOf('.') + 1);
     }
