@@ -35,6 +35,16 @@
                     </archive>
                 </configuration>
             </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <!-- Read by MappingCompletenessTest: the attributes the setters of iidm-impl notify -->
+                        <iidm.impl.sources>${project.basedir}/../../iidm/iidm-impl/src/main/java</iidm.impl.sources>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 

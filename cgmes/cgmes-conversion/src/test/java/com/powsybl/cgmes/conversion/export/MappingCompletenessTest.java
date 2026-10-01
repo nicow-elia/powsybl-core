@@ -39,13 +39,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * is mapped or listed.
  *
  * <p>The attributes are read from the sources of {@code iidm-impl} (the string literals and string constants a
- * {@code notifyUpdate} call names), so the check runs in the source tree of powsybl-core.</p>
+ * {@code notifyUpdate} call names), so the check runs in the source tree of powsybl-core; a layout in which they are
+ * not where the build says fails with the path it looked at. The lasting answer would be a list of the notified
+ * attributes published by IIDM itself, an API change outside this module.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 class MappingCompletenessTest {
 
-    private static final Path IIDM_IMPL = Path.of("..", "..", "iidm", "iidm-impl", "src", "main", "java");
+    /**
+     * The sources of {@code iidm-impl}: the path the build of this module gives (system property
+     * {@code iidm.impl.sources}, set in its pom), else the place they have in the source tree of powsybl-core.
+     */
+    private static final Path IIDM_IMPL = Path.of(System.getProperty("iidm.impl.sources",
+            Path.of("..", "..", "iidm", "iidm-impl", "src", "main", "java").toString()));
 
     private static final String STATE_VARIABLE = "a state variable (SV profile) or a solved value, not a hypothesis";
     private static final String TOPOLOGY = "topology computed by IIDM or the connection of a terminal; terminal"
