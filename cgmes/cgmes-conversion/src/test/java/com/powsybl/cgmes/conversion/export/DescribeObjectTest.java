@@ -60,10 +60,11 @@ class DescribeObjectTest {
     void theDescriptionIsWhatTheEventPathWrites(ExportMappingEquivalenceTest.Fixture fixture) {
         Network network = fixture.loader().get();
         CgmesExportContext context = new CgmesExportContext(network);
+        // The controls the translator reads too, so that a TapChangerControl is described from the same index
+        CgmesChangeRegulatingControls controls = new CgmesChangeRegulatingControls(network, context, Scope.CHANGES);
         CgmesChangeTranslator translator = new CgmesChangeTranslator(network, context,
                 PartialSshExport.UnsupportedChangeBehavior.IGNORE, "a description test",
-                EnumSet.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS), IidmStateView.LIVE, null);
-        CgmesChangeRegulatingControls controls = new CgmesChangeRegulatingControls(network, context, Scope.CHANGES);
+                EnumSet.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS), IidmStateView.LIVE, controls);
         String variantId = network.getVariantManager().getWorkingVariantId();
         List<String> problems = new ArrayList<>();
         for (Identifiable<?> identifiable : network.getIdentifiables()) {

@@ -40,14 +40,17 @@ interface CgmesPropertySink {
     /** End the description of the object. */
     void endObject();
 
+    /** Set a property of the object being described to a boolean, formatted as the CGMES export formats one. */
     default CgmesPropertySink value(String property, boolean value) {
         return literal(property, CgmesExportUtil.format(value));
     }
 
+    /** Set a property of the object being described to an integer, formatted as the CGMES export formats one. */
     default CgmesPropertySink value(String property, int value) {
         return literal(property, CgmesExportUtil.format(value));
     }
 
+    /** Set a property of the object being described to a number, formatted as the CGMES export formats one. */
     default CgmesPropertySink value(String property, double value) {
         return literal(property, CgmesExportUtil.format(value));
     }
