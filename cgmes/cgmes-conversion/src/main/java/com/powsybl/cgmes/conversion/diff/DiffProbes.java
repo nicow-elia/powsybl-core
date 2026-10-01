@@ -38,8 +38,9 @@ import java.util.List;
  * Which attribute changes to ask the export mapping about in order to learn what a CGMES object currently says.
  *
  * <p>{@code CgmesObjectDump} answers "what would the change export write if this attribute had changed"; to describe
- * a whole CGMES object one has to ask about every attribute that maps onto it. This class holds that list, per kind
- * of IIDM object, using the very attribute names the change translator matches on.</p>
+ * a whole CGMES object one has to ask about every attribute that maps onto it. The families of the mapping declare
+ * those attributes, the very keys the change translator dispatches on; this class picks them per kind of IIDM
+ * object.</p>
  *
  * <p>The list is deliberately generous: asking about an attribute the mapping refuses costs one rejected translation
  * and nothing else, while forgetting one would make a consistency group uncompletable. The result is filtered by

@@ -21,13 +21,11 @@ import com.powsybl.iidm.network.BoundaryLine;
 import com.powsybl.iidm.network.Branch;
 import com.powsybl.iidm.network.DcSwitch;
 import com.powsybl.iidm.network.Generator;
-import com.powsybl.iidm.network.HvdcConverterStation;
 import com.powsybl.iidm.network.HvdcLine;
 import com.powsybl.iidm.network.Identifiable;
 import com.powsybl.iidm.network.LccConverterStation;
 import com.powsybl.iidm.network.LimitType;
 import com.powsybl.iidm.network.Line;
-import com.powsybl.iidm.network.LineCommutatedConverter;
 import com.powsybl.iidm.network.Load;
 import com.powsybl.iidm.network.LoadingLimits;
 import com.powsybl.iidm.network.Network;
@@ -39,7 +37,6 @@ import com.powsybl.iidm.network.Terminal;
 import com.powsybl.iidm.network.ThreeWindingsTransformer;
 import com.powsybl.iidm.network.TwoWindingsTransformer;
 import com.powsybl.iidm.network.VoltageLevel;
-import com.powsybl.iidm.network.VoltageSourceConverter;
 import com.powsybl.iidm.network.VscConverterStation;
 import com.powsybl.iidm.network.events.ExtensionCreationNetworkEvent;
 import com.powsybl.iidm.network.events.ExtensionUpdateNetworkEvent;
@@ -63,7 +60,6 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static com.powsybl.cgmes.conversion.Conversion.PROPERTY_CGMES_ORIGINAL_CLASS;
-import static com.powsybl.cgmes.conversion.export.CgmesPropertyBuffer.merge;
 import static com.powsybl.cgmes.conversion.export.CgmesPropertyBuffer.newUpdates;
 import static com.powsybl.commons.util.Result.failure;
 import static com.powsybl.commons.util.Result.success;
@@ -177,9 +173,6 @@ class CgmesChangeTranslator {
     private static final String MERGED_VOLTAGE_LEVEL_ALIAS_PREFIX =
             Conversion.CGMES_PREFIX_ALIAS_PROPERTIES + "MergedVoltageLevel";
 
-    private static final Set<String> HVDC_LINE_ATTRIBUTES = Set.of(ACTIVE_POWER_SETPOINT, CONVERTERS_MODE);
-    private static final Set<String> AC_DC_CONVERTER_ATTRIBUTES = RegulatingControlFamily.union(
-            Set.of(TARGET_P, TARGET_VDC, CONTROL_MODE, POWER_FACTOR), VsConverterControlFamily.KEYS);
     private static final Set<String> VOLTAGE_LIMIT_ATTRIBUTES = Set.of(HIGH_VOLTAGE_LIMIT, LOW_VOLTAGE_LIMIT);
     private static final Set<String> LINE_IMPEDANCE_ATTRIBUTES = Set.of(R, X, G1, G2, B1, B2);
     private static final Set<String> BOUNDARY_LINE_IMPEDANCE_ATTRIBUTES = Set.of(R, X, G, B);
@@ -491,209 +484,6 @@ class CgmesChangeTranslator {
      */
     private static boolean isMergedIdentifier(String id) {
         return id.contains(MERGED_ID_SEPARATOR);
-    }
-
-    // HVDC
-
-    /**
-     * The blocks of both converters of an HVDC line, which is where CGMES holds the power of the link and which of
-     * its two ends rectifies.
-     */
-    private Result<CgmesPropertyBuffer, String> hvdcLineUpdates(HvdcLine hvdcLine, String attribute) {
-        if (CONVERTERS_MODE.equals(attribute)
-                && hvdcLine.getConverterStation1() instanceof VscConverterStation
-                && state.getDouble(hvdcLine, ACTIVE_POWER_SETPOINT, hvdcLine::getActivePowerSetpoint) == 0) {
-            return failure("a VsConverter has no operating mode, the mode is only derived from a non zero targetPpcc");
-        }
-        return VsConverterControlFamily.refusalOfLine(hvdcLine, state, scope).<Result<CgmesPropertyBuffer, String>>map(Result::failure)
-                .orElseGet(() -> success(bothConverterUpdates(hvdcLine)));
-    }
-
-    /**
-     * The power factor of a line commutated converter is not a CGMES property of its own: the profile carries the
-     * active and the reactive power of the converter, from which the CGMES import derives the factor back.
-     */
-    private Result<CgmesPropertyBuffer, String> lccPowerFactorUpdates(LccConverterStation converter) {
-        HvdcLine hvdcLine = converter.getHvdcLine();
-        if (hvdcLine == null) {
-            return failure("converter " + converter.getId() + " belongs to no HVDC line, so it has no power to"
-                    + " carry its power factor");
-        }
-        if (state.getDouble(hvdcLine, ACTIVE_POWER_SETPOINT, hvdcLine::getActivePowerSetpoint) == 0) {
-            return failure("the power factor is carried by ACDCConverter.p and q, which are zero");
-        }
-        return success(bothConverterUpdates(hvdcLine));
-    }
-
-    private CgmesPropertyBuffer bothConverterUpdates(HvdcLine hvdcLine) {
-        return merge(converterActivePowerUpdates(hvdcLine.getConverterStation1()),
-                converterActivePowerUpdates(hvdcLine.getConverterStation2()));
-    }
-
-    private CgmesPropertyBuffer converterActivePowerUpdates(HvdcConverterStation<?> converter) {
-        // The CGMES import reads targetPpcc, targetUdc, p and q as a single block, and derives the power factor of
-        // a line commutated converter from p and q, so the four quantities are always exported together. They are
-        // computed exactly as the full SSH export computes them.
-        return collect(out -> {
-            switch (converter) {
-                case LccConverterStation lcc -> {
-                    boolean rectifier = CgmesExportUtil.isConverterStationRectifier(lcc, state);
-                    csConverterBlock(out, cgmesId(lcc), HvdcFamily.computeConverterState(lcc, state),
-                            rectifier ? "rectifier" : "inverter", rectifier ? "activePower" : "dcVoltage");
-                }
-                case VscConverterStation vsc -> vsConverterStationBlock(vsc, true, false, out);
-                default -> throw new IllegalStateException("Unhandled converter station " + converter.getClass().getSimpleName());
-            }
-        });
-    }
-
-    /**
-     * The four quantities the CGMES import reads as a single block for any converter, of the simplified model as
-     * well as of the detailed one.
-     */
-    private static CgmesPropertySink converterSetpoints(CgmesPropertySink out, HvdcFamily.ConverterSetpoints setpoints) {
-        return out.value("ACDCConverter.targetPpcc", setpoints.targetPpcc())
-                .value("ACDCConverter.targetUdc", setpoints.targetUdc())
-                .value("ACDCConverter.p", setpoints.p())
-                .value("ACDCConverter.q", setpoints.q());
-    }
-
-    /**
-     * A CsConverter as a change describes it. The full export keeps its own writer, which writes the powers of a
-     * detailed line commutated converter differently (B4, owner decision O2b), until that is decided.
-     */
-    private static void csConverterBlock(CgmesPropertySink out, String id, HvdcFamily.ConverterSetpoints setpoints,
-                                         String operatingMode, String pPccControl) {
-        converterSetpoints(out.startObject(CgmesNames.CS_CONVERTER, id), setpoints)
-                .enumValue("CsConverter.operatingMode", "CsOperatingModeKind", operatingMode)
-                .enumValue("CsConverter.pPccControl", "CsPpccControlKind", pPccControl)
-                .endObject();
-    }
-
-    /**
-     * The control of a voltage source converter station: both control modes, which the CGMES import only reads
-     * together, and both targets as the full export writes them.
-     *
-     * <p>IIDM holds one regulation target and a mode since powsybl-core #3699: the target of the mode the station is
-     * not in is written as zero, and the import rebuilds the whole VoltageRegulation from {@code qPccControl} and the
-     * target of that mode. The reactive power of the station, {@code ACDCConverter.q}, is its local reactive power
-     * target, so a change of it writes the converter blocks of both stations of the line. A station that belongs to
-     * no line is refused: the line holds the setpoints of the station and says which of its ends rectifies.</p>
-     *
-     * @param attribute the changed attribute, {@code null} for the whole station (its setpoints, targets and modes)
-     */
-    Result<CgmesPropertyBuffer, String> vscStationUpdates(VscConverterStation converter, String attribute) {
-        if (converter.getHvdcLine() == null) {
-            return failure(noHvdcLine(converter));
-        }
-        Optional<String> refusal = VsConverterControlFamily.stationRefusal(converter, state, scope);
-        if (refusal.isPresent()) {
-            return failure(refusal.get());
-        }
-        CgmesPropertyBuffer control = collect(out -> vsConverterStationBlock(converter, attribute == null, true, out));
-        if (!LOCAL_TARGET_Q.equals(attribute)) {
-            return success(control);
-        }
-        // ACDCConverter.q travels in one block with targetPpcc, and the import takes a targetPpcc stated on either side
-        // as the power of the link (powsybl-core #4057): the zero of the inverter alone would bring the link down
-        return success(merge(control, bothConverterUpdates(converter.getHvdcLine())));
-    }
-
-    private static String noHvdcLine(HvdcConverterStation<?> converter) {
-        return "converter " + converter.getId() + " belongs to no HVDC line, which holds its power";
-    }
-
-    /**
-     * Describe the VsConverter of a converter station of the simplified DC model: its setpoints, its targets and its
-     * control modes, in the order of its CIM class. The station must belong to an HVDC line.
-     */
-    void describeVscConverterStation(VscConverterStation converter, CgmesPropertySink out) {
-        vsConverterStationBlock(converter, true, true, out);
-    }
-
-    /**
-     * The VsConverter of a converter station, or the part of it a change touches: the setpoints of the line, or the
-     * targets; the control modes always, which the CGMES import reads the targets with.
-     */
-    private void vsConverterStationBlock(VscConverterStation converter, boolean withSetpoints, boolean withTargets,
-                                         CgmesPropertySink out) {
-        RegulationRef regulation = RegulationRef.of(converter);
-        out.startObject(CgmesNames.VS_CONVERTER, cgmesId(converter));
-        if (withSetpoints) {
-            vsConverterSetpoints(out, HvdcFamily.computeConverterState(converter, state));
-        }
-        if (withTargets) {
-            VsConverterControlFamily.describeTargets(out, VsConverterControlFamily.stationTargetQpcc(regulation, context, state),
-                    VsConverterControlFamily.targetUpcc(regulation, state));
-        }
-        VsConverterControlFamily.describeControlModes(out, CgmesExportUtil.isConverterStationRectifier(converter, state) ? "pPcc" : "udc",
-                VsConverterControlFamily.qPccControl(regulation, false, state));
-    }
-
-    /** Describe a voltage source converter of the detailed DC model, in the order of its CIM class. */
-    void describeVoltageSourceConverter(VoltageSourceConverter converter, CgmesPropertySink out) {
-        HvdcFamily.AcDcConverterState converterState =
-                HvdcFamily.computeAcDcConverterState(converter, state);
-        vsConverterSetpoints(out.startObject(CgmesNames.VS_CONVERTER, cgmesId(converter)), converterState);
-        VsConverterControlFamily.describeTargets(out, converterState.targetQpcc(), converterState.targetUpcc());
-        VsConverterControlFamily.describeControlModes(out, converterState.pPccControl(), converterState.operatingModeOrQpccControl());
-    }
-
-    /** The setpoints of a VsConverter, and in a full model the constants of the class, which no change touches. */
-    private void vsConverterSetpoints(CgmesPropertySink out, HvdcFamily.ConverterSetpoints setpoints) {
-        converterSetpoints(out, setpoints);
-        if (scope == Scope.FULL_MODEL) {
-            out.value("VsConverter.droop", 0.0).value("VsConverter.droopCompensation", 0.0).value("VsConverter.qShare", 0.0);
-        }
-    }
-
-    // Detailed DC model converters
-
-    /**
-     * The block describing a converter of the detailed DC model, which carries its own control modes and setpoints
-     * rather than deriving them from an HVDC line.
-     *
-     * <p>The CGMES update reads the setpoints and the control modes of a converter as one group, so all of them are
-     * written whatever the change was. A line commutated converter has no power factor of its own in CGMES: the
-     * profile carries its active and reactive power, from which the import derives the factor back, so a power
-     * factor is only transportable next to a power that is not zero.</p>
-     */
-    Result<CgmesPropertyBuffer, String> acDcConverterUpdates(AcDcConverter<?> converter, String attribute) {
-        HvdcFamily.AcDcConverterState converterState =
-                HvdcFamily.computeAcDcConverterState(converter, state);
-        return switch (converter) {
-            case LineCommutatedConverter lcc -> lineCommutatedConverterUpdates(lcc, converterState, attribute);
-            case VoltageSourceConverter vsc -> unlessRefused(VsConverterControlFamily.refusal(vsc, state, scope),
-                    out -> describeVoltageSourceConverter(vsc, out));
-            default -> failure("converter " + converter.getId() + " is a "
-                    + converter.getClass().getSimpleName() + ", which has no steady state setpoints");
-        };
-    }
-
-    private Result<CgmesPropertyBuffer, String> lineCommutatedConverterUpdates(
-            LineCommutatedConverter converter, HvdcFamily.AcDcConverterState converterState, String attribute) {
-        double referenceP = lineCommutatedConverterReferenceP(converterState);
-        double powerFactor = state.getDouble(converter, POWER_FACTOR, converter::getPowerFactor);
-        HvdcFamily.ConverterSetpoints setpoints = converterState;
-        if (referenceP != 0 && powerFactor > 0) {
-            setpoints = new HvdcFamily.ConverterState(converterState.targetPpcc(), converterState.targetUdc(),
-                    referenceP, Math.abs(referenceP) * Math.sqrt(1 - powerFactor * powerFactor) / powerFactor);
-        } else if (POWER_FACTOR.equals(attribute)) {
-            // A power factor of zero would make the reactive power infinite, and there is no power to express it
-            // against anyway
-            return failure("the power factor is carried by ACDCConverter.p and q, which are zero");
-        }
-        HvdcFamily.ConverterSetpoints described = setpoints;
-        return success(collect(out -> csConverterBlock(out, cgmesId(converter), described,
-                converterState.operatingModeOrQpccControl(), converterState.pPccControl())));
-    }
-
-    /** The active power the power factor of a line commutated converter is expressed against, or zero if it has none. */
-    private static double lineCommutatedConverterReferenceP(HvdcFamily.AcDcConverterState converterState) {
-        if (converterState.targetPpcc() != 0 && Double.isFinite(converterState.targetPpcc())) {
-            return converterState.targetPpcc();
-        }
-        return Double.isFinite(converterState.p()) ? converterState.p() : 0.0;
     }
 
     // Operational limits (equipment values, CIM16 EQ / CIM100 SSH)
@@ -1228,17 +1018,6 @@ class CgmesChangeTranslator {
     private static boolean symmetric(double side1, double side2) {
         double difference = Math.abs(side1 - side2);
         return difference <= 1e-9 * Math.max(Math.abs(side1), Math.abs(side2));
-    }
-
-    /**
-     * The block of a converter station of the simplified DC model: the four quantities of its line, its control modes
-     * and for a voltage source converter its targets; or why a converter of its line cannot be described.
-     */
-    Result<CgmesPropertyBuffer, String> converterStationUpdates(HvdcConverterStation<?> converter) {
-        if (converter.getHvdcLine() == null) {
-            return failure(noHvdcLine(converter));
-        }
-        return converter instanceof VscConverterStation vsc ? vscStationUpdates(vsc, null) : success(converterActivePowerUpdates(converter));
     }
 
     // Helpers
