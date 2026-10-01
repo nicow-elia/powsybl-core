@@ -11,7 +11,9 @@ import com.powsybl.cgmes.model.CgmesNames;
 import com.powsybl.iidm.network.Load;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
@@ -43,6 +45,9 @@ public final class LoadRows {
                             Quantity.ASYNCHRONOUS_MACHINE_KIND, Load::getP0, null)));
 
     private static final List<PlainFamily<Load>> ALL = List.of(ENERGY_CONSUMER, ENERGY_SOURCE, ASYNCHRONOUS_MACHINE);
+    private static final Map<String, PlainFamily<Load>> BY_CLASS = ALL.stream()
+            .flatMap(family -> family.cimClasses().stream().map(cimClass -> Map.entry(cimClass, family)))
+            .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, Map.Entry::getValue));
     private static final List<String> KEYS = ALL.stream().flatMap(family -> family.rows().stream())
             .map(PlainRow::key).flatMap(Stream::ofNullable).distinct().toList();
 
@@ -51,7 +56,7 @@ public final class LoadRows {
 
     /** The family of the given CIM class, empty when no load family accepts it. */
     public static Optional<PlainFamily<Load>> ofClass(String cimClass) {
-        return ALL.stream().filter(family -> family.cimClasses().contains(cimClass)).findFirst();
+        return cimClass == null ? Optional.empty() : Optional.ofNullable(BY_CLASS.get(cimClass));
     }
 
     /** The attributes of a load a change of which one of its families describes. */
