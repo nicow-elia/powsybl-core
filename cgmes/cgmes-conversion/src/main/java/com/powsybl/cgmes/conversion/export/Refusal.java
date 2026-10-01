@@ -90,17 +90,29 @@ public enum Refusal {
     /** What a change export appends to a refusal, after a full stop. */
     private static final String CHANGE = ". Change: ";
 
-    /** The rule this refusal follows, as the column RULE of the setter matrix names it. */
-    public final String rule;
-    /** The remedy sentence, unique to this refusal. */
-    public final String remedy;
-    /** Whether only a receiver of changes honours it, see {@link Scope#honours}. */
-    public final boolean changesOnly;
+    private final String rule;
+    private final String remedy;
+    private final boolean changesOnly;
 
     Refusal(String rule, String remedy, boolean changesOnly) {
         this.rule = rule;
         this.remedy = remedy;
         this.changesOnly = changesOnly;
+    }
+
+    /** The rule this refusal follows, as the column RULE of the setter matrix names it. */
+    public String getRule() {
+        return rule;
+    }
+
+    /** The remedy sentence, unique to this refusal. */
+    public String getRemedy() {
+        return remedy;
+    }
+
+    /** Whether only a receiver of changes honours it, see {@link Scope#honours}. */
+    public boolean isChangesOnly() {
+        return changesOnly;
     }
 
     /** The message of this refusal: the cause, then {@value #REMEDY} and the remedy. */

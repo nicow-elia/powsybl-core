@@ -23,6 +23,6 @@ enum Scope {
 
     /** Whether this scope refuses what the refusal describes: a full model does not honour a {@code changesOnly} one. */
     boolean honours(Refusal refusal) {
-        return this == CHANGES || !refusal.changesOnly;
+        return this == CHANGES || !refusal.isChangesOnly();
     }
 }

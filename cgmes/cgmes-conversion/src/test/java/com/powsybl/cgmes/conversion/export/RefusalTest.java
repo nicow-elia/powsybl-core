@@ -40,15 +40,15 @@ class RefusalTest {
 
     @Test
     void rulesAndRemediesAreUnique() {
-        assertEquals(Refusal.values().length, Arrays.stream(Refusal.values()).map(r -> r.rule).distinct().count());
-        assertEquals(Refusal.values().length, Arrays.stream(Refusal.values()).map(r -> r.remedy).distinct().count());
+        assertEquals(Refusal.values().length, Arrays.stream(Refusal.values()).map(Refusal::getRule).distinct().count());
+        assertEquals(Refusal.values().length, Arrays.stream(Refusal.values()).map(Refusal::getRemedy).distinct().count());
     }
 
     @ParameterizedTest
     @EnumSource(Refusal.class)
     void theRefusalIsToldFromItsMessage(Refusal refusal) {
         String message = refusal.message("a cause.");
-        assertEquals("a cause. Remedy: " + refusal.remedy, message);
+        assertEquals("a cause. Remedy: " + refusal.getRemedy(), message);
         assertEquals(Optional.of(refusal), Refusal.of(message));
         // As a change export words an unsupported change
         assertEquals(Optional.of(refusal), Refusal.of("Change cannot be exported to a partial SSH file: " + message
@@ -75,12 +75,12 @@ class RefusalTest {
             before = reader.lines().filter(line -> !line.startsWith("#")).toList();
         }
         Set<Refusal> kept = before.stream().flatMap(remedy -> Arrays.stream(Refusal.values())
-                .filter(refusal -> refusal.remedy.equals(remedy))).collect(Collectors.toSet());
+                .filter(refusal -> refusal.getRemedy().equals(remedy))).collect(Collectors.toSet());
         assertEquals(EnumSet.complementOf(EnumSet.copyOf(REMEDY_ADDED)), kept);
         List<String> changed = before.stream()
-                .filter(remedy -> Arrays.stream(Refusal.values()).noneMatch(refusal -> refusal.remedy.equals(remedy)))
+                .filter(remedy -> Arrays.stream(Refusal.values()).noneMatch(refusal -> refusal.getRemedy().equals(remedy)))
                 .toList();
         assertEquals(List.of("export the equipment model with the change (a full CGMES export)"), changed);
-        assertTrue(Refusal.TERMINAL_EQ.remedy.startsWith(changed.get(0) + ", "), Refusal.TERMINAL_EQ.remedy);
+        assertTrue(Refusal.TERMINAL_EQ.getRemedy().startsWith(changed.get(0) + ", "), Refusal.TERMINAL_EQ.getRemedy());
     }
 }

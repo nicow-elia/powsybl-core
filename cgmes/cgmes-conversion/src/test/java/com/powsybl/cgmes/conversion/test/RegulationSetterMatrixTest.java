@@ -625,7 +625,7 @@ class RegulationSetterMatrixTest {
      * from the message ({@link Refusal#of}).
      */
     static final Set<String> RULES = Stream.concat(Stream.of("steady-state", "echo-1", "echo-2", "G1",
-            "iidm-validation", "no-change"), Arrays.stream(Refusal.values()).map(r -> r.rule))
+            "iidm-validation", "no-change"), Arrays.stream(Refusal.values()).map(Refusal::getRule))
             .collect(Collectors.toUnmodifiableSet());
 
     /** The outcome of a case and the rule it follows. */
@@ -710,7 +710,7 @@ class RegulationSetterMatrixTest {
 
     private static String rule(Outcome outcome, String refusal, List<NetworkEvent> events, boolean terminalChanged) {
         return switch (outcome) {
-            case REFUSED -> Refusal.of(refusal).map(r -> r.rule).orElse("unknown refusal: " + refusal);
+            case REFUSED -> Refusal.of(refusal).map(Refusal::getRule).orElse("unknown refusal: " + refusal);
             case EXPORTED -> terminalChanged ? "own-terminal" : hasEcho(events) ? "echo-1" : "steady-state";
             case NOT_REPRESENTED -> "local-target";
             case IIDM_SILENT -> "G1";
