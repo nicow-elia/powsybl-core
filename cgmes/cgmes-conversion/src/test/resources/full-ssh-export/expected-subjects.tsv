@@ -1237,6 +1237,13 @@ after seriesCompensatorReactance	Terminal	ACLineSegment-T1	02f88ad78a65
 after seriesCompensatorReactance	Terminal	ACLineSegment-T2	02f88ad78a65
 after seriesCompensatorReactance	Terminal	EquivalentBranch-T1	02f88ad78a65
 after seriesCompensatorReactance	Terminal	EquivalentBranch-T2	02f88ad78a65
+after capacitiveSeriesCompensatorReactance	FullModel	header	1f9eb8d56f21
+after capacitiveSeriesCompensatorReactance	Terminal	SeriesCompensator-T1	02f88ad78a65
+after capacitiveSeriesCompensatorReactance	Terminal	SeriesCompensator-T2	02f88ad78a65
+after capacitiveSeriesCompensatorReactance	Terminal	ACLineSegment-T1	02f88ad78a65
+after capacitiveSeriesCompensatorReactance	Terminal	ACLineSegment-T2	02f88ad78a65
+after capacitiveSeriesCompensatorReactance	Terminal	EquivalentBranch-T1	02f88ad78a65
+after capacitiveSeriesCompensatorReactance	Terminal	EquivalentBranch-T2	02f88ad78a65
 after equivalentBranchImpedance	FullModel	header	1f9eb8d56f21
 after equivalentBranchImpedance	Terminal	SeriesCompensator-T1	02f88ad78a65
 after equivalentBranchImpedance	Terminal	SeriesCompensator-T2	02f88ad78a65
@@ -16754,6 +16761,7 @@ after wholeLimitsReplacedSameStructure	ORDER		72ccd688b02a
 after lineResistance	ORDER		72ccd688b02a
 after lineAllImpedances	ORDER		72ccd688b02a
 after seriesCompensatorReactance	ORDER		72ccd688b02a
+after capacitiveSeriesCompensatorReactance	ORDER		72ccd688b02a
 after equivalentBranchImpedance	ORDER		72ccd688b02a
 after boundaryLineImpedance	ORDER		49d4368cbc67
 after voltageLevelLimitsWithoutVoltageLimitObjects	ORDER		72ccd688b02a

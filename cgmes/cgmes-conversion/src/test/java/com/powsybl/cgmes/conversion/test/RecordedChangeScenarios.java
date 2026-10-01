@@ -329,6 +329,11 @@ public final class RecordedChangeScenarios {
                 n -> n.getLine("SeriesCompensator").setX(10.0),
                 n -> n.getLine("SeriesCompensator").setX(11.0),
                 n -> n.getLine("SeriesCompensator").setX(10.0)));
+        // A capacitive series compensator: CGMES and its import accept a negative reactance (owner decision O3)
+        scenarios.add(scenario("capacitiveSeriesCompensatorReactance", LINE_DIR, LINE_FILES,
+                n -> n.getLine("SeriesCompensator").setX(10.0),
+                n -> n.getLine("SeriesCompensator").setX(-12.5),
+                n -> n.getLine("SeriesCompensator").setX(10.0)));
         scenarios.add(scenario("equivalentBranchImpedance", LINE_DIR, LINE_FILES,
                 n -> n.getLine("EquivalentBranch").setR(0.5).setX(5.0),
                 n -> n.getLine("EquivalentBranch").setR(0.6).setX(5.5),

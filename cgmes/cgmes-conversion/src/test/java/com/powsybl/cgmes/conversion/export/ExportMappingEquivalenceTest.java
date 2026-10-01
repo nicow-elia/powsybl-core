@@ -332,12 +332,6 @@ class ExportMappingEquivalenceTest {
                 + " IMPEDANCE_REFUSALS (branch imported as a switch, no shunt admittance in the class, merged identifier,"
                 + " EquivalentBranch between nominal voltages, zero impedance inside a voltage level, asymmetric shunt"
                 + " admittance): docs, Difference model export / Not supported"),
-        new OnlyInFull("NEGATIVE_IMPEDANCE_REFUSED", Set.of(CgmesNames.AC_LINE_SEGMENT), Set.of(),
-            row -> row.facts().refused(row.key().subject(), EQ_PROBES.get(row.key().property()),
-                List.of("impedance values must be finite (r, x >= 0)")),
-            "the shared mapping refuses a negative r or x (CgmesChangeTranslator.seriesImpedanceProblem), which a"
-                + " capacitive SeriesCompensator has; NOT documented in export.md, reported as a finding (the mapping is"
-                + " more restrictive than the import)"),
         new OnlyInFull("VOLTAGE_LIMIT_REFUSED", Set.of(CgmesNames.VOLTAGE_LEVEL), Set.of(),
             row -> row.facts().refused(row.key().subject(), EQ_PROBES.get(row.key().property()), VOLTAGE_LIMIT_REFUSALS),
             "the shared mapping refuses the probe of exactly this voltage limit for one of the reasons of"

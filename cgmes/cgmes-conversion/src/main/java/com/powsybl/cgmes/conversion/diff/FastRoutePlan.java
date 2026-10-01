@@ -93,6 +93,7 @@ final class FastRoutePlan {
     private static final String Q_PCC_CONTROL = "VsConverter.qPccControl";
     private static final String CONNECTED = "ACDCTerminal.connected";
     private static final String REGULATING_CONTROL_ENABLED = "RegulatingControl.enabled";
+    private static final String SERIES_COMPENSATOR_X = "SeriesCompensator.x";
 
     /**
      * One object of the synthetic update document.
@@ -657,9 +658,10 @@ final class FastRoutePlan {
                         "impedance and limit values must be finite"));
                 return;
             }
-            if (isSeriesImpedance(statement.property()) && value < 0) {
+            // A capacitive series compensator has a negative reactance (owner decision O3)
+            if (isSeriesImpedance(statement.property()) && value < 0 && !SERIES_COMPENSATOR_X.equals(statement.property())) {
                 blocking.add(new CgmesDiffImport.BlockingStatement(subset, statement,
-                        "impedance values must be finite (r, x >= 0)"));
+                        "impedance values must be finite (r, x >= 0; x < 0 for a SeriesCompensator only)"));
                 return;
             }
             if (isVoltageLevelLimit(statement.property()) && value < 0) {

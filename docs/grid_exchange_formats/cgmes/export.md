@@ -512,7 +512,7 @@ Everything [the partial SSH export supports](#supported-changes) reaches the for
 | Permanent and temporary limit values of current, active power and apparent power limits (branches, three windings transformer legs, boundary lines) | `CurrentLimit\|ActivePowerLimit\|ApparentPowerLimit.value` of the stored mRID | EQ | SSH, also carried by a partial SSH file | exact |
 | `VoltageLevel` high / low limit of a voltage level built from `VoltageLimit` objects | `VoltageLimit.value` of every stored identifier | EQ | SSH | exact for one identifier, aggregate for several |
 | `VoltageLevel` high / low limit of a voltage level with no `VoltageLimit` objects | `VoltageLevel.highVoltageLimit\|lowVoltageLimit` | EQ | EQ | exact |
-| `Line` `r`, `x` | `ACLineSegment\|SeriesCompensator\|EquivalentBranch.r\|.x` | EQ | EQ | exact (lossless formatting) |
+| `Line` `r`, `x` (a negative `x` for a capacitive `SeriesCompensator` only) | `ACLineSegment\|SeriesCompensator\|EquivalentBranch.r\|.x` | EQ | EQ | exact (lossless formatting) |
 | `Line` `g1` = `g2`, `b1` = `b2` | `ACLineSegment.gch` = `g1 + g2`, `.bch` = `b1 + b2` | EQ | EQ | exact while symmetric; the import splits the total equally |
 | `BoundaryLine` `r`, `x`, `g`, `b` | `ACLineSegment.r\|.x\|.gch\|.bch`, or `EquivalentBranch.r\|.x` | EQ | EQ | exact |
 
@@ -542,6 +542,7 @@ These equipment changes are reported as unsupported, for the same reason as ever
 * The impedance of a `TwoWindingsTransformer` or of a `ThreeWindingsTransformer`, see the cut below.
 * An impedance of a line whose CGMES class is not `ACLineSegment`, `SeriesCompensator` or `EquivalentBranch`, of a branch the import represented as a switch, or a zero impedance that would make the receiver create a switch (both ends in one voltage level).
 * An asymmetric shunt admittance of a line (`g1 != g2` or `b1 != b2`, relative tolerance 1e-9 &mdash; relative, because an absolute tolerance of 1e-9 S would accept a difference in the fifth significant digit of a susceptance of 4.6e-4 S): CGMES holds one total that the import splits equally.
+* A negative resistance, or a negative reactance of anything but a `SeriesCompensator` (a capacitive series compensator is one the import accepts).
 * A shunt admittance of a `SeriesCompensator` or of an `EquivalentBranch`, which have none in CGMES, and any impedance of an `EquivalentBranch` whose two ends have different nominal voltages, because the import folds the ratio between them into the IIDM value.
 
 #### Cut, with the reason

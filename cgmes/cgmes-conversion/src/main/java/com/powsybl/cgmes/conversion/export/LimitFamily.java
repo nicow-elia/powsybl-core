@@ -570,7 +570,7 @@ public final class LimitFamily extends AbstractFamily {
         }
         double r = state.getDouble(line, R, line::getR);
         double x = state.getDouble(line, X, line::getX);
-        Optional<String> problem = seriesImpedanceProblem(r, x);
+        Optional<String> problem = seriesImpedanceProblem(originalClass, r, x);
         if (problem.isPresent()) {
             return failure(problem.get());
         }
@@ -612,7 +612,7 @@ public final class LimitFamily extends AbstractFamily {
         }
         double r = state.getDouble(boundaryLine, R, boundaryLine::getR);
         double x = state.getDouble(boundaryLine, X, boundaryLine::getX);
-        Optional<String> problem = seriesImpedanceProblem(r, x);
+        Optional<String> problem = seriesImpedanceProblem(originalClass, r, x);
         if (problem.isPresent()) {
             return failure(problem.get());
         }
@@ -653,10 +653,15 @@ public final class LimitFamily extends AbstractFamily {
         return update.updates();
     }
 
-    /** Why a resistance and a reactance cannot be written as they stand, empty when they can. */
-    private static Optional<String> seriesImpedanceProblem(double r, double x) {
-        return !Double.isFinite(r) || !Double.isFinite(x) || r < 0 || x < 0
-                ? Optional.of("impedance values must be finite (r, x >= 0)") : Optional.empty();
+    /**
+     * Why a resistance and a reactance cannot be written as they stand, empty when they can. A SeriesCompensator may be
+     * capacitive: CGMES and its import accept a negative reactance (owner decision O3).
+     */
+    private static Optional<String> seriesImpedanceProblem(String originalClass, double r, double x) {
+        boolean capacitive = CgmesNames.SERIES_COMPENSATOR.equals(originalClass) && x < 0;
+        return !Double.isFinite(r) || !Double.isFinite(x) || r < 0 || x < 0 && !capacitive
+                ? Optional.of("impedance values must be finite (r, x >= 0; x < 0 for a SeriesCompensator only)")
+                : Optional.empty();
     }
 
     /**

@@ -89,7 +89,8 @@ class VariantSafetyProbeTest {
      */
     private static final Set<String> REFUSED = Set.of(
             // Equipment values: impedances and the limits
-            "lineResistance", "lineAllImpedances", "seriesCompensatorReactance", "equivalentBranchImpedance",
+            "lineResistance", "lineAllImpedances", "seriesCompensatorReactance", "capacitiveSeriesCompensatorReactance",
+            "equivalentBranchImpedance",
             "boundaryLineImpedance", "voltageLevelLimitsWithoutVoltageLimitObjects", "cim16ThreeKindsOfLimits",
             "cim16EquipmentAttachedLimitBothSides", "cim16VoltageLimits", "mixedSshAndEq",
             // CGMES 3 limit values, which travel in the steady state hypothesis but still land on a shared field
