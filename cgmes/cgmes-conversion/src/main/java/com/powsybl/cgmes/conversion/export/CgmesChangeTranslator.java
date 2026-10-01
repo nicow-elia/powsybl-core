@@ -62,10 +62,6 @@ import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import static com.powsybl.cgmes.conversion.Conversion.ALIAS_DC_TERMINAL1;
-import static com.powsybl.cgmes.conversion.Conversion.ALIAS_DC_TERMINAL2;
-import static com.powsybl.cgmes.conversion.Conversion.ALIAS_TERMINAL1;
-import static com.powsybl.cgmes.conversion.Conversion.ALIAS_TERMINAL2;
 import static com.powsybl.cgmes.conversion.Conversion.PROPERTY_CGMES_ORIGINAL_CLASS;
 import static com.powsybl.cgmes.conversion.export.CgmesPropertyBuffer.merge;
 import static com.powsybl.cgmes.conversion.export.CgmesPropertyBuffer.newUpdates;
@@ -180,8 +176,6 @@ class CgmesChangeTranslator {
     private static final String MERGED_ID_SEPARATOR = " + ";
     private static final String MERGED_VOLTAGE_LEVEL_ALIAS_PREFIX =
             Conversion.CGMES_PREFIX_ALIAS_PROPERTIES + "MergedVoltageLevel";
-
-    private static final String ACDC_TERMINAL_CONNECTED = "ACDCTerminal.connected";
 
     private static final Set<String> HVDC_LINE_ATTRIBUTES = Set.of(ACTIVE_POWER_SETPOINT, CONVERTERS_MODE);
     private static final Set<String> AC_DC_CONVERTER_ATTRIBUTES = RegulatingControlFamily.union(
@@ -483,30 +477,6 @@ class CgmesChangeTranslator {
         return identifiable instanceof TwoWindingsTransformer || identifiable instanceof ThreeWindingsTransformer;
     }
 
-    // AC switches
-    Result<CgmesPropertyBuffer, String> switchUpdates(Switch sw) {
-        if (!context.isExportedEquipment(sw)) {
-            return failure("switch " + sw.getId() + " has no counterpart in the CGMES equipment model"
-                    + " (it was created by the import, for instance to represent a disconnected terminal),"
-                    + " so its state cannot be referenced from a steady state hypothesis file");
-        }
-        String originalClass = sw.getProperty(PROPERTY_CGMES_ORIGINAL_CLASS);
-        if (isCgmesBranchClass(originalClass)) {
-            // In CGMES this equipment is a branch and has no open state of its own:
-            // the CGMES import derives the state of the IIDM switch from the connection status of its terminals.
-            return success(switchTerminalUpdates(sw));
-        }
-        return success(collect(out -> describeSwitch(sw, out)));
-    }
-
-    /** Describe the open state of a switch that is not a CGMES branch, see {@link #switchUpdates}. */
-    void describeSwitch(Switch sw, CgmesPropertySink out) {
-        String originalClass = sw.getProperty(PROPERTY_CGMES_ORIGINAL_CLASS);
-        out.startObject(originalClass != null ? originalClass : CgmesExportUtil.switchClassname(sw.getKind()), cgmesId(sw))
-                .value("Switch.open", state.getBoolean(sw, OPEN, sw::isOpen))
-                .endObject();
-    }
-
     /**
      * Whether an identifier is one powsybl built out of two, and therefore names no single CGMES object.
      *
@@ -519,30 +489,6 @@ class CgmesChangeTranslator {
      */
     private static boolean isMergedIdentifier(String id) {
         return id.contains(MERGED_ID_SEPARATOR);
-    }
-
-    /** The three CGMES classes an IIDM line or boundary line can have been imported from. */
-    private static boolean isCgmesBranchClass(String originalClass) {
-        return CgmesNames.AC_LINE_SEGMENT.equals(originalClass)
-                || CgmesNames.EQUIVALENT_BRANCH.equals(originalClass)
-                || CgmesNames.SERIES_COMPENSATOR.equals(originalClass);
-    }
-
-    private CgmesPropertyBuffer switchTerminalUpdates(Switch sw) {
-        boolean connected = !state.getBoolean(sw, OPEN, sw::isOpen);
-        return newUpdates(CgmesNames.TERMINAL, cgmesIdFromAlias(sw, ALIAS_TERMINAL1)).value(ACDC_TERMINAL_CONNECTED, connected)
-                .object(CgmesNames.TERMINAL, cgmesIdFromAlias(sw, ALIAS_TERMINAL2)).value(ACDC_TERMINAL_CONNECTED, connected)
-                .updates();
-    }
-
-    // DC switches
-
-    private Result<CgmesPropertyBuffer, String> dcSwitchUpdates(DcSwitch dcSwitch) {
-        // A DCSwitch has no open state in the SSH profile either, it is carried by its two DC terminals.
-        boolean connected = !state.getBoolean(dcSwitch, OPEN, dcSwitch::isOpen);
-        return success(newUpdates(CgmesNames.DC_TERMINAL, cgmesIdFromAlias(dcSwitch, ALIAS_DC_TERMINAL1)).value(ACDC_TERMINAL_CONNECTED, connected)
-                .object(CgmesNames.DC_TERMINAL, cgmesIdFromAlias(dcSwitch, ALIAS_DC_TERMINAL2)).value(ACDC_TERMINAL_CONNECTED, connected)
-                .updates());
     }
 
     // HVDC
@@ -1160,7 +1106,7 @@ class CgmesChangeTranslator {
      */
     private Result<CgmesPropertyBuffer, String> lineImpedanceUpdates(Line line, String attribute) {
         String originalClass = line.getProperty(PROPERTY_CGMES_ORIGINAL_CLASS, CgmesNames.AC_LINE_SEGMENT);
-        if (!isCgmesBranchClass(originalClass)) {
+        if (!SwitchAndTerminalFamily.isCgmesBranchClass(originalClass)) {
             return failure(originalClass + " " + line.getId()
                     + " is represented as a switch in CGMES or is not a CGMES branch, so it carries no impedance");
         }
@@ -1215,7 +1161,7 @@ class CgmesChangeTranslator {
      */
     private Result<CgmesPropertyBuffer, String> boundaryLineImpedanceUpdates(BoundaryLine boundaryLine, String attribute) {
         String originalClass = boundaryLine.getProperty(PROPERTY_CGMES_ORIGINAL_CLASS, CgmesNames.AC_LINE_SEGMENT);
-        if (!isCgmesBranchClass(originalClass)) {
+        if (!SwitchAndTerminalFamily.isCgmesBranchClass(originalClass)) {
             return failure(originalClass + " " + boundaryLine.getId()
                     + " is represented as a switch in CGMES or is not a CGMES branch, so it carries no impedance");
         }
