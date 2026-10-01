@@ -1,6 +1,0 @@
-# Slice B (plan 20b, owner decision 2026-10-01): matrix rows, golden hunks and snapshot rows this slice knows to be
-# wrong, one per line with the reason. Every row NOT listed here is unchanged against p0-end-t8 (a3eb988cb3).
-# Columns: oracle<TAB>item<TAB>reason
-#
-# EMPTY: no setter-matrix row (661), no partial-SSH or difference golden, no full-SSH snapshot row and no
-# DescribeObjectTest case changed; the guard's rule tables are unchanged.

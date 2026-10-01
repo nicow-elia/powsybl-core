@@ -8,7 +8,6 @@
 package com.powsybl.cgmes.conversion.export;
 
 import com.powsybl.cgmes.conversion.CgmesExport;
-import com.powsybl.cgmes.conversion.export.RegulatingControlFamily.RegulatingControlView;
 import com.powsybl.cgmes.extensions.CgmesTapChanger;
 import com.powsybl.cgmes.model.CgmesMetadataModel;
 import com.powsybl.cgmes.model.CgmesNames;
@@ -271,11 +270,11 @@ public final class SteadyStateHypothesisExport {
 
         mapping.describeTapChanger(twt, aliasType, defaultType, ref, out);
         if (tc instanceof RatioTapChanger) {
-            addRegulatingControlView(RegulatingControlFamily.regulatingControlView(ref.regulation(), tapChangerControlId, context, IidmStateView.LIVE),
+            addRegulatingControlView(RegulatingControlView.of(ref.regulation(), tapChangerControlId, context, IidmStateView.LIVE),
                     regulatingControlViews);
         } else if (tc instanceof PhaseTapChanger ptc) {
             boolean recordedControl = getCgmesTapChanger(twt, cgmesTapChangerId).map(CgmesTapChanger::getControlId).isPresent();
-            addRegulatingControlView(RegulatingControlFamily.phaseTapChangerView(ptc, tapChangerControlId, recordedControl, ref, context, IidmStateView.LIVE),
+            addRegulatingControlView(RegulatingControlView.ofPhaseTapChanger(ptc, tapChangerControlId, recordedControl, ref, context, IidmStateView.LIVE),
                     regulatingControlViews);
         }
 
@@ -399,13 +398,13 @@ public final class SteadyStateHypothesisExport {
 
     private static void addRegulatingControlView(RegulationRef regulation, String regulatingControlId,
                                                  Map<String, List<RegulatingControlView>> regulatingControlViews, CgmesExportContext context) {
-        addRegulatingControlView(RegulatingControlFamily.regulatingControlView(regulation, regulatingControlId, context, IidmStateView.LIVE),
+        addRegulatingControlView(RegulatingControlView.of(regulation, regulatingControlId, context, IidmStateView.LIVE),
                 regulatingControlViews);
     }
 
     private static void writeRegulatingControls(Map<String, List<RegulatingControlView>> regulatingControlViews, CgmesPropertySink out) {
         for (List<RegulatingControlView> views : regulatingControlViews.values()) {
-            RegulatingControlFamily.describe(views, out);
+            RegulatingControlView.describe(views, out);
         }
     }
 
