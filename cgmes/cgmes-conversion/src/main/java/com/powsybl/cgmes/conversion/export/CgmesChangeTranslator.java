@@ -240,6 +240,7 @@ class CgmesChangeTranslator {
     private final IidmStateView state;
 
     private final RegulatingControlFamily regulatingControls;
+    final LoadFamily loads;
     /** Who reads the description: which objects it may name and which refusals it honours. */
     private final Scope scope;
     /** Built on first use, so that a change set without limits never pays for the walk it costs. */
@@ -283,6 +284,7 @@ class CgmesChangeTranslator {
         this.scope = Objects.requireNonNull(scope);
         this.regulatingControls = regulatingControls != null
                 ? regulatingControls : new RegulatingControlFamily(network, context, scope);
+        this.loads = new LoadFamily(context, state, scope);
     }
 
     /**
@@ -461,7 +463,7 @@ class CgmesChangeTranslator {
         return switch (identifiable) {
             case Switch sw when OPEN.equals(attribute) -> switchUpdates(sw);
             case DcSwitch dcSwitch when OPEN.equals(attribute) -> dcSwitchUpdates(dcSwitch);
-            case Load load when LoadRows.keys().contains(attribute) -> loadUpdates(load);
+            case Load load when LoadRows.keys().contains(attribute) -> loads.loadUpdates(load);
             case BoundaryLine boundaryLine when BOUNDARY_LINE_ATTRIBUTES.contains(attribute) -> boundaryLineUpdates(boundaryLine);
             case Generator generator when GENERATOR_ATTRIBUTES.contains(attribute) -> generatorUpdates(generator, attribute);
             case TwoWindingsTransformer transformer when tapChangerAttribute != null -> twoWindingsTapChangerUpdates(transformer, tapChangerAttribute);

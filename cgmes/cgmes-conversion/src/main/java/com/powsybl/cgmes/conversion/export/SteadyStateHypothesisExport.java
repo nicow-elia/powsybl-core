@@ -202,7 +202,7 @@ public final class SteadyStateHypothesisExport {
     private static void writeFictitiousInjection(String loadId, String terminalId, double p, double q,
                                                  String cimNamespace, XMLStreamWriter writer,
                                                  CgmesExportContext context) throws XMLStreamException {
-        CgmesChangeTranslator.describeFictitiousInjection(loadId, p, q, new CgmesPropertySink.Xml(cimNamespace, writer, context));
+        LoadFamily.describeFictitiousInjection(loadId, p, q, new CgmesPropertySink.Xml(cimNamespace, writer, context));
         // Terminal connected state (always connected in SSH for fictitious terminals)
         writeTerminal(terminalId, true, cimNamespace, writer, context);
     }
@@ -374,7 +374,7 @@ public final class SteadyStateHypothesisExport {
 
     private static void writeLoads(Network network, CgmesChangeTranslator mapping, CgmesPropertySink out, CgmesExportContext context) {
         for (Load load : network.getLoads()) {
-            if (context.isExportedEquipment(load) && !mapping.describeLoad(load, out)) {
+            if (context.isExportedEquipment(load) && !mapping.loads.describeLoad(load, out)) {
                 throw new PowsyblException("Unexpected class name: " + LoadFamily.obtainLoadClassName(load, context));
             }
         }

@@ -207,7 +207,7 @@ class DescribeObjectTest {
                                                               RegulatingControlFamily controls, Identifiable<?> identifiable) {
         List<Result<CgmesPropertyBuffer, String>> descriptions = new ArrayList<>();
         switch (identifiable) {
-            case Load load -> descriptions.add(translator.loadUpdates(load));
+            case Load load -> descriptions.add(translator.loads.loadUpdates(load));
             case Generator generator -> {
                 descriptions.add(translator.generatorMachineUpdates(generator));
                 if (generator.hasProperty(Conversion.PROPERTY_GENERATING_UNIT)) {
