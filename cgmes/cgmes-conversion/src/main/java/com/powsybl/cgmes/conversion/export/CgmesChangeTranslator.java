@@ -11,7 +11,6 @@ import com.powsybl.cgmes.conversion.Conversion;
 import com.powsybl.cgmes.conversion.elements.OperationalLimitConversion;
 import com.powsybl.cgmes.conversion.export.PartialSshExport.UnsupportedChangeBehavior;
 import com.powsybl.cgmes.conversion.mapping.LoadRows;
-import com.powsybl.cgmes.extensions.CgmesTapChanger;
 import com.powsybl.cgmes.extensions.CimCharacteristics;
 import com.powsybl.cgmes.model.CgmesNames;
 import com.powsybl.cgmes.model.CgmesSubset;
@@ -20,7 +19,6 @@ import com.powsybl.commons.util.Result;
 import com.powsybl.iidm.network.AcDcConverter;
 import com.powsybl.iidm.network.BoundaryLine;
 import com.powsybl.iidm.network.Branch;
-import com.powsybl.iidm.network.Connectable;
 import com.powsybl.iidm.network.DcSwitch;
 import com.powsybl.iidm.network.Generator;
 import com.powsybl.iidm.network.HvdcConverterStation;
@@ -34,11 +32,9 @@ import com.powsybl.iidm.network.Load;
 import com.powsybl.iidm.network.LoadingLimits;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.OperationalLimitsGroup;
-import com.powsybl.iidm.network.PhaseTapChanger;
 import com.powsybl.iidm.network.ShuntCompensator;
 import com.powsybl.iidm.network.StaticVarCompensator;
 import com.powsybl.iidm.network.Switch;
-import com.powsybl.iidm.network.TapChanger;
 import com.powsybl.iidm.network.Terminal;
 import com.powsybl.iidm.network.ThreeWindingsTransformer;
 import com.powsybl.iidm.network.TwoWindingsTransformer;
@@ -68,14 +64,9 @@ import java.util.regex.Pattern;
 
 import static com.powsybl.cgmes.conversion.Conversion.ALIAS_DC_TERMINAL1;
 import static com.powsybl.cgmes.conversion.Conversion.ALIAS_DC_TERMINAL2;
-import static com.powsybl.cgmes.conversion.Conversion.ALIAS_PHASE_TAP_CHANGER1;
-import static com.powsybl.cgmes.conversion.Conversion.ALIAS_PHASE_TAP_CHANGER2;
-import static com.powsybl.cgmes.conversion.Conversion.ALIAS_RATIO_TAP_CHANGER1;
-import static com.powsybl.cgmes.conversion.Conversion.ALIAS_RATIO_TAP_CHANGER2;
 import static com.powsybl.cgmes.conversion.Conversion.ALIAS_TERMINAL1;
 import static com.powsybl.cgmes.conversion.Conversion.ALIAS_TERMINAL2;
 import static com.powsybl.cgmes.conversion.Conversion.PROPERTY_CGMES_ORIGINAL_CLASS;
-import static com.powsybl.cgmes.conversion.Conversion.PROPERTY_IS_EQUIVALENT_SHUNT;
 import static com.powsybl.cgmes.conversion.export.CgmesPropertyBuffer.merge;
 import static com.powsybl.cgmes.conversion.export.CgmesPropertyBuffer.newUpdates;
 import static com.powsybl.commons.util.Result.failure;
@@ -157,7 +148,6 @@ class CgmesChangeTranslator {
     // Tap changers: a change is reported on the transformer, as prefix + end + suffix. A ratio tap changer regulates
     // through its VoltageRegulation, whose suffixes are the VR_ names above: "ratioTapChanger2.VoltageRegulation.TargetValue"
     static final String TAP_POSITION_SUFFIX = ".tapPosition";
-    private static final String TAP_POSITION = "tapPosition";
     static final String REGULATING_SUFFIX = ".regulating";
     static final String REGULATION_VALUE_SUFFIX = ".regulationValue";
     static final String TARGET_DEADBAND_SUFFIX = ".targetDeadband";
@@ -191,11 +181,8 @@ class CgmesChangeTranslator {
     private static final String MERGED_VOLTAGE_LEVEL_ALIAS_PREFIX =
             Conversion.CGMES_PREFIX_ALIAS_PROPERTIES + "MergedVoltageLevel";
 
-    private static final String REGULATING_COND_EQ_CONTROL_ENABLED = "RegulatingCondEq.controlEnabled";
     private static final String ACDC_TERMINAL_CONNECTED = "ACDCTerminal.connected";
 
-    private static final Set<String> SHUNT_ATTRIBUTES =
-            RegulatingControlFamily.union(Set.of(SECTION_COUNT), RegulatingControlFamily.SHUNT_KEYS);
     private static final Set<String> HVDC_LINE_ATTRIBUTES = Set.of(ACTIVE_POWER_SETPOINT, CONVERTERS_MODE);
     private static final Set<String> AC_DC_CONVERTER_ATTRIBUTES = RegulatingControlFamily.union(
             Set.of(TARGET_P, TARGET_VDC, CONTROL_MODE, POWER_FACTOR), VsConverterControlFamily.KEYS);
@@ -556,166 +543,6 @@ class CgmesChangeTranslator {
                 .updates());
     }
 
-    // Tap changers
-
-    /**
-     * The tap changer an attribute name points at, and what of it changed.
-     *
-     * @param phase  whether the attribute names a phase tap changer rather than a ratio one
-     * @param end    the end the tap changer sits on, {@code ""} for a two windings transformer
-     * @param suffix the changed property, without its leading dot
-     */
-    private record TapChangerAttribute(boolean phase, String end, String suffix) {
-    }
-
-    /**
-     * The attributes of a tap changer this exporter maps. Everything else it may report, such as a solved position
-     * or the regulation terminal of a phase tap changer, has no counterpart in the steady state hypothesis profile.
-     * A ratio tap changer regulates through its VoltageRegulation, whose attributes carry a dotted suffix of their
-     * own; the mode, the terminal and the slope are matched so that they can be refused with a reason.
-     */
-    private static final Pattern TAP_CHANGER_ATTRIBUTE = Pattern.compile(
-            "^(?:(ratio)TapChanger([123]?)\\.(tapPosition|VoltageRegulation\\.(?:TargetValue|TargetDeadband|isRegulating|RegulationMode|Terminal|Slope))"
-                    + "|(phase)TapChanger([123]?)\\.(tapPosition|regulating|regulationValue|targetDeadband|regulationMode))$");
-
-    private static TapChangerAttribute tapChangerAttribute(String attribute) {
-        Matcher matcher = TAP_CHANGER_ATTRIBUTE.matcher(attribute);
-        if (!matcher.matches()) {
-            return null;
-        }
-        return matcher.group(1) != null
-                ? new TapChangerAttribute(false, matcher.group(2), matcher.group(3))
-                : new TapChangerAttribute(true, matcher.group(5), matcher.group(6));
-    }
-
-    private Result<CgmesPropertyBuffer, String> twoWindingsTapChangerUpdates(TwoWindingsTransformer transformer,
-                                                                           TapChangerAttribute attribute) {
-        if (!attribute.end().isEmpty()) {
-            return noTapChangerMatching(transformer, attribute);
-        }
-        if (attribute.phase() && transformer.hasPhaseTapChanger()) {
-            return tapChangerUpdates(transformer, CgmesExportUtil.tapChangerAliasType(transformer, ALIAS_PHASE_TAP_CHANGER1, ALIAS_PHASE_TAP_CHANGER2),
-                    CgmesNames.PHASE_TAP_CHANGER_TABULAR, tapChangerRef(transformer, attribute, transformer.getPhaseTapChanger()), attribute);
-        }
-        if (!attribute.phase() && transformer.hasRatioTapChanger()) {
-            return tapChangerUpdates(transformer, CgmesExportUtil.tapChangerAliasType(transformer, ALIAS_RATIO_TAP_CHANGER1, ALIAS_RATIO_TAP_CHANGER2),
-                    CgmesNames.RATIO_TAP_CHANGER, tapChangerRef(transformer, attribute, transformer.getRatioTapChanger()), attribute);
-        }
-        return noTapChangerMatching(transformer, attribute);
-    }
-
-    private Result<CgmesPropertyBuffer, String> threeWindingsTapChangerUpdates(ThreeWindingsTransformer transformer,
-                                                                             TapChangerAttribute attribute) {
-        ThreeWindingsTransformer.Leg leg = leg(transformer, attribute.end());
-        if (leg == null || (attribute.phase() ? !leg.hasPhaseTapChanger() : !leg.hasRatioTapChanger())) {
-            return noTapChangerMatching(transformer, attribute);
-        }
-        return attribute.phase()
-                ? tapChangerUpdates(transformer, CgmesExportUtil.getPhaseTapChangerAliasType(attribute.end()),
-                        CgmesNames.PHASE_TAP_CHANGER_TABULAR, tapChangerRef(transformer, attribute, leg.getPhaseTapChanger()), attribute)
-                : tapChangerUpdates(transformer, CgmesExportUtil.getRatioTapChangerAliasType(attribute.end()),
-                        CgmesNames.RATIO_TAP_CHANGER, tapChangerRef(transformer, attribute, leg.getRatioTapChanger()), attribute);
-    }
-
-    private static Result<CgmesPropertyBuffer, String> noTapChangerMatching(Identifiable<?> transformer, TapChangerAttribute attribute) {
-        return failure(transformer.getType() + " " + transformer.getId() + " has no "
-                + (attribute.phase() ? "phase" : "ratio") + " tap changer on end '" + attribute.end() + "'");
-    }
-
-    private static ThreeWindingsTransformer.Leg leg(ThreeWindingsTransformer transformer, String end) {
-        return switch (end) {
-            case "1" -> transformer.getLeg1();
-            case "2" -> transformer.getLeg2();
-            case "3" -> transformer.getLeg3();
-            default -> null;
-        };
-    }
-
-    /** The name a recorded change gives the given tap changer, which is how its previous values are looked up. */
-    private static TapChangerRef tapChangerRef(Identifiable<?> transformer, TapChangerAttribute attribute,
-                                               TapChanger<?, ?, ?, ?> tapChanger) {
-        return new TapChangerRef(transformer,
-                (attribute.phase() ? PHASE_TAP_CHANGER_PREFIX : RATIO_TAP_CHANGER_PREFIX) + attribute.end(), tapChanger);
-    }
-
-    /**
-     * The properties describing a change of the given tap changer: its own block, which the CGMES update reads as a
-     * whole, and the TapChangerControl carrying its regulation when the regulation is what changed.
-     */
-    private <C extends Connectable<C>> Result<CgmesPropertyBuffer, String> tapChangerUpdates(
-            C transformer, String aliasType, String defaultClassName,
-            TapChangerRef ref, TapChangerAttribute attribute) {
-        CgmesPropertyBuffer tapChangerBlock = collect(out -> describeTapChanger(transformer, aliasType, defaultClassName, ref, out));
-        if (TAP_POSITION.equals(attribute.suffix())) {
-            return success(tapChangerBlock);
-        }
-        return regulatingControls.tapChangerUpdates(transformer, aliasType, ref, attribute.suffix(), state)
-                .map(regulatingControl -> merge(tapChangerBlock, regulatingControl));
-    }
-
-    /** Describe the block of one tap changer: its step and its control flag. */
-    <C extends Connectable<C>> void describeTapChanger(C transformer, String aliasType, String defaultClassName,
-                                                       TapChangerRef ref, CgmesPropertySink out) {
-        TapChanger<?, ?, ?, ?> tapChanger = ref.tapChanger();
-        String className = defaultClassName;
-        if (tapChanger instanceof PhaseTapChanger && !context.isExportEquipment()) {
-            className = CgmesExportUtil.getPhaseTapChangerType(transformer, transformer.getAliasFromType(aliasType).orElse(null));
-        }
-        tapChangerBlock(out, className, cgmesIdFromAlias(transformer, aliasType), RegulatingControlFamily.tapChangerFlag(ref, state),
-                ref.getInt(state, TAP_POSITION_SUFFIX, tapChanger::getTapPosition));
-    }
-
-    /**
-     * Describe the tap changer the import combined into the only one IIDM kept, with the step it recorded: an export
-     * of the steady state hypothesis without the equipment model still has to write it.
-     */
-    static void describeHiddenTapChanger(CgmesTapChanger hiddenTapChanger, String defaultClassName, CgmesPropertySink out) {
-        tapChangerBlock(out, Optional.ofNullable(hiddenTapChanger.getType()).orElse(defaultClassName), hiddenTapChanger.getId(),
-                false, hiddenTapChanger.getStep().orElseThrow(
-                        () -> new PowsyblException("Non null step expected for tap changer " + hiddenTapChanger.getId())));
-    }
-
-    private static void tapChangerBlock(CgmesPropertySink out, String className, String id, boolean controlEnabled, int step) {
-        out.startObject(className, id)
-                .value("TapChanger.controlEnabled", controlEnabled)
-                .value("TapChanger.step", step)
-                .endObject();
-    }
-
-    // Shunt compensators
-
-    Result<CgmesPropertyBuffer, String> shuntCompensatorUpdates(ShuntCompensator shunt, String attribute) {
-        // The CGMES update reads the section count and the control flag of a shunt as one block, so every change
-        // of either writes both. Only a change of the regulation itself also describes the RegulatingControl.
-        Optional<String> refusal = Boolean.parseBoolean(shunt.getProperty(PROPERTY_IS_EQUIVALENT_SHUNT))
-                ? Optional.of(Refusal.EQUIVALENT_SHUNT.message("shunt compensator " + shunt.getId()
-                    + " is exported as an EquivalentShunt, which has no steady state properties."))
-                : RegulationKeyRefusals.importGivesRegulation(shunt, scope);
-        return unlessRefused(refusal, out -> describeShunt(shunt, out)).flatMap(shuntBlock -> switch (attribute) {
-            case SECTION_COUNT -> success(shuntBlock);
-            default -> regulatingControls.updatesOf(shunt, state).map(regulatingControl -> merge(shuntBlock, regulatingControl));
-        });
-    }
-
-    private static String shuntClassName(ShuntCompensator shunt) {
-        return switch (shunt.getModelType()) {
-            case LINEAR -> "LinearShuntCompensator";
-            case NON_LINEAR -> "NonlinearShuntCompensator";
-        };
-    }
-
-    // Static var compensators
-
-    Result<CgmesPropertyBuffer, String> staticVarCompensatorUpdates(StaticVarCompensator svc) {
-        // The CGMES update reads the reactive power and the control flag of a compensator as one block, and the
-        // single target of its RegulatingControl is the one matching the current mode, so a change of the target
-        // of the other mode is not observable in the SSH profile. StaticVarCompensator.q is the local reactive power
-        // target in both directions since powsybl-core #3699.
-        return unlessRefused(RegulationKeyRefusals.importGivesRegulation(svc, scope), out -> describeStaticVarCompensator(svc, out))
-                .flatMap(svcBlock -> regulatingControls.updatesOf(svc, state)
-                .map(regulatingControl -> merge(svcBlock, regulatingControl)));
-    }
-
     // HVDC
 
     /**
@@ -987,7 +814,7 @@ class CgmesChangeTranslator {
     private static OperationalLimitsGroup groupOf(Identifiable<?> owner, String prefix, String groupId) {
         return switch (owner) {
             case ThreeWindingsTransformer transformer -> {
-                ThreeWindingsTransformer.Leg leg = leg(transformer, prefix.substring(LIMITS_PREFIX.length()));
+                ThreeWindingsTransformer.Leg leg = TapChangerAndShuntFamily.leg(transformer, prefix.substring(LIMITS_PREFIX.length()));
                 yield leg == null ? null : leg.getOperationalLimitsGroup(groupId).orElse(null);
             }
             case Branch<?> branch -> switch (prefix) {
@@ -1015,7 +842,7 @@ class CgmesChangeTranslator {
         return switch (ref.slot().owner()) {
             case ThreeWindingsTransformer transformer -> {
                 ThreeWindingsTransformer.Leg transformerLeg =
-                        leg(transformer, ref.slot().prefix().substring(LIMITS_PREFIX.length()));
+                        TapChangerAndShuntFamily.leg(transformer, ref.slot().prefix().substring(LIMITS_PREFIX.length()));
                 yield transformerLeg == null ? null : transformerLeg.getTerminal();
             }
             case Branch<?> branch -> (LIMITS_PREFIX + "1").equals(ref.slot().prefix())
@@ -1451,29 +1278,6 @@ class CgmesChangeTranslator {
     private static boolean symmetric(double side1, double side2) {
         double difference = Math.abs(side1 - side2);
         return difference <= 1e-9 * Math.max(Math.abs(side1), Math.abs(side2));
-    }
-
-    /**
-     * Describe the section count and the control flag of a shunt compensator that is not an EquivalentShunt, the block
-     * the CGMES update reads as a whole.
-     */
-    void describeShunt(ShuntCompensator shunt, CgmesPropertySink out) {
-        out.startObject(shuntClassName(shunt), cgmesId(shunt))
-                .value("ShuntCompensator.sections", state.getInt(shunt, SECTION_COUNT, shunt::getSectionCount))
-                .value(REGULATING_COND_EQ_CONTROL_ENABLED, RegulatingControlFamily.flag(RegulationRef.of(shunt), state))
-                .endObject();
-    }
-
-    /**
-     * Describe the control flag and the reactive power of a static var compensator, the block the CGMES update reads
-     * as a whole. StaticVarCompensator.q is the local reactive power target in both directions since powsybl-core #3699.
-     */
-    void describeStaticVarCompensator(StaticVarCompensator svc, CgmesPropertySink out) {
-        RegulationRef regulation = RegulationRef.of(svc);
-        out.startObject("StaticVarCompensator", cgmesId(svc))
-                .value(REGULATING_COND_EQ_CONTROL_ENABLED, RegulatingControlFamily.flag(regulation, state))
-                .value("StaticVarCompensator.q", regulation.localTargetQ(state))
-                .endObject();
     }
 
     /**
