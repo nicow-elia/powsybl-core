@@ -50,7 +50,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * digest of its properties in the order they are written (name and lexical value). One {@code ORDER} row per fixture
  * holds a digest of the sequence of the subjects, which pins the order of the sections and of the controls.
  *
- * <p>The fixtures are those of {@link ExportMappingEquivalenceTest}. The header is kept without its identifier and
+ * <p>The fixtures are those of {@link FullExportExpectationTest}. The header is kept without its identifier and
  * without {@code Model.created}, which change on every export. The rows are committed in {@value #EXPECTED} and checked
  * both ways: every subject written has its row, every committed row is written. {@code -Dsnapshot.regenerate=true}
  * rewrites the file from the observed rows, for a review of the diff, as {@code RegulationSetterMatrixTest} does with
@@ -76,14 +76,14 @@ class FullSshExportSnapshotTest {
     private static final Map<String, List<String>> OBSERVED = new ConcurrentHashMap<>();
     private static final Map<String, List<String>> EXPECTED_ROWS = expectedRows();
 
-    static List<ExportMappingEquivalenceTest.Fixture> fixtures() {
-        return ExportMappingEquivalenceTest.fixtures();
+    static List<FullExportExpectationTest.Fixture> fixtures() {
+        return FullExportExpectationTest.fixtures();
     }
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("fixtures")
-    void theFullSshExportIsTheCommittedSnapshot(ExportMappingEquivalenceTest.Fixture fixture) {
-        List<Subject> subjects = subjects(ExportMappingEquivalenceTest.fullSsh(fixture.loader().get()));
+    void theFullSshExportIsTheCommittedSnapshot(FullExportExpectationTest.Fixture fixture) {
+        List<Subject> subjects = subjects(FullExportExpectationTest.fullSsh(fixture.loader().get()));
         List<String> rows = new ArrayList<>();
         subjects.forEach(subject -> rows.add(subject.row(fixture.name())));
         rows.add(fixture.name() + "\t" + ORDER + "\t\t" + digest(subjects.stream()
@@ -118,7 +118,7 @@ class FullSshExportSnapshotTest {
         StringBuilder subjects = new StringBuilder("# fixture\tclass\tmRID\tdigest (FullSshExportSnapshotTest: 12 hex digits"
                 + " of SHA-256 over the properties of the subject in written order)\n");
         StringBuilder order = new StringBuilder("# fixture\tORDER\t\tdigest of the sequence of the subjects\n");
-        for (ExportMappingEquivalenceTest.Fixture fixture : fixtures()) {
+        for (FullExportExpectationTest.Fixture fixture : fixtures()) {
             // A fixture that failed has no rows and is left out: the next run then fails on it
             for (String row : OBSERVED.getOrDefault(fixture.name(), List.of())) {
                 (row.contains("\t" + ORDER + "\t") ? order : subjects).append(row).append('\n');

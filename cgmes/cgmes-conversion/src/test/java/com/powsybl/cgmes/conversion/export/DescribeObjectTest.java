@@ -17,6 +17,8 @@ import com.powsybl.iidm.network.*;
 import com.powsybl.iidm.network.events.ExtensionUpdateNetworkEvent;
 import com.powsybl.iidm.network.events.NetworkEvent;
 import com.powsybl.iidm.network.events.UpdateNetworkEvent;
+import com.powsybl.iidm.network.extensions.ActivePowerControl;
+import com.powsybl.iidm.network.extensions.ReferencePriorities;
 import com.powsybl.iidm.network.regulation.RegulationMode;
 import com.powsybl.iidm.network.test.BatteryNetworkFactory;
 import com.powsybl.iidm.network.test.FourSubstationsNodeBreakerFactory;
@@ -36,9 +38,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code CgmesChangeTranslator.*Updates}, which asks the object refusals and then the one describe function of the
  * family), and that description is the one the event path writes.
  *
- * <p>In {@link Scope#CHANGES}, for every object of every fixture of {@link ExportMappingEquivalenceTest}: every
- * statement the event path writes for a probe of the object (the probes of the guard, one per attribute the translator
- * matches on, extension probes included) is described with the same value, and a value both write is the same. So an
+ * <p>In {@link Scope#CHANGES}, for every object of every fixture of {@link FullExportExpectationTest}: every
+ * statement the event path writes for a probe of the object (one per attribute the translator matches on, extension
+ * probes included) is described with the same value, and a value both write is the same. So an
  * object the description refuses (a holder the import would give a regulation to, a generator in another mode than
  * the CGMES mode its import recorded) is refused by every path of the event mapping too, the extension probes
  * included. The description may say more than the event path where the event path writes a block only together with a
@@ -57,8 +59,8 @@ class DescribeObjectTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("com.powsybl.cgmes.conversion.export.ExportMappingEquivalenceTest#fixtures")
-    void theDescriptionIsWhatTheEventPathWrites(ExportMappingEquivalenceTest.Fixture fixture) {
+    @MethodSource("com.powsybl.cgmes.conversion.export.FullExportExpectationTest#fixtures")
+    void theDescriptionIsWhatTheEventPathWrites(FullExportExpectationTest.Fixture fixture) {
         Network network = fixture.loader().get();
         CgmesExportContext context = new CgmesExportContext(network);
         // The controls the translator reads too, so that a TapChangerControl is described from the same index
@@ -74,7 +76,7 @@ class DescribeObjectTest {
                 continue;
             }
             Map<CgmesStatement.Key, Value> byDescription = statements(descriptions, context);
-            for (String probe : ExportMappingEquivalenceTest.probes(identifiable)) {
+            for (String probe : probes(identifiable)) {
                 if (probe.contains("@")) {
                     continue; // a loading limit, equipment data the descriptions do not cover
                 }
@@ -124,8 +126,8 @@ class DescribeObjectTest {
         CgmesChangeTranslator fullModel = CgmesChangeTranslator.forFullModel(network, context);
         RegulatingControlFamily changeControls = new RegulatingControlFamily(network, context, Scope.CHANGES);
         RegulatingControlFamily fullModelControls = new RegulatingControlFamily(network, context, Scope.FULL_MODEL);
-        Map<ExportMappingEquivalenceTest.Key, ExportMappingEquivalenceTest.Triple> fullExport =
-                ExportMappingEquivalenceTest.parse(ExportMappingEquivalenceTest.fullSsh(network), context.getCim().getNamespace());
+        Map<FullExportExpectationTest.Key, FullExportExpectationTest.Triple> fullExport =
+                FullExportExpectationTest.parse(FullExportExpectationTest.fullSsh(network), context.getCim().getNamespace());
         boolean refusedAsChange = false;
         for (String id : ids) {
             Identifiable<?> identifiable = network.getIdentifiable(id);
@@ -136,11 +138,11 @@ class DescribeObjectTest {
             Map<CgmesStatement.Key, Value> described = statements(descriptions, context);
             assertTrue(!described.isEmpty(), id);
             described.forEach((key, value) -> {
-                ExportMappingEquivalenceTest.Triple written = fullExport.get(
-                        new ExportMappingEquivalenceTest.Key(key.subjectId(), key.property()));
+                FullExportExpectationTest.Triple written = fullExport.get(
+                        new FullExportExpectationTest.Key(key.subjectId(), key.property()));
                 assertTrue(written != null, () -> id + ": the full export does not write " + key + " = " + value);
-                assertEquals(ExportMappingEquivalenceTest.comparable(written),
-                        ExportMappingEquivalenceTest.comparable(new ExportMappingEquivalenceTest.Triple(key.subjectId(),
+                assertEquals(FullExportExpectationTest.comparable(written),
+                        FullExportExpectationTest.comparable(new FullExportExpectationTest.Triple(key.subjectId(),
                                 value.className(), key.property(), value.value(), written.kind())),
                         () -> id + " " + key);
             });
@@ -160,7 +162,7 @@ class DescribeObjectTest {
         CgmesChangeTranslator translator = new CgmesChangeTranslator(network, new CgmesExportContext(network),
                 PartialSshExport.UnsupportedChangeBehavior.IGNORE);
         String variantId = network.getVariantManager().getWorkingVariantId();
-        for (String probe : ExportMappingEquivalenceTest.probes(generator)) {
+        for (String probe : probes(generator)) {
             Result<CgmesPropertyBuffer, String> result = translator.translate(event(generator, probe, variantId));
             assertTrue(result instanceof Result.Failure(String reason)
                     && Refusal.of(reason).orElse(null) == Refusal.IMPORT_GIVES_REGULATION, () -> probe + ": " + result);
@@ -188,6 +190,69 @@ class DescribeObjectTest {
             assertTrue(result instanceof Result.Failure(String reason) && reason.contains("belongs to no HVDC line"),
                     result::toString);
         }
+    }
+
+    /**
+     * Every attribute of an object the change mapping matches on: what the event path is asked about, so that each
+     * consistency group the mapping writes is reached.
+     */
+    private static List<String> probes(Identifiable<?> identifiable) {
+        return switch (identifiable) {
+            case Switch ignored -> List.of(CgmesChangeTranslator.OPEN);
+            case DcSwitch ignored -> List.of(CgmesChangeTranslator.OPEN);
+            case Load ignored -> List.of(CgmesChangeTranslator.P0, CgmesChangeTranslator.Q0);
+            case Generator ignored -> List.of(CgmesChangeTranslator.TARGET_P, CgmesChangeTranslator.LOCAL_TARGET_Q,
+                    CgmesChangeTranslator.LOCAL_TARGET_V, CgmesChangeTranslator.VR_TARGET_VALUE,
+                    CgmesChangeTranslator.VR_REGULATING,
+                    ActivePowerControl.NAME + "#" + CgmesChangeTranslator.PARTICIPATION_FACTOR,
+                    ReferencePriorities.NAME + "#" + CgmesChangeTranslator.REFERENCE_PRIORITY);
+            case BoundaryLine ignored -> List.of(CgmesChangeTranslator.P0, CgmesChangeTranslator.Q0,
+                    CgmesChangeTranslator.TARGET_P, CgmesChangeTranslator.TARGET_Q, CgmesChangeTranslator.TARGET_V,
+                    CgmesChangeTranslator.VOLTAGE_REGULATION_ON, CgmesChangeTranslator.R, CgmesChangeTranslator.X,
+                    CgmesChangeTranslator.G, CgmesChangeTranslator.B);
+            case Line ignored -> List.of(CgmesChangeTranslator.R, CgmesChangeTranslator.X, CgmesChangeTranslator.G1,
+                    CgmesChangeTranslator.B1);
+            case VoltageLevel ignored -> List.of(CgmesChangeTranslator.HIGH_VOLTAGE_LIMIT,
+                    CgmesChangeTranslator.LOW_VOLTAGE_LIMIT);
+            case ShuntCompensator ignored -> List.of(CgmesChangeTranslator.SECTION_COUNT,
+                    CgmesChangeTranslator.LOCAL_TARGET_V, CgmesChangeTranslator.VR_TARGET_VALUE,
+                    CgmesChangeTranslator.VR_REGULATING, CgmesChangeTranslator.VR_TARGET_DEADBAND);
+            case StaticVarCompensator ignored -> List.of(CgmesChangeTranslator.LOCAL_TARGET_Q,
+                    CgmesChangeTranslator.LOCAL_TARGET_V, CgmesChangeTranslator.VR_TARGET_VALUE,
+                    CgmesChangeTranslator.VR_REGULATING);
+            case HvdcLine ignored -> List.of(CgmesChangeTranslator.ACTIVE_POWER_SETPOINT,
+                    CgmesChangeTranslator.CONVERTERS_MODE);
+            case VscConverterStation ignored -> List.of(CgmesChangeTranslator.LOCAL_TARGET_Q,
+                    CgmesChangeTranslator.LOCAL_TARGET_V, CgmesChangeTranslator.VR_TARGET_VALUE,
+                    CgmesChangeTranslator.VR_REGULATING, CgmesChangeTranslator.VR_MODE);
+            case LccConverterStation ignored -> List.of(CgmesChangeTranslator.POWER_FACTOR);
+            case AcDcConverter<?> ignored -> List.of(CgmesChangeTranslator.TARGET_P, CgmesChangeTranslator.TARGET_VDC,
+                    CgmesChangeTranslator.CONTROL_MODE, CgmesChangeTranslator.POWER_FACTOR,
+                    CgmesChangeTranslator.LOCAL_TARGET_Q, CgmesChangeTranslator.LOCAL_TARGET_V,
+                    CgmesChangeTranslator.VR_TARGET_VALUE, CgmesChangeTranslator.VR_REGULATING,
+                    CgmesChangeTranslator.VR_MODE);
+            case TwoWindingsTransformer ignored -> tapChangerProbes("");
+            case ThreeWindingsTransformer ignored -> tapChangerProbes("1", "2", "3");
+            default -> List.of();
+        };
+    }
+
+    /** A phase tap changer regulates through its own attributes, a ratio tap changer through its VoltageRegulation. */
+    private static List<String> tapChangerProbes(String... ends) {
+        List<String> probes = new ArrayList<>();
+        for (String end : ends) {
+            String phase = CgmesChangeTranslator.PHASE_TAP_CHANGER_PREFIX + end;
+            for (String suffix : List.of(CgmesChangeTranslator.TAP_POSITION_SUFFIX, CgmesChangeTranslator.REGULATING_SUFFIX,
+                    CgmesChangeTranslator.REGULATION_VALUE_SUFFIX, CgmesChangeTranslator.TARGET_DEADBAND_SUFFIX)) {
+                probes.add(phase + suffix);
+            }
+            String ratio = CgmesChangeTranslator.RATIO_TAP_CHANGER_PREFIX + end;
+            for (String suffix : List.of(CgmesChangeTranslator.TAP_POSITION_SUFFIX, "." + CgmesChangeTranslator.VR_REGULATING,
+                    "." + CgmesChangeTranslator.VR_TARGET_VALUE, "." + CgmesChangeTranslator.VR_TARGET_DEADBAND)) {
+                probes.add(ratio + suffix);
+            }
+        }
+        return probes;
     }
 
     private static NetworkEvent event(Identifiable<?> identifiable, String probe, String variantId) {
