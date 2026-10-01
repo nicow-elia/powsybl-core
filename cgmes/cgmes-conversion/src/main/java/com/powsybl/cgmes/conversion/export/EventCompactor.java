@@ -230,10 +230,6 @@ final class EventCompactor {
      */
     static String attributeKey(UpdateNetworkEvent event) {
         String attribute = event.attribute();
-        if (attribute.indexOf(KEY_SEPARATOR.charAt(0)) >= 0) {
-            // Already a refined key: a synthetic event that names one limit
-            return attribute;
-        }
         Object payload = event.newValue() != null ? event.newValue() : event.oldValue();
         return switch (payload) {
             case PermanentLimitInfo info -> attribute + KEY_SEPARATOR + info.groupId();

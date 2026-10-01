@@ -78,9 +78,6 @@ class DescribeObjectTest {
             }
             Map<CgmesStatement.Key, Value> byDescription = statements(descriptions, context);
             for (String probe : probes(identifiable)) {
-                if (probe.contains("@")) {
-                    continue; // a loading limit, equipment data the descriptions do not cover
-                }
                 if (translator.translate(event(identifiable, probe, variantId)) instanceof Result.Success(CgmesPropertyBuffer buffer)) {
                     for (CgmesStatement statement : buffer.statements(CgmesSubset.STEADY_STATE_HYPOTHESIS, context)) {
                         Value value = byDescription.get(statement.key());

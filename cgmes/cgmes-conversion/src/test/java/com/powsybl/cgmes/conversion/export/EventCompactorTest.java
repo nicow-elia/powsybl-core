@@ -181,13 +181,6 @@ class EventCompactorTest {
         assertTrue(changes.hasChange("L", "limits1_CURRENT@A"));
     }
 
-    /** A key a difference model importer builds itself is already refined and must not be refined twice. */
-    @Test
-    void anAlreadyRefinedKeyIsKept() {
-        UpdateNetworkEvent probe = update("L", "limits1_CURRENT.permanentLimit@A", null, null);
-        assertEquals("limits1_CURRENT.permanentLimit@A", EventCompactor.attributeKey(probe));
-    }
-
     @Test
     void firstEventIndexFollowsLogOrder() {
         UpdateNetworkEvent member = permanentLimit("A", 100.0, 110.0);
