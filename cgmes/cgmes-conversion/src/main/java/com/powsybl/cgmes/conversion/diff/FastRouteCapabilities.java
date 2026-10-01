@@ -9,6 +9,7 @@ package com.powsybl.cgmes.conversion.diff;
 
 import com.powsybl.cgmes.conversion.export.MachineFamily;
 import com.powsybl.cgmes.conversion.export.RegulatingControlFamily;
+import com.powsybl.cgmes.conversion.export.SwitchAndTerminalFamily;
 import com.powsybl.cgmes.conversion.export.TapChangerAndShuntFamily;
 import com.powsybl.cgmes.conversion.mapping.Block;
 import com.powsybl.cgmes.conversion.mapping.LoadRows;
@@ -180,7 +181,6 @@ public final class FastRouteCapabilities {
         }
     }
 
-    private static final String ACDC_TERMINAL_CONNECTED = "ACDCTerminal.connected";
     private static final String ACDC_CONVERTER_P = "ACDCConverter.p";
     private static final String ACDC_CONVERTER_Q = "ACDCConverter.q";
     private static final String ACDC_CONVERTER_TARGET_PPCC = "ACDCConverter.targetPpcc";
@@ -305,15 +305,9 @@ public final class FastRouteCapabilities {
 
     private static List<FamilySpec> table0() {
         List<FamilySpec> table = new ArrayList<>();
-        table.add(ssh(Family.SWITCH, "switches", "Switch",
-                Set.of("Switch", "Breaker", "Disconnector", "LoadBreakSwitch", "ProtectedSwitch",
-                        "GroundDisconnector", "Jumper"),
-                List.of(PropertyGroup.of("Switch.open"))));
-        table.add(ssh(Family.TERMINAL, "terminals", "Terminal", Set.of("Terminal"),
-                List.of(PropertyGroup.of(ACDC_TERMINAL_CONNECTED)), VariantSafety.NETWORK_DEPENDENT));
-        table.add(ssh(Family.DC_TERMINAL, "dcTerminals", "DCTerminal",
-                Set.of("DCTerminal", "ACDCConverterDCTerminal"),
-                List.of(PropertyGroup.of(ACDC_TERMINAL_CONNECTED))));
+        table.add(ssh(Family.SWITCH, SwitchAndTerminalFamily.SWITCH, VariantSafety.SAFE));
+        table.add(ssh(Family.TERMINAL, SwitchAndTerminalFamily.TERMINAL, VariantSafety.NETWORK_DEPENDENT));
+        table.add(ssh(Family.DC_TERMINAL, SwitchAndTerminalFamily.DC_TERMINAL, VariantSafety.SAFE));
         // The families of a load are data rows: query, classes and the one group they are read in come from the rows
         // (the asynchronous machine's four properties are one required block, powsybl-core #4103)
         LOAD_FAMILIES.forEach((family, rows) -> table.add(ssh(family, rows.block(), VariantSafety.SAFE)));

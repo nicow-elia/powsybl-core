@@ -227,7 +227,7 @@ class DescribeObjectTest {
             // The block and the control of a static var compensator, which the update reads as one group
             case StaticVarCompensator svc -> descriptions.add(translator.tapChangers.staticVarCompensatorUpdates(svc));
             case BoundaryLine boundaryLine -> descriptions.add(translator.machines.boundaryLineUpdates(boundaryLine));
-            case Switch sw -> descriptions.add(translator.switchUpdates(sw));
+            case Switch sw -> descriptions.add(translator.switches.switchUpdates(sw));
             case HvdcLine line -> {
                 descriptions.add(translator.converterStationUpdates(line.getConverterStation1()));
                 descriptions.add(translator.converterStationUpdates(line.getConverterStation2()));

@@ -88,7 +88,7 @@ public final class SteadyStateHypothesisExport {
             if (context.isExportedEquipment(sw)) {
                 String switchType = sw.getProperty(PROPERTY_CGMES_ORIGINAL_CLASS); // may be null
                 if (!isSwitchImportedFromAcLineSegmentEquivalentBranchOrSeriesCompensator(switchType)) {
-                    mapping.describeSwitch(sw, out);
+                    mapping.switches.describeSwitch(sw, out);
                 }
             }
         }

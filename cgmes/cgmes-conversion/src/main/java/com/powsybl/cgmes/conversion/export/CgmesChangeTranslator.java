@@ -210,6 +210,7 @@ class CgmesChangeTranslator {
     final LoadFamily loads;
     final MachineFamily machines;
     final TapChangerAndShuntFamily tapChangers;
+    final SwitchAndTerminalFamily switches;
     /** Who reads the description: which objects it may name and which refusals it honours. */
     private final Scope scope;
     /** Built on first use, so that a change set without limits never pays for the walk it costs. */
@@ -256,6 +257,7 @@ class CgmesChangeTranslator {
         this.loads = new LoadFamily(context, state, scope);
         this.machines = new MachineFamily(context, state, scope, this.regulatingControls);
         this.tapChangers = new TapChangerAndShuntFamily(context, state, scope, this.regulatingControls);
+        this.switches = new SwitchAndTerminalFamily(context, state, scope);
     }
 
     /**
@@ -428,8 +430,8 @@ class CgmesChangeTranslator {
         }
         TapChangerAndShuntFamily.TapChangerAttribute tapChangerAttribute = TapChangerAndShuntFamily.tapChangerAttribute(attribute);
         return switch (identifiable) {
-            case Switch sw when OPEN.equals(attribute) -> switchUpdates(sw);
-            case DcSwitch dcSwitch when OPEN.equals(attribute) -> dcSwitchUpdates(dcSwitch);
+            case Switch sw when OPEN.equals(attribute) -> switches.switchUpdates(sw);
+            case DcSwitch dcSwitch when OPEN.equals(attribute) -> switches.dcSwitchUpdates(dcSwitch);
             case Load load when LoadRows.keys().contains(attribute) -> loads.loadUpdates(load);
             case BoundaryLine boundaryLine when MachineFamily.BOUNDARY_LINE_KEYS.contains(attribute) -> machines.boundaryLineUpdates(boundaryLine);
             case Generator generator when MachineFamily.GENERATOR_KEYS.contains(attribute) -> machines.generatorUpdates(generator, attribute);

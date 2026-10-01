@@ -9,6 +9,7 @@ package com.powsybl.cgmes.conversion.diff;
 
 import com.powsybl.cgmes.conversion.diff.DiffSubjectResolver.ResolvedSubject;
 import com.powsybl.cgmes.conversion.export.MachineFamily;
+import com.powsybl.cgmes.conversion.export.SwitchAndTerminalFamily;
 import com.powsybl.cgmes.conversion.export.TapChangerAndShuntFamily;
 import com.powsybl.cgmes.conversion.mapping.LoadRows;
 import com.powsybl.iidm.network.BoundaryLine;
@@ -60,7 +61,6 @@ final class DiffProbes {
     private static final List<String> LCC = List.of("powerFactor");
     private static final List<String> DETAILED_CONVERTER = List.of("targetP", "targetVdc", "controlMode",
             LOCAL_TARGET_Q, LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING, VR_MODE, "powerFactor");
-    private static final List<String> SWITCH = List.of("open");
     private static final List<String> LINE = List.of("r", "x", "g1", "b1");
     private static final List<String> VOLTAGE_LEVEL = List.of("highVoltageLimit", "lowVoltageLimit");
     private static final List<String> BOUNDARY_LINE_IMPEDANCE = List.of("r", "x", "g", "b");
@@ -95,7 +95,7 @@ final class DiffProbes {
 
     private static List<String> ownerProbes(Identifiable<?> owner) {
         return switch (owner) {
-            case Switch ignored -> SWITCH;
+            case Switch ignored -> SwitchAndTerminalFamily.PROBES;
             case Load ignored -> LoadRows.keys();
             case Generator ignored -> MachineFamily.GENERATOR_PROBES;
             case BoundaryLine ignored -> concat(MachineFamily.BOUNDARY_LINE_PROBES, BOUNDARY_LINE_IMPEDANCE);
@@ -110,7 +110,7 @@ final class DiffProbes {
             case LineCommutatedConverter ignored -> DETAILED_CONVERTER;
             case TwoWindingsTransformer ignored -> TapChangerAndShuntFamily.transformerProbes("");
             case ThreeWindingsTransformer ignored -> TapChangerAndShuntFamily.transformerProbes("1", "2", "3");
-            case DcSwitch ignored -> SWITCH;
+            case DcSwitch ignored -> SwitchAndTerminalFamily.PROBES;
             default -> List.of();
         };
     }
