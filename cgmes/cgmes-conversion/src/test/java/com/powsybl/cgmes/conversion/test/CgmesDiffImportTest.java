@@ -75,6 +75,12 @@ class CgmesDiffImportTest {
         return readCgmesResources(LOAD_DIR, LOAD_FILES);
     }
 
+    private static final String CONTROL_AREA = "ControlArea";
+
+    private static Network controlArea() {
+        return readCgmesResources("/update/control-area/", "controlArea_EQ.xml", "controlArea_EQ_BD.xml", "controlArea_SSH.xml");
+    }
+
     /** The difference model set of a change, written out and read back, as a receiver would get it. */
     private static DifferenceModelSet differenceOf(Network sender, Consumer<Network> change,
                                                    CgmesDiffExport.DiffGranularity granularity,
@@ -328,6 +334,38 @@ class CgmesDiffImportTest {
                 new CgmesDiffImport.Options().setReverseCheck(CgmesDiffImport.ReverseCheck.FAIL)).route());
     }
 
+    /**
+     * A control area is described like any other subject: its reverse statement is checked against the interchange
+     * target of the receiver, and a difference stating the interchange alone is completed with the tolerance the
+     * receiver holds.
+     */
+    @Test
+    void aDriftedControlAreaFailsTheReverseCheck() {
+        Network sender = controlArea();
+        Network receiver = controlArea();
+        DifferenceModelSet set = differenceOf(sender, n -> n.getArea(CONTROL_AREA).setInterchangeTarget(250.0));
+        receiver.getArea(CONTROL_AREA).setInterchangeTarget(99.0);
+
+        CgmesDiffImport.Decision decision = CgmesDiffImport.canApplyInPlace(receiver, set,
+                new CgmesDiffImport.Options().setReverseCheck(CgmesDiffImport.ReverseCheck.FAIL));
+        assertEquals(CgmesDiffImport.Route.SLOW_REQUIRED, decision.route());
+        assertTrue(decision.reasons().stream().anyMatch(reason -> reason.contains("differs from the expected value")),
+                decision.reasons().toString());
+    }
+
+    @Test
+    void aControlAreaDifferenceStatingTheInterchangeOnlyIsCompleted() {
+        Network sender = controlArea();
+        Network receiver = controlArea();
+        DifferenceModelSet set = differenceOf(sender, n -> n.getArea(CONTROL_AREA).setInterchangeTarget(250.0),
+                CgmesDiffExport.DiffGranularity.CHANGED_ONLY, options -> { });
+        assertEquals(1, set.get(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow().forward().size());
+
+        assertEquals(CgmesDiffImport.Route.FAST, CgmesDiffImport.apply(receiver, set, previousValues(), ReportNode.NO_OP).route());
+        assertEquals(250.0, receiver.getArea(CONTROL_AREA).getInterchangeTarget().orElseThrow(), 1e-9);
+        assertEquals(10.0, Double.parseDouble(receiver.getArea(CONTROL_AREA).getProperty("pTolerance")), 1e-9);
+    }
+
     // Empty and blocked differences leave the network alone
 
     @Test
@@ -507,11 +545,13 @@ class CgmesDiffImportTest {
     void incompleteGroupThatCannotBeCompletedIsRejected() {
         Network network = readCgmesResources("/update/control-area/",
                 "controlArea_EQ.xml", "controlArea_EQ_BD.xml", "controlArea_SSH.xml");
-        String areaId = network.getAreaStream().findFirst().orElseThrow().getId();
+        // An area that is not of the interchange type is no CGMES ControlArea: the mapping refuses to describe it
+        String areaId = network.newArea().setId("Region").setAreaType("Region").add().getId();
         // pTolerance alone: the required netInterchange of the same group is missing, and no mapping produces it
         List<String> reasons = reasons(network, handMade(
                 List.of(CgmesStatement.literal(areaId, null, "ControlArea.pTolerance", "5")), List.of()));
-        assertTrue(reasons.get(0).contains("ControlArea.netInterchange"), reasons.toString());
+        assertTrue(reasons.get(0).contains("ControlArea.netInterchange")
+                && reasons.get(0).contains("only an area of type ControlAreaTypeKind.Interchange"), reasons.toString());
     }
 
     // Section 6 of the plan: an update must not reconnect a terminal it says nothing about

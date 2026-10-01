@@ -175,9 +175,6 @@ class FullExportExpectationTest {
         new OnlyInFull("ACDC_CONVERTER_DC_TERMINAL_CONNECTED", Set.of("ACDCConverterDCTerminal"), Set.of(), row -> true,
             "COVERAGE GAP: a converter DC terminal has no mapped IIDM change; the full export writes it always"
                 + " connected (simplified model), or from DcTerminal.isConnected() (detailed model)"),
-        new OnlyInFull("CONTROL_AREA", Set.of("ControlArea"), Set.of(), row -> true,
-            "a change of the interchange target describes the ControlArea, but the description of the network the"
-                + " in-place import completes a group from does not name areas (open point of P2)"),
         new OnlyInFull("CS_CONVERTER_CONSTANTS", Set.of(CgmesNames.CS_CONVERTER),
             Set.of("CsConverter.targetAlpha", "CsConverter.targetGamma", "CsConverter.targetIdc"), row -> true,
             "constant 0 written by the full export; IIDM holds no such attribute"),

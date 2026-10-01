@@ -470,6 +470,7 @@ class CgmesChangeTranslator {
             case AcDcConverter<?> converter -> List.of(hvdc.acDcConverterUpdates(converter, TARGET_P));
             case TwoWindingsTransformer transformer -> tapChangers.blocks(transformer);
             case ThreeWindingsTransformer transformer -> tapChangers.blocks(transformer);
+            case Area area -> List.of(controlAreas.controlAreaUpdates(area));
             default -> List.of();
         };
     }
