@@ -136,47 +136,22 @@ the same SPARQL queries and the same conversion code, so the two cannot drift ap
 
 ### Updatable properties
 
-| CIM classes | properties read together |
-| --- | --- |
-| `Switch`, `Breaker`, `Disconnector`, `LoadBreakSwitch`, `ProtectedSwitch`, `GroundDisconnector`, `Jumper` | `Switch.open` |
-| `Terminal` | `ACDCTerminal.connected` |
-| `DCTerminal`, `ACDCConverterDCTerminal` | `ACDCTerminal.connected` |
-| `EnergyConsumer`, `ConformLoad`, `NonConformLoad`, `StationSupply` | `EnergyConsumer.p`, `EnergyConsumer.q` |
-| `EnergySource` | `EnergySource.activePower`, `EnergySource.reactivePower` |
-| `AsynchronousMachine` | `RotatingMachine.p`, `RotatingMachine.q`, `AsynchronousMachine.asynchronousMachineType`, `RegulatingCondEq.controlEnabled` |
-| `SynchronousMachine` | `RotatingMachine.p`; `RotatingMachine.q`, `SynchronousMachine.referencePriority`, `SynchronousMachine.operatingMode`, `RegulatingCondEq.controlEnabled` |
-| `ExternalNetworkInjection` | `ExternalNetworkInjection.p`, `.q`, `.referencePriority`, `RegulatingCondEq.controlEnabled` |
-| `EquivalentInjection` | `EquivalentInjection.p`, `.q` (+ optional `.regulationStatus`, `.regulationTarget`) |
-| `GeneratingUnit` and its subclasses | `GeneratingUnit.normalPF` |
-| `StaticVarCompensator` | `StaticVarCompensator.q`, `RegulatingCondEq.controlEnabled` |
-| `LinearShuntCompensator`, `NonlinearShuntCompensator` | `ShuntCompensator.sections`, `RegulatingCondEq.controlEnabled` |
-| `RatioTapChanger` | `TapChanger.step`, `TapChanger.controlEnabled` |
-| `PhaseTapChanger*` (five flavours) | `TapChanger.step`, `TapChanger.controlEnabled` |
-| `RegulatingControl`, `TapChangerControl` | `RegulatingControl.enabled`, `.targetValue`, `.targetValueUnitMultiplier`, `.discrete` (+ optional `.targetDeadband`) |
-| `CsConverter` | `ACDCConverter.targetPpcc`, `.targetUdc`, `.p`, `.q`; `CsConverter.operatingMode`, `CsConverter.pPccControl` |
-| `VsConverter` | `ACDCConverter.*` as above; `VsConverter.pPccControl`, `.qPccControl` (+ optional `.targetQpcc`, `.targetUpcc`) |
-| `ControlArea` | `ControlArea.netInterchange` (+ optional `ControlArea.pTolerance`) |
-| `CurrentLimit`, `ActivePowerLimit`, `ApparentPowerLimit`, `VoltageLimit` | `<Class>.value` |
+The properties a difference can update in place are the blocks of the mapping, listed with their CIM classes, their
+update query and their variant safety on the generated {ref}`mapping page <cgmes-mapping>` (section "In-place import
+of a difference").
 
-Properties inside one cell are read by one SPARQL block, so stating one of them without the others would silently do
-nothing. The importer completes the missing ones from the receiving network instead, which is what makes a minimal
-difference applicable. The state variable properties of the update catalogue (`SvPowerFlow.*`, `SvVoltage.*`,
+The required properties of one block are read by one SPARQL block, so stating one of them without the others would
+silently do nothing. The importer completes the missing ones from the receiving network instead, which is what makes a
+minimal difference applicable. The state variable properties of the update catalogue (`SvPowerFlow.*`, `SvVoltage.*`,
 `SvInjection.*`, `SvTapStep.*`, `SvShuntCompensatorSections.*`, `Terminal.TopologicalNode`,
 `ACDCConverter.poleLossP`) are explicitly outside the in-place route.
 
-The limit values above belong to the equipment profile in CGMES 2.4.15 and to the steady state hypothesis in
-CGMES 3; a document that puts them in the other profile of its CIM version is refused, because the receiver would
-never read them.
+The operational limit values (`CurrentLimit`, `ActivePowerLimit`, `ApparentPowerLimit`, `VoltageLimit`) belong to the
+equipment profile in CGMES 2.4.15 and to the steady state hypothesis in CGMES 3; a document that puts them in the
+other profile of its CIM version is refused, because the receiver would never read them.
 
-These equipment properties have no update query at all and are applied with IIDM setters after the update workflow,
-which is why they are listed separately:
-
-| CIM classes | properties applied with a setter |
-| --- | --- |
-| `ACLineSegment` | `ACLineSegment.r`, `.x`, `.gch`, `.bch` |
-| `SeriesCompensator` | `SeriesCompensator.r`, `.x` |
-| `EquivalentBranch` | `EquivalentBranch.r`, `.x`, `.r21`, `.x21` |
-| `VoltageLevel` | `VoltageLevel.highVoltageLimit`, `.lowVoltageLimit` |
+The equipment blocks without update query (the impedances of `ACLineSegment`, `SeriesCompensator` and
+`EquivalentBranch`, and the limits of a `VoltageLevel`) are applied with IIDM setters after the update workflow.
 
 `gch` and `bch` are split equally over the two ends of a line and taken as they stand on a boundary line, which is
 exactly what the conversion of a full equipment model does. An `EquivalentBranch` states the impedance of both

@@ -884,7 +884,8 @@ refused with `variant mode addresses snapshots`.
 ### Which changes stay inside a variant
 
 IIDM stores the *operating* values per variant and the *equipment description* once per network. That is the whole
-of the rule, and the table below is its machine-readable form (`FastRouteCapabilities.VariantSafety`). Every row is
+of the rule, and the table below explains its machine-readable form (`FastRouteCapabilities.VariantSafety`, the
+verdict of each family is on the generated {ref}`mapping page <cgmes-mapping>`). Every row is
 asserted against `iidm-impl` by `VariantSafetyProbeTest`: the 61 characterized changes of
 `RecordedChangeScenarios` are swept in both directions, and the four original network-dependent rules and the control-area
 row &mdash; for which no characterized change exists &mdash; have receivers built for them, with and without the
