@@ -78,15 +78,13 @@ public final class MachineFamily extends AbstractFamily {
     /** The keys of a generator a change of which describes its machine or its control. */
     static final Set<String> GENERATOR_KEYS = Stream.concat(MACHINE_KEYS.stream(), RegulatingControlFamily.GENERATOR_KEYS.stream())
             .collect(Collectors.toUnmodifiableSet());
-    /** The keys of a boundary line a change of which describes the EquivalentInjection at its boundary. */
-    static final Set<String> BOUNDARY_LINE_KEYS = Set.of(P0, Q0, TARGET_P, TARGET_Q, TARGET_V, VOLTAGE_REGULATION_ON);
-
     /** What the in-place import asks about a generator: every key, and the extension attributes of its blocks. */
     public static final List<String> GENERATOR_PROBES = List.of(TARGET_P, LOCAL_TARGET_Q, LOCAL_TARGET_V, VR_TARGET_VALUE,
             VR_REGULATING, ActivePowerControl.NAME + CgmesObjectDump.EXTENSION_SEPARATOR + PARTICIPATION_FACTOR,
             ReferencePriorities.NAME + CgmesObjectDump.EXTENSION_SEPARATOR + REFERENCE_PRIORITY);
-    /** What the in-place import asks about the EquivalentInjection of a boundary line. */
+    /** What the in-place import asks about the EquivalentInjection of a boundary line, and the keys a change of it has. */
     public static final List<String> BOUNDARY_LINE_PROBES = List.of(P0, Q0, TARGET_P, TARGET_Q, TARGET_V, VOLTAGE_REGULATION_ON);
+    static final Set<String> BOUNDARY_LINE_KEYS = Set.copyOf(BOUNDARY_LINE_PROBES);
 
     // The blocks the CGMES update reads. The p and q of a SynchronousMachine are two optional blocks of its query, but
     // the conversion only takes either when BOTH are bound (SynchronousMachineConversion: the updated power flow has to
@@ -217,7 +215,7 @@ public final class MachineFamily extends AbstractFamily {
 
     /** Describe the SynchronousMachine of a battery, which no change describes: read as the network stands. */
     void describeBattery(Battery battery, CgmesPropertySink out) {
-        synchronousMachineBlock(out, cgmesId(battery), RegulatingControlFamily.flag(RegulationRef.of(battery), IidmStateView.LIVE),
+        synchronousMachineBlock(out, cgmesId(battery), RegulatingControlFamily.flag(RegulationRef.of(battery), state),
                 -battery.getTargetP(), -battery.getRegulatingTargetQ(),
                 ReferencePriority.get(battery), obtainOperatingMode(battery, battery.getMinP(),
                         battery.getMaxP(), battery.getTargetP(), state));

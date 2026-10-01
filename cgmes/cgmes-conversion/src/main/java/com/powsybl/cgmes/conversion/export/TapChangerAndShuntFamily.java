@@ -27,8 +27,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import static com.powsybl.cgmes.conversion.Conversion.ALIAS_PHASE_TAP_CHANGER1;
 import static com.powsybl.cgmes.conversion.Conversion.ALIAS_PHASE_TAP_CHANGER2;
@@ -70,15 +68,18 @@ public final class TapChangerAndShuntFamily extends AbstractFamily {
     private static final String TAP_CHANGER_STEP = "TapChanger.step";
     private static final String TAP_CHANGER_CONTROL_ENABLED = "TapChanger.controlEnabled";
 
-    /** The keys of a shunt compensator: its section count and the keys of its control. */
-    static final Set<String> SHUNT_KEYS = Stream.concat(Stream.of(SECTION_COUNT), RegulatingControlFamily.SHUNT_KEYS.stream())
-            .collect(Collectors.toUnmodifiableSet());
-
-    /** What the in-place import asks about a shunt compensator and a static var compensator. */
+    /**
+     * The keys of a shunt compensator (its section count, the targets and the flag of its control, and the deadband, which
+     * the CGMES update reads for shunt compensators and tap changers only) and of a static var compensator (the local
+     * reactive power target too: the single target of its control is the one of its mode), in the order the in-place
+     * import probes them. The dispatch of the change export reads the same keys.
+     */
     public static final List<String> SHUNT_PROBES = List.of(SECTION_COUNT, LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING,
             VR_TARGET_DEADBAND);
     public static final List<String> STATIC_VAR_COMPENSATOR_PROBES = List.of(LOCAL_TARGET_Q, LOCAL_TARGET_V, VR_TARGET_VALUE,
             VR_REGULATING);
+    static final Set<String> SHUNT_KEYS = Set.copyOf(SHUNT_PROBES);
+    static final Set<String> STATIC_VAR_COMPENSATOR_KEYS = Set.copyOf(STATIC_VAR_COMPENSATOR_PROBES);
     /** The suffixes of a phase tap changer, which are prefixed by the name a recorded change gives it. */
     private static final List<String> PHASE_TAP_CHANGER_SUFFIXES = List.of(TAP_POSITION_SUFFIX, REGULATING_SUFFIX,
             REGULATION_VALUE_SUFFIX, TARGET_DEADBAND_SUFFIX);
@@ -86,6 +87,7 @@ public final class TapChangerAndShuntFamily extends AbstractFamily {
     private static final List<String> RATIO_TAP_CHANGER_SUFFIXES = List.of(TAP_POSITION_SUFFIX, "." + VR_REGULATING,
             "." + VR_TARGET_VALUE, "." + VR_TARGET_DEADBAND);
 
+    // The blocks the CGMES update reads as a whole: the control flag with the reactive power, the sections or the step
     public static final Block STATIC_VAR_COMPENSATOR = new Block("staticVarCompensators",
             List.of("StaticVarCompensator"), "StaticVarCompensator.q", REGULATING_COND_EQ_CONTROL_ENABLED);
     public static final Block SHUNT_COMPENSATOR = new Block("shuntCompensators",

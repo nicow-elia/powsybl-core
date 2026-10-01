@@ -39,7 +39,6 @@ import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import static com.powsybl.cgmes.conversion.Conversion.ALIAS_PHASE_TAP_CHANGER1;
 import static com.powsybl.cgmes.conversion.Conversion.ALIAS_PHASE_TAP_CHANGER2;
@@ -138,13 +137,11 @@ public final class RegulatingControlFamily {
             .flatMap(key -> key.echoes().stream().map(echo -> Map.entry(echo, key.canonical())))
             .collect(Collectors.groupingBy(Map.Entry::getKey, Collectors.mapping(Map.Entry::getValue, Collectors.toUnmodifiableSet())));
 
-    /** The keys of a holder whose change describes its control: the targets and the flag. */
-    private static final Set<String> CONTROL_KEYS = Set.of(LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING);
-    static final Set<String> GENERATOR_KEYS = CONTROL_KEYS;
-    /** The CGMES update reads the deadband of a RegulatingControl for shunt compensators (and tap changers) only. */
-    static final Set<String> SHUNT_KEYS = union(CONTROL_KEYS, Set.of(VR_TARGET_DEADBAND));
-    /** The single target of a compensator is the one of its mode: the local reactive power target too. */
-    static final Set<String> STATIC_VAR_COMPENSATOR_KEYS = union(CONTROL_KEYS, Set.of(LOCAL_TARGET_Q));
+    /**
+     * The keys of a holder whose change describes its control: the targets and the flag. A shunt compensator and a
+     * static var compensator declare theirs with their blocks ({@link TapChangerAndShuntFamily}).
+     */
+    static final Set<String> GENERATOR_KEYS = Set.of(LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING);
 
     private final Network network;
     private final CgmesExportContext context;
@@ -165,10 +162,6 @@ public final class RegulatingControlFamily {
     }
 
     // The keys
-
-    static Set<String> union(Set<String> first, Set<String> second) {
-        return Stream.concat(first.stream(), second.stream()).collect(Collectors.toUnmodifiableSet());
-    }
 
     /**
      * The canonical keys the given change repeats when it is an echo, an empty set when it is not one.

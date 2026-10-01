@@ -399,7 +399,7 @@ class CgmesChangeTranslator {
             case TwoWindingsTransformer transformer when tapChangerAttribute != null -> tapChangers.twoWindingsTapChangerUpdates(transformer, tapChangerAttribute);
             case ThreeWindingsTransformer transformer when tapChangerAttribute != null -> tapChangers.threeWindingsTapChangerUpdates(transformer, tapChangerAttribute);
             case ShuntCompensator shunt when TapChangerAndShuntFamily.SHUNT_KEYS.contains(attribute) -> tapChangers.shuntCompensatorUpdates(shunt, attribute);
-            case StaticVarCompensator svc when RegulatingControlFamily.STATIC_VAR_COMPENSATOR_KEYS.contains(attribute) -> tapChangers.staticVarCompensatorUpdates(svc);
+            case StaticVarCompensator svc when TapChangerAndShuntFamily.STATIC_VAR_COMPENSATOR_KEYS.contains(attribute) -> tapChangers.staticVarCompensatorUpdates(svc);
             case HvdcLine hvdcLine when HvdcFamily.LINE_KEYS.contains(attribute) -> hvdc.hvdcLineUpdates(hvdcLine, attribute);
             case LccConverterStation converter when POWER_FACTOR.equals(attribute) -> hvdc.lccPowerFactorUpdates(converter);
             case AcDcConverter<?> converter when HvdcFamily.CONVERTER_KEYS.contains(attribute) -> hvdc.acDcConverterUpdates(converter, attribute);
