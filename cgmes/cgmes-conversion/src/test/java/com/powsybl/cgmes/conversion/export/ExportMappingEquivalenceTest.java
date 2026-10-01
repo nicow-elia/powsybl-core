@@ -309,16 +309,18 @@ class ExportMappingEquivalenceTest {
                 + " rtc-reactive-power, a changesOnly refusal), the full export writes it"),
         new OnlyInFull("BATTERY", Set.of(CgmesNames.SYNCHRONOUS_MACHINE), Set.of(),
             row -> row.facts().batteries().contains(row.key().subject()),
-            "the full export writes a battery as a SynchronousMachine; the shared mapping has no battery, which the"
-                + " CGMES import never creates (a second copy of the machine block, left to the full export)"),
+            "the full export writes a battery as a SynchronousMachine (describeBattery, the machine block of a"
+                + " generator); no change names a battery, which the CGMES import never creates"),
         new OnlyInFull("FICTITIOUS_INJECTION", Set.of(CgmesNames.ENERGY_SOURCE, CgmesNames.NONCONFORM_LOAD), Set.of(),
             row -> row.facts().fictitiousInjections().contains(row.key().subject()),
             "the fictitious injection of a node or a bus, written by the full export as a NonConformLoad or an"
-                + " EnergySource under a generated identifier; the shared mapping has no mapping for it"),
+                + " EnergySource under a generated identifier (describeFictitiousInjection, the injection block of a"
+                + " load); no change names it"),
         new OnlyInFull("HIDDEN_TAP_CHANGER", TAP_CHANGER_CLASSES, Set.of(),
             row -> row.facts().hiddenTapChangers().contains(row.key().subject()),
             "the tap changer the import combined into another one and kept hidden, written by the full export of an"
-                + " SSH alone with the step it recorded; IIDM has no such tap changer, the shared mapping none to describe"),
+                + " SSH alone with the step it recorded (describeHiddenTapChanger, the block of a tap changer); IIDM has"
+                + " no such tap changer, no change names it"),
         new OnlyInFull("CURRENT_LIMITER_OPERATIONAL_LIMIT", LIMIT_CLASSES, Set.of(),
             row -> row.facts().currentLimiterLimits().contains(row.key().subject()),
             "the full equipment export writes the regulation value of a phase tap changer limiting current as a"

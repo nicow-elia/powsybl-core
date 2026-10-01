@@ -70,7 +70,7 @@ public final class SteadyStateHypothesisExport {
             }
 
             writeLoads(network, mapping, out, context);
-            writeFictitiousInjections(network, cimNamespace, writer, out, context);
+            writeFictitiousInjections(network, cimNamespace, writer, context);
             writeEquivalentInjections(network, mapping, out, context);
             writeTapChangers(network, mapping, regulatingControlViews, out, context);
             writeGenerators(network, mapping, regulatingControlViews, out, context);
@@ -173,17 +173,17 @@ public final class SteadyStateHypothesisExport {
         }
     }
 
-    private static void writeFictitiousInjections(Network network, String cimNamespace, XMLStreamWriter writer, CgmesPropertySink out, CgmesExportContext context) {
+    private static void writeFictitiousInjections(Network network, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
         for (VoltageLevel vl : network.getVoltageLevels()) {
             if (vl.getTopologyKind() == TopologyKind.NODE_BREAKER && !context.isBusBranchExport()) {
-                writeNodeBreakerFictitiousInjections(vl, cimNamespace, writer, out, context);
+                writeNodeBreakerFictitiousInjections(vl, cimNamespace, writer, context);
             } else {
-                writeBusBranchFictitiousInjections(vl, cimNamespace, writer, out, context);
+                writeBusBranchFictitiousInjections(vl, cimNamespace, writer, context);
             }
         }
     }
 
-    private static void writeNodeBreakerFictitiousInjections(VoltageLevel vl, String cimNamespace, XMLStreamWriter writer, CgmesPropertySink out, CgmesExportContext context) {
+    private static void writeNodeBreakerFictitiousInjections(VoltageLevel vl, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
         VoltageLevel.NodeBreakerView nb = vl.getNodeBreakerView();
         for (int node : nb.getNodes()) {
             double p = nb.getFictitiousP0(node);
@@ -191,27 +191,27 @@ public final class SteadyStateHypothesisExport {
             if (p != 0.0 || q != 0.0) {
                 String loadId = context.getNamingStrategy().getCgmesId(refTyped(vl), FICTITIOUS, ref("NCL"), ref(node));
                 String terminalId = context.getNamingStrategy().getCgmesId(refTyped(vl), FICTITIOUS, TERMINAL, ref(node));
-                writeFictitiousInjection(loadId, terminalId, p, q, cimNamespace, writer, out, context);
+                writeFictitiousInjection(loadId, terminalId, p, q, cimNamespace, writer, context);
             }
         }
     }
 
-    private static void writeBusBranchFictitiousInjections(VoltageLevel vl, String cimNamespace, XMLStreamWriter writer, CgmesPropertySink out, CgmesExportContext context) {
+    private static void writeBusBranchFictitiousInjections(VoltageLevel vl, String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
         for (Bus b : vl.getBusBreakerView().getBuses()) {
             double p = b.getFictitiousP0();
             double q = b.getFictitiousQ0();
             if (p != 0.0 || q != 0.0) {
                 String loadId = context.getNamingStrategy().getCgmesId(refTyped(b), FICTITIOUS, ref("NCL"));
                 String terminalId = context.getNamingStrategy().getCgmesId(refTyped(b), FICTITIOUS, TERMINAL);
-                writeFictitiousInjection(loadId, terminalId, p, q, cimNamespace, writer, out, context);
+                writeFictitiousInjection(loadId, terminalId, p, q, cimNamespace, writer, context);
             }
         }
     }
 
     private static void writeFictitiousInjection(String loadId, String terminalId, double p, double q,
-                                                 String cimNamespace, XMLStreamWriter writer, CgmesPropertySink out,
-                                                 CgmesExportContext context) {
-        CgmesChangeTranslator.describeFictitiousInjection(loadId, p, q, out);
+                                                 String cimNamespace, XMLStreamWriter writer,
+                                                 CgmesExportContext context) throws XMLStreamException {
+        CgmesChangeTranslator.describeFictitiousInjection(loadId, p, q, new CgmesPropertySink.Xml(cimNamespace, writer, context));
         // Terminal connected state (always connected in SSH for fictitious terminals)
         writeTerminal(terminalId, true, cimNamespace, writer, context);
     }
