@@ -50,12 +50,8 @@ class DiffProbesKeysTest {
      * refused whatever the state, so the group it should complete would silently lose it.
      */
     @Test
-    @SuppressWarnings("unchecked")
-    void everyExtensionProbeOfAGeneratorIsMapped() throws ReflectiveOperationException {
-        Class<?> probes = Class.forName("com.powsybl.cgmes.conversion.diff.DiffProbes");
-        Field field = probes.getDeclaredField("GENERATOR");
-        field.setAccessible(true);
-        List<String> extensionProbes = ((List<String>) field.get(null)).stream().filter(p -> p.contains("#")).toList();
+    void everyExtensionProbeOfAGeneratorIsMapped() {
+        List<String> extensionProbes = MachineFamily.GENERATOR_PROBES.stream().filter(p -> p.contains("#")).toList();
         assertEquals(2, extensionProbes.size(), extensionProbes::toString);
         Network network = ConversionUtil.readCgmesResources("/update/generator/", "generator_EQ.xml", "generator_SSH.xml");
         CgmesObjectDump dump = new CgmesObjectDump(network);

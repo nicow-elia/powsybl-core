@@ -8,6 +8,7 @@
 package com.powsybl.cgmes.conversion.diff;
 
 import com.powsybl.cgmes.conversion.diff.DiffSubjectResolver.ResolvedSubject;
+import com.powsybl.cgmes.conversion.export.MachineFamily;
 import com.powsybl.cgmes.conversion.mapping.LoadRows;
 import com.powsybl.iidm.network.BoundaryLine;
 import com.powsybl.iidm.network.DcSwitch;
@@ -53,10 +54,6 @@ final class DiffProbes {
     private static final String VR_TARGET_DEADBAND = "VoltageRegulation.TargetDeadband";
     private static final String VR_MODE = "VoltageRegulation.RegulationMode";
 
-    private static final List<String> GENERATOR = List.of("targetP", LOCAL_TARGET_Q, LOCAL_TARGET_V, VR_TARGET_VALUE,
-            VR_REGULATING, "activePowerControl#participationFactor", "referencePriorities#referencePriority");
-    private static final List<String> BOUNDARY_LINE = List.of("p0", "q0", "targetP", "targetQ", "targetV",
-            "voltageRegulationOn");
     private static final List<String> SHUNT = List.of("sectionCount", LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING,
             VR_TARGET_DEADBAND);
     private static final List<String> SVC = List.of(LOCAL_TARGET_Q, LOCAL_TARGET_V, VR_TARGET_VALUE, VR_REGULATING);
@@ -111,8 +108,8 @@ final class DiffProbes {
         return switch (owner) {
             case Switch ignored -> SWITCH;
             case Load ignored -> LoadRows.keys();
-            case Generator ignored -> GENERATOR;
-            case BoundaryLine ignored -> concat(BOUNDARY_LINE, BOUNDARY_LINE_IMPEDANCE);
+            case Generator ignored -> MachineFamily.GENERATOR_PROBES;
+            case BoundaryLine ignored -> concat(MachineFamily.BOUNDARY_LINE_PROBES, BOUNDARY_LINE_IMPEDANCE);
             case Line ignored -> LINE;
             case VoltageLevel ignored -> VOLTAGE_LEVEL;
             case ShuntCompensator ignored -> SHUNT;

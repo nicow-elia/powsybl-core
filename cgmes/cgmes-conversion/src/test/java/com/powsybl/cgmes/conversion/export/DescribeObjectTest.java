@@ -209,9 +209,9 @@ class DescribeObjectTest {
         switch (identifiable) {
             case Load load -> descriptions.add(translator.loads.loadUpdates(load));
             case Generator generator -> {
-                descriptions.add(translator.generatorMachineUpdates(generator));
+                descriptions.add(translator.machines.generatorMachineUpdates(generator));
                 if (generator.hasProperty(Conversion.PROPERTY_GENERATING_UNIT)) {
-                    descriptions.add(translator.participationFactorUpdates(generator, null));
+                    descriptions.add(translator.machines.participationFactorUpdates(generator, null));
                 }
                 if (!CgmesNames.EQUIVALENT_INJECTION.equals(generator.getProperty(Conversion.PROPERTY_CGMES_ORIGINAL_CLASS))
                         && generator.getVoltageRegulation() != null) {
@@ -226,7 +226,7 @@ class DescribeObjectTest {
             }
             // The block and the control of a static var compensator, which the update reads as one group
             case StaticVarCompensator svc -> descriptions.add(translator.staticVarCompensatorUpdates(svc));
-            case BoundaryLine boundaryLine -> descriptions.add(translator.boundaryLineUpdates(boundaryLine));
+            case BoundaryLine boundaryLine -> descriptions.add(translator.machines.boundaryLineUpdates(boundaryLine));
             case Switch sw -> descriptions.add(translator.switchUpdates(sw));
             case HvdcLine line -> {
                 descriptions.add(translator.converterStationUpdates(line.getConverterStation1()));

@@ -214,7 +214,7 @@ public final class SteadyStateHypothesisExport {
         for (BoundaryLine bl : network.getBoundaryLines(BoundaryLineFilter.ALL)) {
             String equivalentInjectionId = context.getNamingStrategy().getCgmesIdFromProperty(bl, PROPERTY_EQUIVALENT_INJECTION);
             if (!exported.contains(equivalentInjectionId)) {
-                mapping.describeBoundaryInjection(bl, out);
+                mapping.machines.describeBoundaryInjection(bl, out);
                 exported.add(equivalentInjectionId);
             }
         }
@@ -302,14 +302,14 @@ public final class SteadyStateHypothesisExport {
 
             switch (cgmesOriginalClass) {
                 case CgmesNames.EQUIVALENT_INJECTION:
-                    mapping.describeEquivalentInjection(g, out);
+                    mapping.machines.describeEquivalentInjection(g, out);
                     break;
                 case CgmesNames.EXTERNAL_NETWORK_INJECTION:
-                    mapping.describeExternalNetworkInjection(g, out);
+                    mapping.machines.describeExternalNetworkInjection(g, out);
                     addRegulatingControlView(RegulationRef.of(g), getRegulatingControlId(g, context), regulatingControlViews, context);
                     break;
                 case CgmesNames.SYNCHRONOUS_MACHINE:
-                    mapping.describeSynchronousMachine(g, out);
+                    mapping.machines.describeSynchronousMachine(g, out);
                     addRegulatingControlView(RegulationRef.of(g), getRegulatingControlId(g, context), regulatingControlViews, context);
                     break;
                 default:
@@ -320,7 +320,7 @@ public final class SteadyStateHypothesisExport {
 
     private static void writeBatteries(Network network, CgmesChangeTranslator mapping, CgmesPropertySink out) {
         for (Battery b : network.getBatteries()) {
-            mapping.describeBattery(b, out);
+            mapping.machines.describeBattery(b, out);
         }
     }
 
@@ -477,7 +477,7 @@ public final class SteadyStateHypothesisExport {
             }
         }
         for (MachineFamily.GeneratingUnit gu : generatingUnits.values()) {
-            CgmesChangeTranslator.describeGeneratingUnit(gu, out);
+            MachineFamily.describeGeneratingUnit(gu, out);
         }
     }
 

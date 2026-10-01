@@ -42,6 +42,11 @@ public record PlainFamily<O>(String updateQuery, List<String> cimClasses, List<P
         return rows.stream().map(PlainRow::property).toList();
     }
 
+    /** The block of the family: every row is required, the update query reads them as one group. */
+    public Block block() {
+        return new Block(updateQuery, cimClasses, properties(), List.of());
+    }
+
     /**
      * Set the IIDM values the import reads: from the values the update query bound when it bound all of them, from
      * the given fallback otherwise (the query binds a group as a whole or not at all).

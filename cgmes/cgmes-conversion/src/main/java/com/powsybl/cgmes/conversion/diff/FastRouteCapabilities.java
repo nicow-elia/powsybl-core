@@ -7,6 +7,8 @@
  */
 package com.powsybl.cgmes.conversion.diff;
 
+import com.powsybl.cgmes.conversion.export.MachineFamily;
+import com.powsybl.cgmes.conversion.mapping.Block;
 import com.powsybl.cgmes.conversion.mapping.LoadRows;
 import com.powsybl.cgmes.conversion.mapping.PlainFamily;
 import com.powsybl.cgmes.model.CgmesNamespace;
@@ -178,8 +180,6 @@ public final class FastRouteCapabilities {
 
     private static final String ACDC_TERMINAL_CONNECTED = "ACDCTerminal.connected";
     private static final String REGULATING_COND_EQ_CONTROL_ENABLED = "RegulatingCondEq.controlEnabled";
-    private static final String ROTATING_MACHINE_P = "RotatingMachine.p";
-    private static final String ROTATING_MACHINE_Q = "RotatingMachine.q";
     private static final String ACDC_CONVERTER_P = "ACDCConverter.p";
     private static final String ACDC_CONVERTER_Q = "ACDCConverter.q";
     private static final String ACDC_CONVERTER_TARGET_PPCC = "ACDCConverter.targetPpcc";
@@ -315,32 +315,11 @@ public final class FastRouteCapabilities {
                 List.of(PropertyGroup.of(ACDC_TERMINAL_CONNECTED))));
         // The families of a load are data rows: query, classes and the one group they are read in come from the rows
         // (the asynchronous machine's four properties are one required block, powsybl-core #4103)
-        LOAD_FAMILIES.forEach((family, rows) -> table.add(ssh(family, rows.updateQuery(), rows.cimClasses().get(0),
-                Set.copyOf(rows.cimClasses()), List.of(PropertyGroup.of(rows.properties().toArray(String[]::new))))));
-        // The query reads p and q in two optional blocks, but the conversion only takes either of them when BOTH
-        // are bound (SynchronousMachineConversion: the updated power flow has to be "defined"). A difference that
-        // states the active power alone would therefore be read, accepted and silently not applied, so the two
-        // travel together here exactly as they do for an asynchronous machine; the rest of the group is optional
-        table.add(ssh(Family.SYNCHRONOUS_MACHINE, "synchronousMachinesForUpdate", "SynchronousMachine",
-                Set.of("SynchronousMachine"),
-                List.of(new PropertyGroup(Set.of(ROTATING_MACHINE_P, ROTATING_MACHINE_Q),
-                        Set.of("SynchronousMachine.referencePriority", "SynchronousMachine.operatingMode",
-                                REGULATING_COND_EQ_CONTROL_ENABLED))),
-                VariantSafety.NETWORK_DEPENDENT));
-        table.add(ssh(Family.EXTERNAL_NETWORK_INJECTION, "externalNetworkInjections", "ExternalNetworkInjection",
-                Set.of("ExternalNetworkInjection"),
-                List.of(PropertyGroup.of("ExternalNetworkInjection.p", "ExternalNetworkInjection.q",
-                        "ExternalNetworkInjection.referencePriority", REGULATING_COND_EQ_CONTROL_ENABLED)),
-                VariantSafety.NETWORK_DEPENDENT));
-        table.add(ssh(Family.EQUIVALENT_INJECTION, "equivalentInjections", "EquivalentInjection",
-                Set.of("EquivalentInjection"),
-                List.of(new PropertyGroup(Set.of("EquivalentInjection.p", "EquivalentInjection.q"),
-                        Set.of("EquivalentInjection.regulationStatus", "EquivalentInjection.regulationTarget"))),
-                VariantSafety.NETWORK_DEPENDENT));
-        table.add(ssh(Family.GENERATING_UNIT, "generatingUnits", "GeneratingUnit",
-                Set.of("GeneratingUnit", "ThermalGeneratingUnit", "HydroGeneratingUnit", "NuclearGeneratingUnit",
-                        "SolarGeneratingUnit", "WindGeneratingUnit"),
-                List.of(PropertyGroup.of("GeneratingUnit.normalPF")), VariantSafety.NETWORK_DEPENDENT));
+        LOAD_FAMILIES.forEach((family, rows) -> table.add(ssh(family, rows.block(), VariantSafety.SAFE)));
+        table.add(ssh(Family.SYNCHRONOUS_MACHINE, MachineFamily.SYNCHRONOUS_MACHINE, VariantSafety.NETWORK_DEPENDENT));
+        table.add(ssh(Family.EXTERNAL_NETWORK_INJECTION, MachineFamily.EXTERNAL_NETWORK_INJECTION, VariantSafety.NETWORK_DEPENDENT));
+        table.add(ssh(Family.EQUIVALENT_INJECTION, MachineFamily.EQUIVALENT_INJECTION, VariantSafety.NETWORK_DEPENDENT));
+        table.add(ssh(Family.GENERATING_UNIT, MachineFamily.GENERATING_UNIT, VariantSafety.NETWORK_DEPENDENT));
         table.add(ssh(Family.STATIC_VAR_COMPENSATOR, "staticVarCompensators", "StaticVarCompensator",
                 Set.of("StaticVarCompensator"),
                 List.of(PropertyGroup.of("StaticVarCompensator.q", REGULATING_COND_EQ_CONTROL_ENABLED))));
@@ -391,6 +370,12 @@ public final class FastRouteCapabilities {
         table.add(directSetter(Family.VOLTAGE_LEVEL, "VoltageLevel", Set.of("VoltageLevel"),
                 List.of("VoltageLevel.highVoltageLimit", "VoltageLevel.lowVoltageLimit")));
         return List.copyOf(table);
+    }
+
+    /** A family of the steady state hypothesis whose one group is the block a family of the mapping declares. */
+    private static FamilySpec ssh(Family family, Block block, VariantSafety variantSafety) {
+        return ssh(family, block.updateQuery(), block.cimClasses().get(0), Set.copyOf(block.cimClasses()),
+                List.of(new PropertyGroup(Set.copyOf(block.required()), Set.copyOf(block.optional()))), variantSafety);
     }
 
     private static FamilySpec ssh(Family family, String query, String canonicalType, Set<String> rdfTypes,
