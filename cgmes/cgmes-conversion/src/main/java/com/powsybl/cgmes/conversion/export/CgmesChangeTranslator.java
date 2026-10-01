@@ -426,6 +426,54 @@ class CgmesChangeTranslator {
         };
     }
 
+    /**
+     * Every block the mapping describes an object with as the network stands, each with its refusal: what the in-place
+     * import completes a consistency group from and checks the reverse statements of a difference against. These are
+     * the blocks a change of any key of the object writes, the object refusals asked first as for a change; a loading
+     * limit, which no key of the object as a whole names, is described when the given key names it.
+     *
+     * @param key the key of a part of the object ({@code limits1_CURRENT.permanentLimit@group}), or empty
+     */
+    List<Result<CgmesPropertyBuffer, String>> describe(Identifiable<?> object, String key) {
+        Optional<String> refusal = RegulationKeyRefusals.importGivesRegulation(object, scope);
+        if (refusal.isPresent()) {
+            return List.of(failure(refusal.get()));
+        }
+        List<Result<CgmesPropertyBuffer, String>> blocks = new ArrayList<>(blocksOf(object));
+        if (key.startsWith(LIMITS_PREFIX) && LimitFamily.holdsLoadingLimits(object)) {
+            blocks.add(limits.loadingLimitsUpdates(object, key, null));
+        }
+        return blocks;
+    }
+
+    /** The blocks of an object as a whole, see {@link #describe}. */
+    private List<Result<CgmesPropertyBuffer, String>> blocksOf(Identifiable<?> object) {
+        return switch (object) {
+            case Switch sw -> List.of(switches.switchUpdates(sw));
+            case DcSwitch dcSwitch -> List.of(switches.dcSwitchUpdates(dcSwitch));
+            case Load load -> List.of(loads.loadUpdates(load));
+            case Generator generator -> machines.blocks(generator);
+            case BoundaryLine boundaryLine -> List.of(machines.boundaryLineUpdates(boundaryLine),
+                    limits.boundaryLineImpedanceUpdates(boundaryLine, R), limits.boundaryLineImpedanceUpdates(boundaryLine, X),
+                    limits.boundaryLineImpedanceUpdates(boundaryLine, G), limits.boundaryLineImpedanceUpdates(boundaryLine, B));
+            case Line line -> List.of(limits.lineImpedanceUpdates(line, R), limits.lineImpedanceUpdates(line, X),
+                    limits.lineImpedanceUpdates(line, G1), limits.lineImpedanceUpdates(line, B1));
+            case VoltageLevel voltageLevel -> List.of(limits.voltageLimitUpdates(voltageLevel, HIGH_VOLTAGE_LIMIT),
+                    limits.voltageLimitUpdates(voltageLevel, LOW_VOLTAGE_LIMIT));
+            case ShuntCompensator shunt -> List.of(tapChangers.shuntCompensatorUpdates(shunt, SECTION_COUNT),
+                    tapChangers.shuntCompensatorUpdates(shunt, VR_TARGET_VALUE));
+            case StaticVarCompensator svc -> List.of(tapChangers.staticVarCompensatorUpdates(svc));
+            case HvdcLine hvdcLine -> List.of(hvdc.linkUpdates(hvdcLine));
+            // The reactive power of a station describes its control and the setpoint blocks of both converters
+            case VscConverterStation station -> List.of(hvdc.vscStationUpdates(station, LOCAL_TARGET_Q, null));
+            case LccConverterStation station -> List.of(hvdc.lccPowerFactorUpdates(station));
+            case AcDcConverter<?> converter -> List.of(hvdc.acDcConverterUpdates(converter, TARGET_P));
+            case TwoWindingsTransformer transformer -> tapChangers.blocks(transformer);
+            case ThreeWindingsTransformer transformer -> tapChangers.blocks(transformer);
+            default -> List.of();
+        };
+    }
+
     /** No mapping claimed the change: no CGMES profile this export writes has a property for it. */
     private static Result<CgmesPropertyBuffer, String> unmappedAttributeUpdates(Identifiable<?> identifiable, String attribute) {
         Optional<String> unread = LimitFamily.transformerImpedanceRefusal(identifiable, attribute)

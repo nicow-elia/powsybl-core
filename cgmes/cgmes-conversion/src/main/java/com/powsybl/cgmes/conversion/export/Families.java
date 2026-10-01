@@ -10,13 +10,17 @@ package com.powsybl.cgmes.conversion.export;
 import com.powsybl.cgmes.conversion.Conversion;
 import com.powsybl.cgmes.conversion.elements.TerminalConversion;
 import com.powsybl.cgmes.conversion.export.LimitFamily.LimitSlot;
+import com.powsybl.cgmes.conversion.export.PartialSshExport.UnsupportedChangeBehavior;
 import com.powsybl.cgmes.conversion.mapping.Block;
 import com.powsybl.cgmes.conversion.mapping.LoadRows;
 import com.powsybl.cgmes.conversion.mapping.PlainFamily;
 import com.powsybl.cgmes.extensions.CgmesTapChanger;
 import com.powsybl.cgmes.extensions.CgmesTapChangers;
 import com.powsybl.cgmes.model.CgmesNames;
+import com.powsybl.cgmes.model.CgmesSubset;
+import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModelParser;
+import com.powsybl.commons.util.Result;
 import com.powsybl.iidm.network.*;
 
 import java.util.*;
@@ -24,7 +28,8 @@ import java.util.stream.Stream;
 
 /**
  * The mapping as the in-place import of a difference model reads it: which network object a CGMES master resource
- * identifier names, and with which CIM class (the subject index).
+ * identifier names, and with which CIM class (the subject index, {@link #resolve}), and what the network currently
+ * says about it ({@link #describe}).
  *
  * <p>A difference model names its subjects by CGMES master resource identifier. Most of them are equipment and have
  * that identifier as their IIDM identifier, but the interesting ones are not: a terminal, a tap changer, a regulating
@@ -42,6 +47,14 @@ import java.util.stream.Stream;
  *
  * <p>The index of the subjects that are not equipment is built lazily and exactly once, with a single pass over the
  * equipment that may carry them, so a difference that only names equipment never pays for it.</p>
+ *
+ * <p><b>The description of a subject.</b> A CGMES update query reads several properties together, and a difference
+ * written with a minimal granularity, or by a third party, states only the ones that changed. The others are, by
+ * definition, unchanged, so the value the receiving network holds <em>is</em> the intended value, and the importer
+ * only needs it spelt in CGMES: the families of the mapping describe the objects of the subject exactly as an export
+ * would write them ({@code CgmesChangeTranslator#describe}), so signs, unit multipliers, operating modes and the
+ * groups of properties are stated once. The same description answers what the network says about a property, which
+ * is how the optional check of the reverse statements of a difference is evaluated.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
@@ -73,6 +86,17 @@ public final class Families {
     public record Subject(String cimClass, String about, Identifiable<?> owner, String key, Set<String> iidmIds) {
     }
 
+    /**
+     * What the network says about the objects of a subject.
+     *
+     * @param statements the statements of every block that describes them, in both profiles the mapping writes:
+     *                   operational limits are steady state data in CGMES 3 and equipment data in CGMES 2.4.15,
+     *                   impedances and voltage level limits are always equipment data
+     * @param refusal    why a block could not be described, the first one, empty when every block was
+     */
+    public record Description(List<CgmesStatement> statements, Optional<String> refusal) {
+    }
+
     private final Network network;
     /** Subjects that are not equipment: regulating controls, generating units, equivalent injections, limits. */
     private Map<String, Subject> secondaryIndex;
@@ -84,9 +108,74 @@ public final class Families {
      * identifier may differ when identifier unicity is ensured.
      */
     private Map<String, String> fictitiousSwitchByTerminal;
+    /** The mapping the descriptions are read through, built on first use. */
+    private CgmesExportContext context;
+    private CgmesChangeTranslator translator;
 
     public Families(Network network) {
         this.network = Objects.requireNonNull(network);
+    }
+
+    /**
+     * What the network says about a subject: every block of its owner (and of a part of it the key names) and of the
+     * other objects its update touches, as the network stands. The statements name every CGMES object these blocks
+     * describe; a caller keeps those of the subject.
+     */
+    public Description describe(Subject subject) {
+        List<CgmesStatement> statements = new ArrayList<>();
+        String refusal = null;
+        for (Identifiable<?> object : objectsOf(subject)) {
+            for (Result<CgmesPropertyBuffer, String> block : translator().describe(object, object.equals(subject.owner()) ? subject.key() : "")) {
+                switch (block) {
+                    case Result.Success(CgmesPropertyBuffer buffer) -> statements.addAll(statements(buffer));
+                    case Result.Failure(String reason) -> refusal = refusal == null ? reason : refusal;
+                }
+            }
+        }
+        return new Description(List.copyOf(statements), Optional.ofNullable(refusal));
+    }
+
+    /** The objects describing a subject, its owner first. */
+    public List<Identifiable<?>> objectsOf(Subject subject) {
+        List<Identifiable<?>> objects = new ArrayList<>();
+        objects.add(subject.owner());
+        for (String id : subject.iidmIds()) {
+            Identifiable<?> object = network.getIdentifiable(id);
+            if (object != null && !object.equals(subject.owner())) {
+                objects.add(object);
+            }
+        }
+        return objects;
+    }
+
+    /**
+     * The statements of both converters of an HVDC line, as the mapping describes a change of the line: the setpoint
+     * blocks of the two converters are one group for the CGMES update of a link. Empty when a converter of the line
+     * cannot be described.
+     */
+    public List<CgmesStatement> linkStatements(HvdcLine hvdcLine) {
+        return translator().hvdc.linkUpdates(hvdcLine).fold(this::statements, reason -> List.of());
+    }
+
+    private List<CgmesStatement> statements(CgmesPropertyBuffer buffer) {
+        List<CgmesStatement> statements = new ArrayList<>(buffer.statements(CgmesSubset.EQUIPMENT, context));
+        statements.addAll(buffer.statements(CgmesSubset.STEADY_STATE_HYPOTHESIS, context));
+        return statements;
+    }
+
+    /**
+     * The translator, created on first use: building a {@link CgmesExportContext} walks the network once, so an
+     * importer that never needs to complete a group never pays for it. A block the mapping refuses is an answer, not an
+     * error ({@link UnsupportedChangeBehavior#IGNORE}).
+     */
+    private CgmesChangeTranslator translator() {
+        if (translator == null) {
+            context = new CgmesExportContext(network);
+            translator = new CgmesChangeTranslator(network, context, UnsupportedChangeBehavior.IGNORE,
+                    "a difference model applied in place", EnumSet.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS),
+                    IidmStateView.LIVE, null);
+        }
+        return translator;
     }
 
     /**

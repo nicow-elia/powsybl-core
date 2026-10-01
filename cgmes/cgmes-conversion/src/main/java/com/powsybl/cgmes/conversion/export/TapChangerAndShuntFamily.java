@@ -112,6 +112,26 @@ public final class TapChangerAndShuntFamily extends AbstractFamily {
                 .stream().map(suffix -> prefix + suffix).toList();
     }
 
+    /**
+     * Every block of the tap changers of a transformer as the network stands, each with its refusal, ratio first and end
+     * by end: the block of a tap changer, and that block with its control. A kind the transformer does not have is a
+     * refusal.
+     */
+    List<Result<CgmesPropertyBuffer, String>> blocks(Identifiable<?> transformer) {
+        List<Result<CgmesPropertyBuffer, String>> blocks = new ArrayList<>();
+        for (String end : transformer instanceof ThreeWindingsTransformer ? List.of("1", "2", "3") : List.of("")) {
+            for (String prefix : List.of(RATIO_TAP_CHANGER_PREFIX + end, PHASE_TAP_CHANGER_PREFIX + end)) {
+                // The position alone, and the first key of the regulation, which describes the control with it
+                tapChangerProbes(prefix).subList(0, 2).forEach(attribute -> blocks.add(switch (transformer) {
+                    case TwoWindingsTransformer twoWindings -> twoWindingsTapChangerUpdates(twoWindings, tapChangerAttribute(attribute));
+                    case ThreeWindingsTransformer threeWindings -> threeWindingsTapChangerUpdates(threeWindings, tapChangerAttribute(attribute));
+                    default -> throw new IllegalStateException("Not a transformer: " + transformer.getId());
+                }));
+            }
+        }
+        return blocks;
+    }
+
     /** Every tap changer probe of a transformer with the given ends ({@code ""} for two windings), ratio first. */
     public static List<String> transformerProbes(String... ends) {
         List<String> probes = new ArrayList<>();

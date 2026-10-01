@@ -180,6 +180,18 @@ public final class MachineFamily extends AbstractFamily {
                 controls.updatesOf(generator, state).map(regulatingControl -> merge(machine, regulatingControl)));
     }
 
+    /**
+     * Every block of a generator as the network stands, each with its refusal: its machine, its control and its
+     * GeneratingUnit; an EquivalentInjection carries its regulation itself and is one block.
+     */
+    List<Result<CgmesPropertyBuffer, String>> blocks(Generator generator) {
+        if (CgmesNames.EQUIVALENT_INJECTION.equals(originalClass(generator))) {
+            return List.of(equivalentInjectionUpdates(generator));
+        }
+        return List.of(generatorMachineUpdates(generator), controls.updatesOf(generator, state),
+                participationFactorUpdates(generator, PARTICIPATION_FACTOR));
+    }
+
     private static String originalClass(Generator generator) {
         return generator.getProperty(PROPERTY_CGMES_ORIGINAL_CLASS, CgmesNames.SYNCHRONOUS_MACHINE);
     }

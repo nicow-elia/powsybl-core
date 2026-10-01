@@ -50,7 +50,7 @@ import java.util.Set;
  * {@code EnergyConsumer.p} and {@code EnergyConsumer.q} together returns <em>nothing at all</em> when only one of
  * them is present. A difference that states {@code p} alone would therefore silently do nothing. The groups make
  * that visible, so the importer can complete the missing properties from the receiving network (see
- * {@code CgmesObjectDump}) instead of applying half a change.</p>
+ * {@code Families#describe}) instead of applying half a change.</p>
  *
  * <p>{@link #check(DifferenceModelSet)} is deliberately network free: it answers "could this difference model ever be
  * applied in place" from the document alone. A database that stores differences uses exactly this to flag a
