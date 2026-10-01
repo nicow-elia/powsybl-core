@@ -661,39 +661,51 @@ class CgmesChangeTranslator {
         if (!context.isExportedEquipment(load)) {
             return failure("load " + load.getId() + " has no counterpart in the CGMES equipment model");
         }
-        // The CGMES import only accepts an injection power when both components are present,
-        // so a change of either setpoint exports both.
-        String className = loadClassName(load);
-        double p0 = state.getDouble(load, P0, load::getP0);
-        double q0 = state.getDouble(load, Q0, load::getQ0);
-        return switch (className) {
-            case CgmesNames.ENERGY_SOURCE -> success(newUpdates(className, cgmesId(load))
-                    .value("EnergySource.activePower", p0)
-                    .value("EnergySource.reactivePower", q0)
-                    .updates());
+        CgmesPropertyBuffer buffer = new CgmesPropertyBuffer();
+        return describeLoad(load, buffer) ? success(buffer) : failure("load " + load.getId() + " is exported as a "
+                + SteadyStateHypothesisExport.obtainLoadClassName(load, context) + ", which has no steady state setpoints");
+    }
+
+    /**
+     * Describe the steady state hypothesis of a load; false, and nothing described, when its CGMES class has none. The
+     * CGMES import only accepts an injection power when both components are present, so a change of either setpoint
+     * describes both.
+     */
+    boolean describeLoad(Load load, CgmesPropertySink out) {
+        return injectionBlock(out, SteadyStateHypothesisExport.obtainLoadClassName(load, context), cgmesId(load),
+                state.getDouble(load, P0, load::getP0), state.getDouble(load, Q0, load::getQ0));
+    }
+
+    /** Describe a fictitious injection of a node or a bus: an EnergySource when it produces, a NonConformLoad otherwise. */
+    static void describeFictitiousInjection(String id, double p, double q, CgmesPropertySink out) {
+        injectionBlock(out, p <= 0 ? CgmesNames.ENERGY_SOURCE : CgmesNames.NONCONFORM_LOAD, id, p, q);
+    }
+
+    /** The powers of an injection, in the load convention, as its CGMES class holds them; false when it holds none. */
+    private static boolean injectionBlock(CgmesPropertySink out, String className, String id, double p, double q) {
+        switch (className) {
+            case CgmesNames.ENERGY_SOURCE -> out.startObject(className, id)
+                    .value("EnergySource.activePower", p)
+                    .value("EnergySource.reactivePower", q);
             case CgmesNames.ENERGY_CONSUMER, CgmesNames.CONFORM_LOAD, CgmesNames.NONCONFORM_LOAD, CgmesNames.STATION_SUPPLY ->
-                success(newUpdates(className, cgmesId(load))
-                        .value("EnergyConsumer.p", p0)
-                        .value("EnergyConsumer.q", q0)
-                        .updates());
+                out.startObject(className, id)
+                        .value("EnergyConsumer.p", p)
+                        .value("EnergyConsumer.q", q);
             // An AsynchronousMachine is both a RotatingMachine and a RegulatingCondEq, and the CGMES update reads
             // its powers only together with the machine kind and the control flag, so the four are exported as one
             // block. IIDM has no regulation on a load, hence the fixed false.
-            case CgmesNames.ASYNCHRONOUS_MACHINE -> success(newUpdates(className, cgmesId(load))
-                    .value(ROTATING_MACHINE_P, p0)
-                    .value(ROTATING_MACHINE_Q, q0)
+            case CgmesNames.ASYNCHRONOUS_MACHINE -> out.startObject(className, id)
+                    .value(ROTATING_MACHINE_P, p)
+                    .value(ROTATING_MACHINE_Q, q)
                     .value(REGULATING_COND_EQ_CONTROL_ENABLED, false)
                     .enumValue("AsynchronousMachine.asynchronousMachineType", "AsynchronousMachineKind",
-                            SteadyStateHypothesisExport.obtainAsynchronousMachineKind(p0))
-                    .updates());
-            default -> failure("load " + load.getId() + " is exported as a " + className
-                    + ", which has no steady state setpoints");
-        };
-    }
-
-    private String loadClassName(Load load) {
-        String originalClass = load.getProperty(PROPERTY_CGMES_ORIGINAL_CLASS);
-        return originalClass != null && !context.isExportEquipment() ? originalClass : CgmesExportUtil.loadClassName(load);
+                            SteadyStateHypothesisExport.obtainAsynchronousMachineKind(p));
+            default -> {
+                return false;
+            }
+        }
+        out.endObject();
+        return true;
     }
 
     // Boundary lines

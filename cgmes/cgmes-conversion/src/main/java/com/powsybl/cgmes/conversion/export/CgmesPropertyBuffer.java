@@ -42,9 +42,11 @@ import static com.powsybl.cgmes.model.CgmesNamespace.RDF_NAMESPACE;
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
-class CgmesPropertyBuffer {
+class CgmesPropertyBuffer implements CgmesPropertySink {
 
     private final Map<ObjectKey, ObjectUpdate> updatesByObject = new LinkedHashMap<>();
+    /** The object a description written to this buffer as a {@link CgmesPropertySink} is about. */
+    private ObjectUpdate described;
 
     /** What identifies a described CGMES object: the profile the description belongs to and the object itself. */
     private record ObjectKey(CgmesSubset subset, String masterResourceId) {
@@ -85,6 +87,29 @@ class CgmesPropertyBuffer {
     /** As {@link #newUpdates(String, String)}, for an object described in another profile. */
     static ObjectUpdate newUpdates(CgmesSubset subset, String className, String masterResourceId) {
         return new CgmesPropertyBuffer().object(subset, className, masterResourceId);
+    }
+
+    @Override
+    public CgmesPropertySink startObject(String className, String masterResourceId) {
+        described = object(className, masterResourceId);
+        return this;
+    }
+
+    @Override
+    public CgmesPropertySink literal(String property, String lexicalValue) {
+        described.literal(property, lexicalValue);
+        return this;
+    }
+
+    @Override
+    public CgmesPropertySink enumValue(String property, String enumerationName, String literal) {
+        described.enumValue(property, enumerationName, literal);
+        return this;
+    }
+
+    @Override
+    public void endObject() {
+        described = null;
     }
 
     /** Return a new buffer holding every property of the given buffers, merged in the order they are given. */
