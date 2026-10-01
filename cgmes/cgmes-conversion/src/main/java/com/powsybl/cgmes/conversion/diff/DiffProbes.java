@@ -68,12 +68,13 @@ final class DiffProbes {
      */
     static List<String> probesFor(ResolvedSubject subject, Identifiable<?> object) {
         List<String> probes = new ArrayList<>(ownerProbes(object));
-        String prefix = subject.ownerAttributePrefix();
-        if (!prefix.isEmpty() && object.equals(subject.owner())) {
-            switch (subject.probeKind()) {
-                case TAP_CHANGER_PREFIX -> probes.addAll(TapChangerAndShuntFamily.tapChangerProbes(prefix));
-                case ATTRIBUTE_KEY -> probes.add(prefix);
-                case NONE -> { /* nothing beyond the probes of the owner */ }
+        String key = subject.subject().key();
+        if (!key.isEmpty() && object.equals(subject.owner())) {
+            // The name of a tap changer is a prefix its attributes are appended to; a limit key stands as it is
+            if (key.startsWith("ratioTapChanger") || key.startsWith("phaseTapChanger")) {
+                probes.addAll(TapChangerAndShuntFamily.tapChangerProbes(key));
+            } else {
+                probes.add(key);
             }
         }
         return probes;

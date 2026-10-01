@@ -14,7 +14,7 @@ import com.powsybl.cgmes.conversion.diff.DiffSubjectResolver.ResolvedSubject;
 import com.powsybl.cgmes.conversion.diff.FastRouteCapabilities.PropertyGroup;
 import com.powsybl.cgmes.conversion.elements.TerminalConversion;
 import com.powsybl.cgmes.conversion.export.CgmesObjectDump;
-import com.powsybl.cgmes.conversion.export.LimitFamily.LimitSlot;
+import com.powsybl.cgmes.conversion.export.Families;
 import com.powsybl.cgmes.extensions.CgmesMetadataModels;
 import com.powsybl.cgmes.model.CgmesMetadataModel;
 import com.powsybl.cgmes.model.CgmesNamespace;
@@ -173,16 +173,15 @@ final class FastRoutePlan {
     private final List<PlannedModel> models;
     private final List<DirectStatement> directStatements;
     private final Set<String> touchedIidmIds;
-    private final Map<String, List<LimitSlot>> limitSlots;
+    private final Families families;
 
     private FastRoutePlan(CgmesDiffImport.Decision decision, List<PlannedModel> models,
-                          List<DirectStatement> directStatements, Set<String> touchedIidmIds,
-                          Map<String, List<LimitSlot>> limitSlots) {
+                          List<DirectStatement> directStatements, Set<String> touchedIidmIds, Families families) {
         this.decision = decision;
         this.models = models;
         this.directStatements = directStatements;
         this.touchedIidmIds = touchedIidmIds;
-        this.limitSlots = limitSlots;
+        this.families = families;
     }
 
     /** A plan that writes nothing: the difference is refused or says nothing. */
@@ -191,11 +190,11 @@ final class FastRoutePlan {
     }
 
     /**
-     * The loading limits of every CGMES limit identifier the subject resolution read, or {@code null} when it never
-     * needed them. Handing them over saves the applier a second walk over the operational limits groups.
+     * The mapping the subjects were resolved with, {@code null} for a plan that writes nothing. Handing it over saves
+     * the applier a second walk over the operational limits groups.
      */
-    Map<String, List<LimitSlot>> limitSlots() {
-        return limitSlots;
+    Families families() {
+        return families;
     }
 
     /** The statements applied with IIDM setters, after the update workflow. */
@@ -275,6 +274,7 @@ final class FastRoutePlan {
         private final DifferenceModelSet diffs;
         private final CgmesDiffImport.Options options;
         private final boolean inverted;
+        private final Families families;
         private final DiffSubjectResolver resolver;
         private final CgmesObjectDump dump;
         private final List<CgmesDiffImport.BlockingStatement> blocking = new ArrayList<>();
@@ -288,7 +288,8 @@ final class FastRoutePlan {
             this.diffs = diffs;
             this.options = options;
             this.inverted = inverted;
-            this.resolver = new DiffSubjectResolver(network);
+            this.families = new Families(network);
+            this.resolver = new DiffSubjectResolver(families);
             this.dump = new CgmesObjectDump(network);
         }
 
@@ -312,7 +313,7 @@ final class FastRoutePlan {
                 return refused(new CgmesDiffImport.Decision(CgmesDiffImport.Route.NOOP, List.of()));
             }
             return new FastRoutePlan(new CgmesDiffImport.Decision(CgmesDiffImport.Route.FAST, List.of()),
-                    List.copyOf(models), List.copyOf(directs), Set.copyOf(touched), resolver.limitSlots());
+                    List.copyOf(models), List.copyOf(directs), Set.copyOf(touched), families);
         }
 
         private void checkOneCimNamespace() {

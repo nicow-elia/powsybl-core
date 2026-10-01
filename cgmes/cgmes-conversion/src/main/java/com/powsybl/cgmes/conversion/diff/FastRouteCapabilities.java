@@ -281,11 +281,12 @@ public final class FastRouteCapabilities {
     }
 
     /** The families of an IIDM load, in the order of the table. */
-    static final Map<Family, PlainFamily<Load>> LOAD_FAMILIES = loadFamilies();
+    private static final Map<Family, PlainFamily<Load>> LOAD_FAMILIES = loadFamilies();
 
     private static final List<FamilySpec> TABLE = table0();
     private static final Map<Family, FamilySpec> BY_FAMILY = byFamily();
     private static final Map<String, Set<Family>> BY_PROPERTY = byProperty();
+    private static final Map<String, Family> BY_CLASS = byClass();
 
     private FastRouteCapabilities() {
     }
@@ -386,6 +387,24 @@ public final class FastRouteCapabilities {
         }
         map.replaceAll((property, families) -> Set.copyOf(families));
         return Map.copyOf(map);
+    }
+
+    /** Every CIM class of the table and the one family that accepts it. */
+    private static Map<String, Family> byClass() {
+        Map<String, Family> map = new HashMap<>();
+        for (FamilySpec spec : TABLE) {
+            spec.rdfTypes().forEach(rdfType -> {
+                if (map.put(rdfType, spec.family()) != null) {
+                    throw new IllegalStateException("two families accept the class " + rdfType);
+                }
+            });
+        }
+        return Map.copyOf(map);
+    }
+
+    /** The family whose CIM classes contain the given one; every class of the table belongs to exactly one family. */
+    static Family familyOfClass(String cimClass) {
+        return Objects.requireNonNull(BY_CLASS.get(cimClass), cimClass);
     }
 
     /** The whole table, in the order the families are declared. */

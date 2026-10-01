@@ -12,6 +12,7 @@ import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.cgmes.conversion.Conversion;
 import com.powsybl.cgmes.conversion.diff.DiffSubjectResolver.ResolvedSubject;
 import com.powsybl.cgmes.conversion.diff.FastRouteCapabilities.Family;
+import com.powsybl.cgmes.conversion.export.Families;
 import com.powsybl.iidm.network.Network;
 import org.junit.jupiter.api.Test;
 
@@ -38,7 +39,7 @@ class DiffSubjectResolverTest {
 
     private static ResolvedSubject resolve(Network network, String subjectId, String... properties) {
         Optional<ResolvedSubject> resolved =
-                new DiffSubjectResolver(network).resolve(subjectId, Set.of(properties), null);
+                new DiffSubjectResolver(new Families(network)).resolve(subjectId, Set.of(properties), null);
         assertTrue(resolved.isPresent(), () -> subjectId + " did not resolve");
         return resolved.get();
     }
@@ -57,9 +58,9 @@ class DiffSubjectResolverTest {
         assertFamily(network, "Breaker-T1", Family.TERMINAL, "Terminal", "ACDCTerminal.connected");
 
         // A branch the importer turned into a switch has no Switch.open of its own
-        assertTrue(new DiffSubjectResolver(network)
+        assertTrue(new DiffSubjectResolver(new Families(network))
                 .resolve("SeriesCompensator", Set.of("Switch.open"), null).isEmpty());
-        assertTrue(new DiffSubjectResolver(network)
+        assertTrue(new DiffSubjectResolver(new Families(network))
                 .reasonFor("SeriesCompensator", Set.of("Switch.open"), null).contains("carried by its terminals"));
     }
 
@@ -105,7 +106,7 @@ class DiffSubjectResolverTest {
         ResolvedSubject phase = resolve(network, "T2W-PhaseTapChanger", "TapChanger.step");
         assertEquals(Family.PHASE_TAP_CHANGER, phase.family());
         assertEquals("T2W", phase.owner().getId());
-        assertEquals("phaseTapChanger", phase.ownerAttributePrefix(),
+        assertEquals("phaseTapChanger", phase.subject().key(),
                 "a two windings transformer reports its tap changer without an end number");
         assertTrue(FastRouteCapabilities.spec(Family.PHASE_TAP_CHANGER).rdfTypes().contains(phase.rdfType()),
                 phase.rdfType());
@@ -114,7 +115,7 @@ class DiffSubjectResolverTest {
         assertEquals(Family.RATIO_TAP_CHANGER, ratio.family());
         assertEquals("RatioTapChanger", ratio.rdfType());
         assertEquals("T3W", ratio.owner().getId());
-        assertEquals("ratioTapChanger2", ratio.ownerAttributePrefix(),
+        assertEquals("ratioTapChanger2", ratio.subject().key(),
                 "a three windings transformer reports the leg its tap changer belongs to");
     }
 
@@ -143,7 +144,7 @@ class DiffSubjectResolverTest {
                 "mixed_bipole_EQ.xml", "mixed_bipole_SSH.xml");
         assertFamily(detailed, "CSC_1_1", Family.CS_CONVERTER, "CsConverter", "CsConverter.pPccControl");
         // A DC switch has no cim:Switch.open: its state is carried by the connected flag of its DC terminals
-        assertTrue(new DiffSubjectResolver(detailed).resolve("DCSW_1_1", Set.of("Switch.open"), null).isEmpty());
+        assertTrue(new DiffSubjectResolver(new Families(detailed)).resolve("DCSW_1_1", Set.of("Switch.open"), null).isEmpty());
         ResolvedSubject dcTerminal = resolve(detailed,
                 detailed.getDcSwitch("DCSW_1_1").getAliasFromType("CGMES.DCTerminal1").orElseThrow(),
                 "ACDCTerminal.connected");
@@ -163,7 +164,7 @@ class DiffSubjectResolverTest {
     @Test
     void everyKindOfSubjectOfTheConformityModel() {
         Network network = Network.read(CgmesConformity1Catalog.microGridBaseCaseBE().dataSource());
-        DiffSubjectResolver resolver = new DiffSubjectResolver(network);
+        DiffSubjectResolver resolver = new DiffSubjectResolver(new Families(network));
         network.getLoads().forEach(load -> assertTrue(
                 resolver.resolve(load.getId(), Set.of("EnergyConsumer.p"), null).isPresent()
                         || resolver.resolve(load.getId(), Set.of("EnergySource.activePower"), null).isPresent()
@@ -182,7 +183,7 @@ class DiffSubjectResolverTest {
     @Test
     void unknownSubjectAndWrongFamilyProperty() {
         Network network = readCgmesResources("/update/load/", "load_EQ.xml", "load_SSH.xml");
-        DiffSubjectResolver resolver = new DiffSubjectResolver(network);
+        DiffSubjectResolver resolver = new DiffSubjectResolver(new Families(network));
         assertTrue(resolver.resolve("nothing-like-this", Set.of("EnergyConsumer.p"), null).isEmpty());
         assertTrue(resolver.reasonFor("nothing-like-this", Set.of("EnergyConsumer.p"), null)
                 .contains("no object of this network has this identifier"));
@@ -239,7 +240,7 @@ class DiffSubjectResolverTest {
         assertEquals("ACLineSegment", patl.owner().getId());
         assertEquals(Set.of("ACLineSegment"), patl.iidmIds());
         // The probe key of the limit, which is what describes the whole set of loading limits it belongs to
-        assertTrue(patl.ownerAttributePrefix().startsWith("limits1_CURRENT"), patl.ownerAttributePrefix());
+        assertTrue(patl.subject().key().startsWith("limits1_CURRENT"), patl.subject().key());
     }
 
     /** A CGMES limit set attached to the equipment of a line lands on both sides, so one identifier has two slots. */
@@ -259,7 +260,7 @@ class DiffSubjectResolverTest {
         assertEquals(Family.VOLTAGE_LIMIT, high.family());
         assertEquals("VoltageLimit", high.rdfType());
         assertEquals("VL_1", high.owner().getId());
-        assertEquals("highVoltageLimit", high.ownerAttributePrefix());
+        assertEquals("highVoltageLimit", high.subject().key());
     }
 
     @Test
@@ -284,7 +285,7 @@ class DiffSubjectResolverTest {
     @Test
     void aTransformerHasNoImpedanceSubject() {
         Network network = readCgmesResources("/update/transformer/", "transformer_EQ.xml", "transformer_SSH.xml");
-        assertTrue(new DiffSubjectResolver(network).resolve("T2W", Set.of("ACLineSegment.r"), null).isEmpty(),
+        assertTrue(new DiffSubjectResolver(new Families(network)).resolve("T2W", Set.of("ACLineSegment.r"), null).isEmpty(),
                 "a transformer impedance is not updatable in place");
     }
 }

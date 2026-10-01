@@ -12,7 +12,6 @@ import com.powsybl.cgmes.conversion.Conversion;
 import com.powsybl.cgmes.conversion.diff.FastRoutePlan.DirectStatement;
 import com.powsybl.cgmes.conversion.diff.FastRoutePlan.PlannedModel;
 import com.powsybl.cgmes.conversion.diff.FastRoutePlan.TypedObject;
-import com.powsybl.cgmes.conversion.export.LimitFamily;
 import com.powsybl.cgmes.conversion.export.LimitFamily.LimitSlot;
 import com.powsybl.cgmes.model.CgmesNames;
 import com.powsybl.cgmes.model.CgmesNamespace;
@@ -213,7 +212,7 @@ final class DirectEqApplier {
                 return;
             }
             // The subject resolution has already built one whenever a limit was resolved through it
-            Map<String, List<LimitSlot>> index = plan.limitSlots() != null ? plan.limitSlots() : LimitFamily.limitSlots(network);
+            Map<String, List<LimitSlot>> index = plan.families().limitSlots();
             for (CgmesStatement statement : limitStatements) {
                 syncOne(network, index, statement);
             }

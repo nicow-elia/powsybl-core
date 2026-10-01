@@ -9,6 +9,7 @@ package com.powsybl.cgmes.conversion.diff;
 
 import com.powsybl.cgmes.conversion.diff.DiffSubjectResolver.ResolvedSubject;
 import com.powsybl.cgmes.conversion.diff.FastRoutePlan.TypedObject;
+import com.powsybl.cgmes.conversion.export.Families;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 import org.junit.jupiter.api.Test;
 
@@ -52,8 +53,8 @@ class FastRoutePlanPartnerTest {
     void aResolvedOrStatedPartnerIsCompleted() {
         Map<String, TypedObject> objects = new LinkedHashMap<>();
         Set<String> touched = new HashSet<>();
-        ResolvedSubject partner = new ResolvedSubject(FastRouteCapabilities.Family.VS_CONVERTER, "VsConverter", "#_C2",
-                null, "", DiffSubjectResolver.ProbeKind.NONE, Set.of("C2", "LINE"));
+        ResolvedSubject partner = new ResolvedSubject(FastRouteCapabilities.Family.VS_CONVERTER,
+                new Families.Subject("VsConverter", "#_C2", null, "", Set.of("C2", "LINE")));
         assertTrue(FastRoutePlan.completePartner(objects, "C2", partnerBlock(), Optional.of(partner), touched));
         assertEquals(2, objects.get("C2").statements().size());
         assertEquals(Set.of("C2", "LINE"), touched);
