@@ -74,6 +74,18 @@ class MappingPageTest {
         assertEquals(expected, Files.readString(PAGE, StandardCharsets.UTF_8), "the mapping page is stale: regenerate it with -Dpowsybl.docs.regenerate=true");
     }
 
+    /**
+     * The reflection finds a key set or a block by its field name and type: a renamed or privatised field would drop
+     * its section from the page without a failure, so their numbers are pinned here.
+     */
+    @Test
+    void theReflectionSeesEveryKeySetAndBlock() {
+        assertEquals(3, staticFields(LoadRows.class, PlainFamily.class).size(), "plain families of LoadRows");
+        assertEquals(16, FAMILIES.stream().mapToLong(family -> staticFields(family, Collection.class).stream().filter(MappingPageTest::isKeys).count()).sum(),
+                "declared key sets of the hand-written families (switches and loads are listed by hand)");
+        assertEquals(23, FAMILIES.stream().mapToLong(family -> staticFields(family, Block.class).size()).sum(), "blocks of the hand-written families");
+    }
+
     static String body() {
         StringBuilder page = new StringBuilder();
         page.append("\n## Plain families\n\nA plain family is data: each row is one CGMES property and the IIDM attribute it is."
@@ -132,6 +144,10 @@ class MappingPageTest {
                         .map(field -> words(family, field.getName()) + ": " + codes((Collection<?>) value(field))).toList();
         page.append("Keys:\n\n");
         keys.forEach(line -> page.append("* ").append(line).append("\n"));
+        if (family == LimitFamily.class) {
+            page.append("* operational limits of a branch, a leg or a boundary line: every key starting with ")
+                    .append(code(CgmesChangeTranslator.LIMITS_PREFIX)).append("\n");
+        }
         var blocks = staticValues(family, Block.class);
         if (blocks.isEmpty()) {
             return;

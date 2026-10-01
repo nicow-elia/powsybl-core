@@ -161,6 +161,7 @@ Keys:
 * voltage level: `highVoltageLimit`, `lowVoltageLimit`
 * line: `b1`, `b2`, `g1`, `g2`, `r`, `x`
 * boundary line: `b`, `g`, `r`, `x`
+* operational limits of a branch, a leg or a boundary line: every key starting with `limits`
 
 | block | update query | CIM classes | required | optional |
 | --- | --- | --- | --- | --- |
