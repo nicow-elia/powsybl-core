@@ -582,7 +582,7 @@ class CgmesChangeTranslator {
         }
         CgmesPropertyBuffer buffer = new CgmesPropertyBuffer();
         return describeLoad(load, buffer) ? success(buffer) : failure("load " + load.getId() + " is exported as a "
-                + SteadyStateHypothesisExport.obtainLoadClassName(load, context) + ", which has no steady state setpoints");
+                + LoadFamily.obtainLoadClassName(load, context) + ", which has no steady state setpoints");
     }
 
     /**
@@ -591,7 +591,7 @@ class CgmesChangeTranslator {
      * describes all of them.
      */
     boolean describeLoad(Load load, CgmesPropertySink out) {
-        String className = SteadyStateHypothesisExport.obtainLoadClassName(load, context);
+        String className = LoadFamily.obtainLoadClassName(load, context);
         return LoadRows.ofClass(className).map(family -> {
             plainBlock(out, family, className, cgmesId(load), row -> row.key() == null ? row.getter().applyAsDouble(load)
                     : state.getDouble(load, row.key(), () -> row.getter().applyAsDouble(load)));
@@ -727,14 +727,14 @@ class CgmesChangeTranslator {
         double targetP = state.getDouble(generator, TARGET_P, generator::getTargetP);
         synchronousMachineBlock(out, cgmesId(generator), generatorControlEnabled(generator), loadConventionP(generator),
                 loadConventionQ(generator), referencePriority(generator),
-                SteadyStateHypothesisExport.obtainOperatingMode(generator, generator.getMinP(), generator.getMaxP(), targetP, state));
+                MachineFamily.obtainOperatingMode(generator, generator.getMinP(), generator.getMaxP(), targetP, state));
     }
 
     /** Describe the SynchronousMachine of a battery, which no change describes: read as the network stands. */
     void describeBattery(Battery battery, CgmesPropertySink out) {
         synchronousMachineBlock(out, cgmesId(battery), RegulatingControlFamily.flag(RegulationRef.of(battery), IidmStateView.LIVE),
                 -battery.getTargetP(), -battery.getRegulatingTargetQ(),
-                ReferencePriority.get(battery), SteadyStateHypothesisExport.obtainOperatingMode(battery, battery.getMinP(),
+                ReferencePriority.get(battery), MachineFamily.obtainOperatingMode(battery, battery.getMinP(),
                         battery.getMaxP(), battery.getTargetP(), state));
     }
 
@@ -854,8 +854,8 @@ class CgmesChangeTranslator {
             return failure(refusal.get());
         }
         state.requireExtensionNotCreated(generator, ActivePowerControl.NAME);
-        SteadyStateHypothesisExport.GeneratingUnit generatingUnit =
-                SteadyStateHypothesisExport.generatingUnitForGeneratorAndBatteries(generator, context, state);
+        MachineFamily.GeneratingUnit generatingUnit =
+                MachineFamily.generatingUnitForGeneratorAndBatteries(generator, context, state);
         if (generatingUnit == null) {
             return failure("generator " + generator.getId() + " is a condenser or has no participation factor");
         }
@@ -863,7 +863,7 @@ class CgmesChangeTranslator {
     }
 
     /** Describe the participation factor of a GeneratingUnit. */
-    static void describeGeneratingUnit(SteadyStateHypothesisExport.GeneratingUnit generatingUnit, CgmesPropertySink out) {
+    static void describeGeneratingUnit(MachineFamily.GeneratingUnit generatingUnit, CgmesPropertySink out) {
         out.startObject(generatingUnit.className, generatingUnit.id)
                 .value("GeneratingUnit.normalPF", generatingUnit.participationFactor)
                 .endObject();
@@ -1074,7 +1074,7 @@ class CgmesChangeTranslator {
             switch (converter) {
                 case LccConverterStation lcc -> {
                     boolean rectifier = CgmesExportUtil.isConverterStationRectifier(lcc, state);
-                    csConverterBlock(out, cgmesId(lcc), SteadyStateHypothesisExport.computeConverterState(lcc, state),
+                    csConverterBlock(out, cgmesId(lcc), HvdcFamily.computeConverterState(lcc, state),
                             rectifier ? "rectifier" : "inverter", rectifier ? "activePower" : "dcVoltage");
                 }
                 case VscConverterStation vsc -> vsConverterStationBlock(vsc, true, false, out);
@@ -1087,7 +1087,7 @@ class CgmesChangeTranslator {
      * The four quantities the CGMES import reads as a single block for any converter, of the simplified model as
      * well as of the detailed one.
      */
-    private static CgmesPropertySink converterSetpoints(CgmesPropertySink out, SteadyStateHypothesisExport.ConverterSetpoints setpoints) {
+    private static CgmesPropertySink converterSetpoints(CgmesPropertySink out, HvdcFamily.ConverterSetpoints setpoints) {
         return out.value("ACDCConverter.targetPpcc", setpoints.targetPpcc())
                 .value("ACDCConverter.targetUdc", setpoints.targetUdc())
                 .value("ACDCConverter.p", setpoints.p())
@@ -1098,7 +1098,7 @@ class CgmesChangeTranslator {
      * A CsConverter as a change describes it. The full export keeps its own writer, which writes the powers of a
      * detailed line commutated converter differently (B4, owner decision O2b), until that is decided.
      */
-    private static void csConverterBlock(CgmesPropertySink out, String id, SteadyStateHypothesisExport.ConverterSetpoints setpoints,
+    private static void csConverterBlock(CgmesPropertySink out, String id, HvdcFamily.ConverterSetpoints setpoints,
                                          String operatingMode, String pPccControl) {
         converterSetpoints(out.startObject(CgmesNames.CS_CONVERTER, id), setpoints)
                 .enumValue("CsConverter.operatingMode", "CsOperatingModeKind", operatingMode)
@@ -1156,7 +1156,7 @@ class CgmesChangeTranslator {
         RegulationRef regulation = RegulationRef.of(converter);
         out.startObject(CgmesNames.VS_CONVERTER, cgmesId(converter));
         if (withSetpoints) {
-            vsConverterSetpoints(out, SteadyStateHypothesisExport.computeConverterState(converter, state));
+            vsConverterSetpoints(out, HvdcFamily.computeConverterState(converter, state));
         }
         if (withTargets) {
             VsConverterControlFamily.describeTargets(out, VsConverterControlFamily.stationTargetQpcc(regulation, context, state),
@@ -1168,15 +1168,15 @@ class CgmesChangeTranslator {
 
     /** Describe a voltage source converter of the detailed DC model, in the order of its CIM class. */
     void describeVoltageSourceConverter(VoltageSourceConverter converter, CgmesPropertySink out) {
-        SteadyStateHypothesisExport.AcDcConverterState converterState =
-                SteadyStateHypothesisExport.computeAcDcConverterState(converter, state);
+        HvdcFamily.AcDcConverterState converterState =
+                HvdcFamily.computeAcDcConverterState(converter, state);
         vsConverterSetpoints(out.startObject(CgmesNames.VS_CONVERTER, cgmesId(converter)), converterState);
         VsConverterControlFamily.describeTargets(out, converterState.targetQpcc(), converterState.targetUpcc());
         VsConverterControlFamily.describeControlModes(out, converterState.pPccControl(), converterState.operatingModeOrQpccControl());
     }
 
     /** The setpoints of a VsConverter, and in a full model the constants of the class, which no change touches. */
-    private void vsConverterSetpoints(CgmesPropertySink out, SteadyStateHypothesisExport.ConverterSetpoints setpoints) {
+    private void vsConverterSetpoints(CgmesPropertySink out, HvdcFamily.ConverterSetpoints setpoints) {
         converterSetpoints(out, setpoints);
         if (scope == Scope.FULL_MODEL) {
             out.value("VsConverter.droop", 0.0).value("VsConverter.droopCompensation", 0.0).value("VsConverter.qShare", 0.0);
@@ -1195,8 +1195,8 @@ class CgmesChangeTranslator {
      * factor is only transportable next to a power that is not zero.</p>
      */
     Result<CgmesPropertyBuffer, String> acDcConverterUpdates(AcDcConverter<?> converter, String attribute) {
-        SteadyStateHypothesisExport.AcDcConverterState converterState =
-                SteadyStateHypothesisExport.computeAcDcConverterState(converter, state);
+        HvdcFamily.AcDcConverterState converterState =
+                HvdcFamily.computeAcDcConverterState(converter, state);
         return switch (converter) {
             case LineCommutatedConverter lcc -> lineCommutatedConverterUpdates(lcc, converterState, attribute);
             case VoltageSourceConverter vsc -> unlessRefused(VsConverterControlFamily.refusal(vsc, state, scope),
@@ -1207,25 +1207,25 @@ class CgmesChangeTranslator {
     }
 
     private Result<CgmesPropertyBuffer, String> lineCommutatedConverterUpdates(
-            LineCommutatedConverter converter, SteadyStateHypothesisExport.AcDcConverterState converterState, String attribute) {
+            LineCommutatedConverter converter, HvdcFamily.AcDcConverterState converterState, String attribute) {
         double referenceP = lineCommutatedConverterReferenceP(converterState);
         double powerFactor = state.getDouble(converter, POWER_FACTOR, converter::getPowerFactor);
-        SteadyStateHypothesisExport.ConverterSetpoints setpoints = converterState;
+        HvdcFamily.ConverterSetpoints setpoints = converterState;
         if (referenceP != 0 && powerFactor > 0) {
-            setpoints = new SteadyStateHypothesisExport.ConverterState(converterState.targetPpcc(), converterState.targetUdc(),
+            setpoints = new HvdcFamily.ConverterState(converterState.targetPpcc(), converterState.targetUdc(),
                     referenceP, Math.abs(referenceP) * Math.sqrt(1 - powerFactor * powerFactor) / powerFactor);
         } else if (POWER_FACTOR.equals(attribute)) {
             // A power factor of zero would make the reactive power infinite, and there is no power to express it
             // against anyway
             return failure("the power factor is carried by ACDCConverter.p and q, which are zero");
         }
-        SteadyStateHypothesisExport.ConverterSetpoints described = setpoints;
+        HvdcFamily.ConverterSetpoints described = setpoints;
         return success(collect(out -> csConverterBlock(out, cgmesId(converter), described,
                 converterState.operatingModeOrQpccControl(), converterState.pPccControl())));
     }
 
     /** The active power the power factor of a line commutated converter is expressed against, or zero if it has none. */
-    private static double lineCommutatedConverterReferenceP(SteadyStateHypothesisExport.AcDcConverterState converterState) {
+    private static double lineCommutatedConverterReferenceP(HvdcFamily.AcDcConverterState converterState) {
         if (converterState.targetPpcc() != 0 && Double.isFinite(converterState.targetPpcc())) {
             return converterState.targetPpcc();
         }
