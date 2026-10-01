@@ -383,7 +383,7 @@ public final class SteadyStateHypothesisExport {
     private static void writeConverters(Network network, CgmesChangeTranslator mapping, CgmesPropertySink out, String cimNamespace,
                                         XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
         for (HvdcConverterStation<?> converterStation : network.getHvdcConverterStations()) {
-            writeConverterStation(converterStation, mapping, out, cimNamespace, writer, context);
+            writeConverterStation(converterStation, mapping, out);
         }
         for (LineCommutatedConverter lccConverter : network.getLineCommutatedConverters()) {
             writeAcDcConverter(lccConverter, cimNamespace, writer, context);
@@ -394,14 +394,9 @@ public final class SteadyStateHypothesisExport {
     }
 
     private static void writeConverterStation(HvdcConverterStation<?> converterStation, CgmesChangeTranslator mapping,
-                                              CgmesPropertySink out, String cimNamespace,
-                                              XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
-        String converterId = context.getNamingStrategy().getCgmesId(converterStation);
-        HvdcFamily.ConverterState state = HvdcFamily.computeConverterState(converterStation, IidmStateView.LIVE);
-        if (converterStation instanceof LccConverterStation) {
-            String operatingMode = CgmesExportUtil.isConverterStationRectifier(converterStation) ? "rectifier" : "inverter";
-            String pPccControl = CgmesExportUtil.isConverterStationRectifier(converterStation) ? "activePower" : "dcVoltage";
-            writeCsConverter(converterId, state.targetPpcc(), state.targetUdc(), state.p(), state.q(), operatingMode, pPccControl, cimNamespace, writer, context);
+                                              CgmesPropertySink out) {
+        if (converterStation instanceof LccConverterStation lccConverterStation) {
+            mapping.hvdc.describeLccConverterStation(lccConverterStation, out);
         } else if (converterStation instanceof VscConverterStation vscConverterStation) {
             mapping.hvdc.describeVscConverterStation(vscConverterStation, out);
         }
@@ -518,8 +513,8 @@ public final class SteadyStateHypothesisExport {
         }
     }
 
-    // A CsConverter keeps this writer until B4 (owner decision O2b) decides how the powers of a detailed line commutated
-    // converter are written; every other converter is described by the change mapping
+    // The CsConverter of a converter of the detailed model keeps this writer until B4 (owner decision O2b) decides how
+    // the powers of a detailed line commutated converter are written; every other converter is described by the mapping
     private static void writeCsConverter(String converterId, double targetPpcc, double targetUdc,
                                          double p, double q, String operatingMode, String pPccControl,
                                          String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {

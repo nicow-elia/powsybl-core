@@ -154,11 +154,7 @@ public final class HvdcFamily extends AbstractFamily {
         // computed exactly as the full SSH export computes them.
         return collect(out -> {
             switch (converter) {
-                case LccConverterStation lcc -> {
-                    boolean rectifier = CgmesExportUtil.isConverterStationRectifier(lcc, state);
-                    csConverterBlock(out, cgmesId(lcc), computeConverterState(lcc, state),
-                            rectifier ? "rectifier" : "inverter", rectifier ? "activePower" : "dcVoltage");
-                }
+                case LccConverterStation lcc -> describeLccConverterStation(lcc, out);
                 case VscConverterStation vsc -> vsConverterStationBlock(vsc, true, false, out);
                 default -> throw new IllegalStateException("Unhandled converter station " + converter.getClass().getSimpleName());
             }
@@ -177,13 +173,27 @@ public final class HvdcFamily extends AbstractFamily {
     }
 
     /**
-     * A CsConverter as a change describes it. The full export keeps its own writer, which writes the powers of a
-     * detailed line commutated converter differently (B4, owner decision O2b), until that is decided.
+     * Describe the CsConverter of a converter station of the simplified DC model: the setpoints of its line and the
+     * control modes of the end it is. The station must belong to an HVDC line.
      */
-    private static void csConverterBlock(CgmesPropertySink out, String id, ConverterSetpoints setpoints,
-                                         String operatingMode, String pPccControl) {
-        converterSetpoints(out.startObject(CgmesNames.CS_CONVERTER, id), setpoints)
-                .enumValue(CS_CONVERTER_OPERATING_MODE, "CsOperatingModeKind", operatingMode)
+    void describeLccConverterStation(LccConverterStation converter, CgmesPropertySink out) {
+        boolean rectifier = CgmesExportUtil.isConverterStationRectifier(converter, state);
+        csConverterBlock(out, cgmesId(converter), computeConverterState(converter, state),
+                rectifier ? "rectifier" : "inverter", rectifier ? "activePower" : "dcVoltage");
+    }
+
+    /**
+     * A CsConverter: its setpoints, in a full model the constants of the class, which no change touches, and its
+     * control modes. The full export keeps its own writer for a converter of the detailed model, which writes the
+     * powers of a line commutated converter differently (B4, owner decision O2b), until that is decided.
+     */
+    private void csConverterBlock(CgmesPropertySink out, String id, ConverterSetpoints setpoints,
+                                  String operatingMode, String pPccControl) {
+        converterSetpoints(out.startObject(CgmesNames.CS_CONVERTER, id), setpoints);
+        if (scope == Scope.FULL_MODEL) {
+            out.value("CsConverter.targetAlpha", 0.0).value("CsConverter.targetGamma", 0.0).value("CsConverter.targetIdc", 0.0);
+        }
+        out.enumValue(CS_CONVERTER_OPERATING_MODE, "CsOperatingModeKind", operatingMode)
                 .enumValue(CS_CONVERTER_P_PCC_CONTROL, "CsPpccControlKind", pPccControl)
                 .endObject();
     }
