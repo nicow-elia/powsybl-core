@@ -38,6 +38,7 @@ import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.TARGET_V
 import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.VR_MODE;
 import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.VR_REGULATING;
 import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.VR_TARGET_VALUE;
+import static com.powsybl.cgmes.conversion.export.CgmesChangeTranslator.VR_TERMINAL;
 import static com.powsybl.cgmes.conversion.export.CgmesPropertyBuffer.merge;
 import static com.powsybl.commons.util.Result.failure;
 import static com.powsybl.commons.util.Result.success;
@@ -208,11 +209,22 @@ public final class HvdcFamily extends AbstractFamily {
      * target, so a change of it writes the converter blocks of both stations of the line. A station that belongs to
      * no line is refused: the line holds the setpoints of the station and says which of its ends rectifies.</p>
      *
+     * <p>Regulating its own terminal or none is the qPccControl of the station, exported with it; a change to any other
+     * terminal is refused ({@link #terminalRefusal}).</p>
+     *
      * @param attribute the changed attribute, {@code null} for the whole station (its setpoints, targets and modes)
+     * @param event     the change, read for the old and the new regulating terminal; {@code null} for the whole station
      */
-    Result<CgmesPropertyBuffer, String> vscStationUpdates(VscConverterStation converter, String attribute) {
+    Result<CgmesPropertyBuffer, String> vscStationUpdates(VscConverterStation converter, String attribute,
+                                                          UpdateNetworkEvent event) {
         if (converter.getHvdcLine() == null) {
             return failure(noHvdcLine(converter));
+        }
+        if (VR_TERMINAL.equals(attribute)) {
+            Optional<String> terminal = terminalRefusal(converter, event);
+            if (terminal.isPresent()) {
+                return failure(terminal.get());
+            }
         }
         Optional<String> refusal = stationRefusal(converter, state, scope);
         if (refusal.isPresent()) {
@@ -322,17 +334,6 @@ public final class HvdcFamily extends AbstractFamily {
         return Double.isFinite(converterState.p()) ? converterState.p() : 0.0;
     }
 
-    /**
-     * The block of a converter station of the simplified DC model: the four quantities of its line, its control modes
-     * and for a voltage source converter its targets; or why a converter of its line cannot be described.
-     */
-    Result<CgmesPropertyBuffer, String> converterStationUpdates(HvdcConverterStation<?> converter) {
-        if (converter.getHvdcLine() == null) {
-            return failure(noHvdcLine(converter));
-        }
-        return converter instanceof VscConverterStation vsc ? vscStationUpdates(vsc, null) : success(converterActivePowerUpdates(converter));
-    }
-
     // The control of a voltage source converter
 
     /**
@@ -427,7 +428,7 @@ public final class HvdcFamily extends AbstractFamily {
      * Why a change of the regulating terminal of a station cannot be described: regulating its own terminal or none is
      * the qPccControl of the station; any other terminal has no CGMES property (review 21 round 3, R3-M4).
      */
-    static Optional<String> terminalRefusal(VscConverterStation converter, UpdateNetworkEvent event) {
+    private static Optional<String> terminalRefusal(VscConverterStation converter, UpdateNetworkEvent event) {
         return RegulationRef.isOwnTerminalSwitch(converter.getTerminal(), event.oldValue(), event.newValue())
                 ? Optional.empty()
                 : Optional.of(Refusal.OWN_TERMINAL.message("the regulating terminal of converter "

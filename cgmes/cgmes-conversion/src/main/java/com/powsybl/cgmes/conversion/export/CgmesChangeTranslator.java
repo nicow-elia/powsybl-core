@@ -403,11 +403,8 @@ class CgmesChangeTranslator {
             case HvdcLine hvdcLine when HvdcFamily.LINE_KEYS.contains(attribute) -> hvdc.hvdcLineUpdates(hvdcLine, attribute);
             case LccConverterStation converter when POWER_FACTOR.equals(attribute) -> hvdc.lccPowerFactorUpdates(converter);
             case AcDcConverter<?> converter when HvdcFamily.CONVERTER_KEYS.contains(attribute) -> hvdc.acDcConverterUpdates(converter, attribute);
-            case VscConverterStation converter when HvdcFamily.CONTROL_KEYS.contains(attribute) -> hvdc.vscStationUpdates(converter, attribute);
-            // Regulating its own terminal or none is the qPccControl of the station, exported with it
-            case VscConverterStation converter when VR_TERMINAL.equals(attribute) ->
-                HvdcFamily.terminalRefusal(converter, event).<Result<CgmesPropertyBuffer, String>>map(Result::failure)
-                        .orElseGet(() -> hvdc.vscStationUpdates(converter, attribute));
+            case VscConverterStation converter when HvdcFamily.CONTROL_KEYS.contains(attribute) || VR_TERMINAL.equals(attribute) ->
+                hvdc.vscStationUpdates(converter, attribute, event);
             case VoltageLevel voltageLevel when LimitFamily.VOLTAGE_LEVEL_KEYS.contains(attribute) ->
                 limits.voltageLimitUpdates(voltageLevel, attribute);
             case Line line when LimitFamily.LINE_KEYS.contains(attribute) -> limits.lineImpedanceUpdates(line, attribute);

@@ -183,7 +183,7 @@ class DescribeObjectTest {
         for (String attribute : HvdcFamily.CONTROL_KEYS) {
             results.add(translator.translate(event(station, attribute, variantId)));
         }
-        results.add(translator.hvdc.converterStationUpdates(station));
+        results.add(station(translator, station));
         for (Result<CgmesPropertyBuffer, String> result : results) {
             assertTrue(result instanceof Result.Failure(String reason) && reason.contains("belongs to no HVDC line"),
                     result::toString);
@@ -229,12 +229,12 @@ class DescribeObjectTest {
             case BoundaryLine boundaryLine -> descriptions.add(translator.machines.boundaryLineUpdates(boundaryLine));
             case Switch sw -> descriptions.add(translator.switches.switchUpdates(sw));
             case HvdcLine line -> {
-                descriptions.add(translator.hvdc.converterStationUpdates(line.getConverterStation1()));
-                descriptions.add(translator.hvdc.converterStationUpdates(line.getConverterStation2()));
+                descriptions.add(station(translator, line.getConverterStation1()));
+                descriptions.add(station(translator, line.getConverterStation2()));
             }
             case HvdcConverterStation<?> station -> {
-                descriptions.add(translator.hvdc.converterStationUpdates(station));
-                station.getOtherConverterStation().ifPresent(other -> descriptions.add(translator.hvdc.converterStationUpdates(other)));
+                descriptions.add(station(translator, station));
+                station.getOtherConverterStation().ifPresent(other -> descriptions.add(station(translator, other)));
             }
             case AcDcConverter<?> converter -> descriptions.add(translator.hvdc.acDcConverterUpdates(converter, null));
             case TwoWindingsTransformer transformer -> {
@@ -259,6 +259,15 @@ class DescribeObjectTest {
             default -> { }
         }
         return descriptions;
+    }
+
+    /** A converter station of the simplified model: its own block, its control for a voltage source converter. */
+    private static Result<CgmesPropertyBuffer, String> station(CgmesChangeTranslator translator, HvdcConverterStation<?> station) {
+        return switch (station) {
+            case VscConverterStation vsc -> translator.hvdc.vscStationUpdates(vsc, null, null);
+            case LccConverterStation lcc -> Result.success(AbstractFamily.collect(out -> translator.hvdc.describeLccConverterStation(lcc, out)));
+            default -> throw new IllegalStateException(station.getId());
+        };
     }
 
     /** A tap changer: its block and, when the import recorded one, its TapChangerControl. */
