@@ -117,6 +117,6 @@ public final class SwitchAndTerminalFamily extends AbstractFamily {
      * ACDCConverterDCTerminal of a converter.
      */
     static void describeTerminal(String className, String terminalId, boolean connected, CgmesPropertySink out) {
-        out.startObject(className, terminalId).value(ACDC_TERMINAL_CONNECTED, connected).endObject();
+        out.startObject(className, terminalId).literal(ACDC_TERMINAL_CONNECTED, Boolean.toString(connected)).endObject();
     }
 }
