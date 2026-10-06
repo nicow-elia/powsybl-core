@@ -56,9 +56,9 @@ A difference model is an IEC 61970-552 `dm:DifferenceModel` document: it says wh
 change and what it says *after* it, as two lists of statements. PowSyBl writes such documents from a recorded change
 log (see {ref}`difference model export <cgmes-difference-model-export>`) and reads them back here. Difference
 models can also come from an [RDF database](rdf_database.md#difference-models-in-the-database) &mdash; where a
-state is addressed by `(scenario, timestep, version)`, see
-[versioning](rdf_database.md#versioning-snapshots-versions-and-timesteps) and
-[timesteps](rdf_database.md#timesteps-the-outer-dimension) &mdash; rather than from
+state is addressed by `(scenario, modelling authority, timestamp, version)`, see
+[versioning](rdf_database.md#versioning-snapshots-modelling-authorities-timestamps-and-versions) and
+[timestamps](rdf_database.md#timestamps-and-one-tree-per-modelling-authority) &mdash; rather than from
 documents: the stored differences between the version a network holds and the version it is to reach are fetched and
 applied by the very same code.
 

@@ -30,8 +30,8 @@ One database holds the data of many days and many base grid models at the same t
 * `RdfDbConnection.scenarios()` lists the scenarios a database currently holds — the ones holding instance files
   and the ones holding only difference models.
 
-A scenario is the first key of the `(scenario, timestep, version)` triple this family of work packages
-addresses data by, and it is the one that names the **base grid model**: one scenario describes one grid, and the
+A scenario is the first key of the `(scenario, modelling authority, timestamp, version)` address this family of
+work packages addresses data by, and it is the one that names the **base grid model**: one scenario describes one grid, and the
 difference models of [Difference models in the database](#difference-models-in-the-database) never cross from one
 scenario into another. Several days of data are several scenarios in one database.
 
@@ -347,9 +347,8 @@ client never computes the IRI of a data graph, it reads it from a model node.
 The two full-model forms are not interchangeable. Only graphs under `http://powsybl.org/rdfdb/…/graph/…` and
 `…/materialized/…` are **immutable** and therefore cache-trusted (`RdfDbNames.isImmutableGraph`): a versioned
 scenario writes each instance file once, under its model identifier, and never again. A `contexts:` graph belongs
-to a scenario filled by `RdfDbConnection.loadCgmes` without a version (Python `load_cgmes` without one) — or to
-one that was later migrated by `migrateImplicitRoot()`, which declares the files it already holds to be the root
-without moving them — and a re-upload of that scenario replaces it, so the cache re-validates it rather than
+to a scenario filled by `RdfDbConnection.loadCgmes` without a version (Python `load_cgmes` without one), and a
+re-upload of that scenario replaces it, so the cache re-validates it rather than
 trusting the name.
 
 Scenario names and model identifiers are percent-encoded in an IRI; the raw scenario name is also stored as a
@@ -452,10 +451,10 @@ of the embedded server and asserts the bounds below.
 The numbers above are a run of this benchmark on its own, which is the pessimistic one: in a run of the whole
 module, with the JVM warm, every one of them is roughly half.
 
-## Versioning: snapshots, versions and timesteps
+## Versioning: snapshots, modelling authorities, timestamps and versions
 
 Everything above versions *one profile at a time*: a difference supersedes a model and the chain of that profile
-grows. That is enough to move a network forward, and not enough to say "load version 1.1", because a version of a
+grows. That is enough to move a network forward, and not enough to say "load version 2", because a version of a
 grid model is a state of *every* profile at once. The versioning layer adds the node that says so.
 
 ### A version is a resource, not a tag
@@ -467,37 +466,48 @@ The alternative — tagging every object — would need reification or RDF-star,
 catalog queries of the CGMES conversion (a forked catalog to maintain, and a slower one), and it would make the
 data mutable. Named graphs leave the queries untouched, make each graph cacheable by its IRI and free of read
 concurrency, and map one to one onto CGMES itself: `md:Model.Supersedes` is the chain of a profile,
-`md:Model.DependentOn` the dependency between profiles, `md:Model.version` the per-profile counter, and
-`md:Model.scenarioTime` the timestep. What the snapshot adds is the cross-profile consistency unit and the
-user-facing label.
+`md:Model.DependentOn` the dependency between profiles, `md:Model.modelingAuthoritySet` the tree a model belongs
+to, and `md:Model.scenarioTime` the timestamp. What the snapshot adds is the cross-profile consistency unit and
+its address.
 
-### The three keys
+### The four keys and the profile projection
 
-A snapshot is addressed by **`(scenario, timestep, version)`**, and `SnapshotRef` is that address.
+A snapshot is addressed by **`(scenario, modellingAuthority, timestamp, version)`**, unique in a database, and
+`SnapshotRef` is that address.
 
-| Key | What it is | May it be left open? |
-|---|---|---|
-| `scenario` | the base grid model — in practice **one day**. Free-form, non-blank | **never**: there is no default scenario and no "latest scenario" anywhere in this API |
-| `timestep` | a canonical ISO instant in UTC, equal to `md:Model.scenarioTime` of the snapshot's members | yes: `null` means the base timestep of that scenario |
-| `version` | a free label, `[A-Za-z0-9._-]{1,64}`, for instance `"1.1"` | yes: `null` means the head of that timestep's chain |
+| Key | Java type | What it is | `null` on a read | `null` on a write |
+|---|---|---|---|---|
+| `scenario` | `String`, non-blank | the base grid model — in practice **one day** | **refused**: there is no default scenario and no "latest scenario" anywhere in this API | refused |
+| `modellingAuthority` | `String`, non-blank | the `md:Model.modelingAuthoritySet` of the instance files, verbatim, for instance `http://elia.be/CGMES/2.4.15` | **refused**, naming the authorities the scenario holds: guessing would load another TSO's grid | taken from the headers of what is written (`putFull`, `putAsDiff`, `putDiff`); refused when they disagree among themselves |
+| `timestamp` | `java.time.Instant`, second precision | the moment, equal to `md:Model.scenarioTime` of the snapshot's members | the base timestamp of that authority's tree, which is its root's | the same; `putFull` takes the steady state file's scenario time |
+| `version` | `Integer`, at least 1 | the position in the chain of one timestamp | the head of that chain | the head's plus one, 1 for a root or a new timestamp |
 
-Several days in one database are **several scenarios**. A scenario has exactly one root snapshot; a second one is
-refused. Version order is what the chain says, never what comparing two labels says, so `"study-a"` is as good a
-version as `"1.1"`.
+```java
+SnapshotRef.of("2016-01-01", "http://elia.be/CGMES/2.4.15", Instant.parse("2016-01-01T08:30:00Z"), 2);
+SnapshotRef.of("2016-01-01", mas, OffsetDateTime.parse("2016-01-01T09:30:00+01:00"), 2);  // the same address
+SnapshotRef.latest("2016-01-01", mas);            // base timestamp, head
+SnapshotRef.latestAt("2016-01-01", mas, instant); // that timestamp, head
+```
 
-A timestep may be written as an ISO instant (`2016-01-01T08:30:00Z`), an offset date-time
-(`2016-01-01T09:30:00+01:00`), a local date-time read as UTC (which is what a CGMES header usually carries), or as
-a `"8:30"` label. A label is resolved **against the base day and the zone offset of the scenario it is addressed
-in**, which the per-scenario `pdb:Catalog` node records, so the same label means two different instants in two
-scenarios that describe two days. Daylight saving is not handled: the offset is fixed at the root.
+The timestamp is an `Instant`, so a naive or unknown time zone cannot occur in the Java API at all: an instant is
+only built by saying where it is. The one place a zone-less text is still read is the `md:Model.scenarioTime` of a
+CGMES header, which the MicroGrid conformity files write without a zone; it is read as UTC. There are no labels and
+no per-scenario offset: rendering a moment in a local zone is the caller's.
 
-The instant is the key; its `HH:MM` rendering is not. The snapshot node stores that rendering separately as
-`pdb:timestepLabel`, computed once at write time from `pdb:timestep` and the scenario's base offset, and **no
-query ever matches on it** — a caller's `"8:30"` has become an instant before the first request goes out. The term
-was called `pdb:label` before this release, which said neither what it labels nor that it is for display; that
-name is still read, so a store written earlier keeps showing its labels, but it is no longer written. In Java the
-accessor is `SnapshotInfo.timestepLabel()`; in Python the `snapshots()` column is `timestep_label`. The row of
-`timesteps()` keeps the plain name `label`, because a row about one timestep can mean nothing else.
+The version is an integer that **only grows** inside the chain of one timestamp: an explicit version on a write
+must be greater than the head's — gaps are allowed, so an operator may number `10, 20, 30` — and a write that names
+none gets the head's plus one (`SnapshotCatalog.nextVersion(ref)` says which). The CGMES header's own
+`md:Model.version` stays what it is, a per-document counter, and is not tied to the snapshot version.
+
+**Profiles are not a key.** What a snapshot covers is a property of the stored state —
+`SnapshotInfo.profiles()`, the keys of its `pdb:state` — and, on every operation, the caller's **projection**:
+which profiles to load (`RdfDbNetworkLoader.load(db, ref, profiles, …)`), which to compare when a day is ingested
+(`putAsDiff(…, profiles, …)`), which to store at the root (`putFull(…, profiles, …)`), which an update matches the
+network by (`RdfDbUpdateOptions.setProfiles`). Making them a key would give one state two addresses.
+
+Several days in one database are **several scenarios**. Inside a scenario every modelling authority owns **one
+tree** with exactly one root; a second root of the same authority is refused. All trees of a scenario live in its
+one metadata graph and **share its boundary**.
 
 ### Writing snapshots
 
@@ -505,78 +515,102 @@ accessor is `SnapshotInfo.timestepLabel()`; in Python the `snapshots()` column i
 try (RdfDbConnection db = RdfDbConnection.open(RdfDatabase.sparql("http://localhost:3030/ds"))) {
     SnapshotCatalog catalog = db.snapshots("2016-01-01");
 
-    // The root: the instance files become immutable graphs of this scenario
-    SnapshotInfo root = catalog.putFull(dataSource, boundary, SnapshotRef.of("2016-01-01", "1.0"),
+    // The root of one TSO's tree: authority and timestamp from the files, version 1
+    SnapshotInfo be = catalog.putFull(belgium, boundary, SnapshotRef.latest("2016-01-01", null), null,
+            new Properties(), ReportNode.NO_OP);
+    // Another authority of the same day: same boundary, its own tree
+    SnapshotInfo nl = catalog.putFull(netherlands, boundary, SnapshotRef.latest("2016-01-01", null), null,
             new Properties(), ReportNode.NO_OP);
 
-    // A study run on top of it, recorded on a network and stored as version 1.1
-    RdfDbExport.export(network, events, db, "2016-01-01", "1.1", null,
+    // A study run on the Belgian grid, recorded on a network and stored as its next version
+    RdfDbExport.export(network, events, db, SnapshotRef.latest("2016-01-01", be.modellingAuthority()),
             new CgmesDiffExport.ExportOptions(), ReportNode.NO_OP);
 
-    catalog.snapshots();            // the history, oldest first
-    catalog.nextVersionLabel(null); // "1.2"
-    catalog.verify();               // the invariants below, re-checked
+    catalog.modellingAuthorities();      // [http://elia.be/CGMES/2.4.15, http://tennet.nl/CGMES/2.4.15]
+    catalog.snapshots();                 // the history, by authority, oldest first
+    catalog.verify();                    // the invariants below, re-checked
 }
 ```
 
 The rules, all of them enforced by the guard of the write itself rather than by a check before it:
 
-1. one root per scenario (`putFull` twice is a conflict — another day is another scenario);
-2. a graph of `…/<scenario>/graph/` is written once and never overwritten;
-3. a difference must supersede exactly what the parent snapshot states for its profile, otherwise the writer is
+1. one root per `(scenario, modellingAuthority)` (`putFull` twice for one authority is a conflict — another day is
+   another scenario);
+2. **one boundary per scenario**: the first root uploads the boundary models and marks them `pdb:boundary`; every
+   later root must carry the very same boundary model identifiers, links the stored graphs into its own state and
+   uploads nothing of them; a root with another boundary is refused with *"a new boundary is a new scenario"*;
+3. a graph of `…/<scenario>/graph/` is written once and never overwritten;
+4. a difference must supersede exactly what the parent snapshot states for its profile, otherwise the writer is
    told where the head is: *"update the network to the head and re-record"*;
-4. the chain is linear — a second child along a `pdb:VersionEdge` is refused with *"the linear scheme allows no
+5. the chain is linear — a second child along a `pdb:VersionEdge` is refused with *"the linear scheme allows no
    forks"*;
-5. `(scenario, timestep, version)` is unique;
-6. nothing crosses a scenario: every `pdb:parent`, `pdb:member`, `pdb:state` and `pdb:full` of a snapshot points
-   inside the scenario it was written in.
+6. versions only grow: *"version 20 is not greater than the head version 20 of (…): versions only grow"*;
+7. a snapshot and its members belong to one modelling authority and describe one moment: a member stating another
+   `md:Model.modelingAuthoritySet` or another `md:Model.scenarioTime` is refused;
+8. nothing crosses a scenario, and nothing but the shared boundary crosses a modelling authority: every
+   `pdb:parent`, `pdb:member`, `pdb:state` and `pdb:full` of a snapshot points inside its scenario, and a parent is
+   always of the same authority.
 
 Concurrent writers: the guard decides, the loser gets a `RdfDbConflictException` naming the rule, and there is no
-retry. Two writers of two different scenarios never conflict at all — their metadata graphs are disjoint.
+retry. Writers of two authorities never conflict — every guard is scoped by the authority — and writers of two
+scenarios never touch the same graph.
 
-A scenario written before this release (instance files, possibly with a difference chain on them) becomes a
-versioned one through `SnapshotCatalog.migrateImplicitRoot()`: its instance files are declared to be version
-`"0"` at the scenario time of its steady state file, and the differences it already held stay where they are.
+### A CGM is a query
+
+"Every modelling authority at this moment" is one query over the scenario's metadata graph, not a stored node:
+
+```java
+Map<String, SnapshotInfo> cgm = db.snapshots("2016-01-01").assembly(instant, null);  // the head of each authority
+```
+
+An authority with no snapshot at that moment is absent from the answer; the shared boundary is in the `pdb:state`
+of every entry. Loading a CGM as one network stays the caller's: load each entry by its `ref()` and merge. A stored
+assembly is deliberately not written — nothing would read it, and a wrong one stored is worse than none.
 
 ### Reading a version, and the one query that decides how
 
 ```java
-Network n = RdfDbNetworkLoader.load(db, "2016-01-01", "1.1", null, null, params, reportNode);
-UpdateResult r = RdfDbNetworkLoader.update(n, db, SnapshotRef.of("2016-01-01", "1.3"), options, params, rn);
+Network n = RdfDbNetworkLoader.load(db, SnapshotRef.of("2016-01-01", mas, null, 2), null, params, reportNode);
+Network ssh = RdfDbNetworkLoader.load(db, ref, Set.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS),
+        null, params, reportNode);                                       // a profile projection
+UpdateResult r = RdfDbNetworkLoader.update(n, db, SnapshotRef.of("2016-01-01", mas, null, 4), options, params, rn);
 ```
 
 `update` sends **one** query. A `UNION` binds the two ends — the snapshot the network is at (from its provenance,
-or matched by the model identifiers it carries) and the snapshot the caller asked for, resolved by
-`(timestep, version)` in the same query — and a `pdb:parent*` property path walks each of them up to the root. The
-client then takes the deepest snapshot both sides reached as the lowest common ancestor and reads the path off the
-two chains: up from A, each difference *inverted*, then down to B, each one forward.
+or matched by the model identifiers it carries) and the snapshot the caller asked for, resolved by its address in
+the same query (an open timestamp joins the root of the authority's tree, an open version excludes every snapshot
+with a version successor) — and a `pdb:parent*` property path walks each of them up to the root. The client then
+takes the deepest snapshot both sides reached as the lowest common ancestor and reads the path off the two chains:
+up from A, each difference *inverted*, then down to B, each one forward.
 
 | Answer | When | What the caller does |
 |---|---|---|
 | `NOOP` | the network is already at the target | nothing |
 | `DIFF` | every difference on the path is fast-route capable and the path is no longer than `maxDiffChain` (200) | they are fetched in one request, folded per profile and applied in place |
-| `FULL` | a difference states a property no in-place update reads, the path is too long, the two have no common ancestor, or **the network belongs to another scenario** | the network is rebuilt at the target, and the result carries a new instance |
+| `FULL` | a difference states a property no in-place update reads, the path is too long, the two have no common ancestor, or **the network belongs to another scenario or another modelling authority** | the network is rebuilt at the target, and the result carries a new instance |
 
-The cross-scenario case costs **no query at all**: a snapshot IRI carries its scenario, so
-`"network is at scenario 'A', target is scenario 'B': diffs never cross scenarios"` is decided by string
-arithmetic. Walking from the last timestep of one day to the first of the next is therefore a full reload, by
-design — it keeps every chain bounded and lets a database hold as many days as it likes.
+The cross-scenario and the cross-authority cases cost **no query at all**: a snapshot IRI carries its scenario and
+its authority, so `"network is at scenario 'A', target is scenario 'B': diffs never cross scenarios"` and
+`"network is at modelling authority 'A', target is 'B': diffs never cross modelling authorities"` are decided by
+string arithmetic. Walking from the last timestamp of one day to the first of the next is therefore a full reload,
+by design — it keeps every chain bounded and lets a database hold as many days as it likes.
 
-A worked example on the chain A(1.0) → B(1.1) → C(1.2) → D(1.3): `plan(A, B)` is one forward step; `plan(D, C)` is
-one inverted step; `plan(A, D)` is `FULL` when C states something the fast route cannot apply, and the reason names
-C's difference; `plan(D, 1.1)` is two inverted steps.
+A worked example on the chain A(1) → B(2) → C(3) → D(4): `plan(A, B)` is one forward step; `plan(D, C)` is one
+inverted step; `plan(A, D)` is `FULL` when C states something the fast route cannot apply, and the reason names
+C's difference; `plan(D, 2)` is two inverted steps.
 
 ### Materialisation and checkpoints
 
 A load materialises: the full graphs go into a local in-memory store (through the cache — a versioned graph is
 immutable, so it is trusted by default), the differences on the way are applied to it as plain RDF, and the
 unchanged CGMES conversion runs on the result. Which graph a profile starts from is decided **per profile**: each
-one walks up the chain until it finds an ancestor whose `pdb:full` lists a model of that profile.
+one walks up the chain until it finds an ancestor whose `pdb:full` lists a model of that profile. A load with a
+profile projection walks only the profiles it names.
 
 That is what makes a checkpoint useful without breaking anything:
 
 ```java
-Checkpoint.create(db, SnapshotRef.of("2016-01-01", "1.50"));
+Checkpoint.create(db, SnapshotRef.of("2016-01-01", mas, null, 50));
 ```
 
 It copies one graph per profile the chain touched, applies the differences to the copies **on the database** with
@@ -589,44 +623,68 @@ checkpoint.
 
 When to run it: `UpdatePlan.checkpointRecommended()` says so once the distance to the nearest snapshot with full
 graphs passes `RdfDbUpdateOptions.setCheckpointAfter` (100 by default). As a rule of thumb, once every hundred
-versions, or once per timestep. It is idempotent and is not on any hot path.
+versions, or once per timestamp. It is idempotent and is not on any hot path.
 
-### Metadata graph (schema v2)
+### Metadata graph (schema v3)
 
-Schema v1 above, plus the snapshot nodes. Every v1 node stays valid and is read unchanged.
+Schema v1 above, plus the snapshot nodes and the schema marker. Every v1 model node stays valid and is read
+unchanged.
 
 ```turtle
 @prefix pdb: <http://powsybl.org/ns/rdfdb#> .
 @prefix md:  <http://iec.ch/TC57/61970-552/ModelDescription/1#> .
-@prefix s:   <http://powsybl.org/rdfdb/2016-01-01/snapshot/2016-01-01T00%3A00%3A00Z/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix be:  <http://powsybl.org/rdfdb/2016-01-01/http%3A%2F%2Felia.be%2FCGMES%2F2.4.15/snapshot/2016-01-01T00%3A00%3A00Z/> .
 # graph <http://powsybl.org/rdfdb/2016-01-01/meta>
 
-<http://powsybl.org/rdfdb/2016-01-01/catalog> a pdb:Catalog ; pdb:scenario "2016-01-01" ;
-    pdb:baseTimestep "2016-01-01T00:00:00Z" ; pdb:baseOffset "Z" .
+<http://powsybl.org/rdfdb/2016-01-01/schema> pdb:schema 3 ; pdb:scenario "2016-01-01" .
 
-s:1.0 a pdb:Snapshot ; pdb:scenario "2016-01-01" ; pdb:version "1.0" ;
-    pdb:timestep "2016-01-01T00:00:00Z" ; pdb:timestepLabel "00:00" ; pdb:kind pdb:Full ; pdb:depth 0 ;
-    pdb:timestepRoot s:1.0 ;
-    pdb:member <urn:uuid:eq-1>, <urn:uuid:ssh-1> ;   # what this snapshot adds
-    pdb:state  <urn:uuid:eq-1>, <urn:uuid:ssh-1> ;   # what a reader is at once it reaches it
-    pdb:full   <urn:uuid:eq-1>, <urn:uuid:ssh-1> .   # where a materialisation may start, per profile
+be:1 a pdb:Snapshot ; pdb:scenario "2016-01-01" ; pdb:modellingAuthority "http://elia.be/CGMES/2.4.15" ;
+    pdb:timestamp "2016-01-01T00:00:00Z"^^xsd:dateTime ; pdb:version 1 ; pdb:kind pdb:Full ; pdb:depth 0 ;
+    pdb:timestampRoot be:1 ;
+    pdb:member <urn:uuid:eq-1>, <urn:uuid:ssh-1>, <urn:uuid:eqbd> ;   # what this snapshot adds
+    pdb:state  <urn:uuid:eq-1>, <urn:uuid:ssh-1>, <urn:uuid:eqbd> ;   # what a reader is at once it reaches it
+    pdb:full   <urn:uuid:eq-1>, <urn:uuid:ssh-1>, <urn:uuid:eqbd> .   # where a materialisation may start
 
-s:1.1 a pdb:Snapshot ; pdb:version "1.1" ; pdb:timestep "2016-01-01T00:00:00Z" ; pdb:kind pdb:Diff ;
-    pdb:parent s:1.0 ; pdb:edge pdb:VersionEdge ; pdb:depth 1 ;
-    pdb:timestepRoot s:1.0 ; pdb:member <urn:uuid:ssh-d2> ;
-    pdb:state <urn:uuid:eq-1>, <urn:uuid:ssh-d2> .
+<urn:uuid:eqbd> a md:FullModel ; pdb:subset "EQ_BD" ; pdb:boundary true ; pdb:snapshot be:1 .   # + the v1 terms
 
-<urn:uuid:ssh-d2> a dm:DifferenceModel ; pdb:subset "SSH" ; pdb:snapshot s:1.1 ;
-    md:Model.Supersedes <urn:uuid:ssh-1> ; md:Model.scenarioTime "2016-01-01T00:00:00Z" .   # + the v1 terms
+be:2 a pdb:Snapshot ; pdb:modellingAuthority "http://elia.be/CGMES/2.4.15" ;
+    pdb:timestamp "2016-01-01T00:00:00Z"^^xsd:dateTime ; pdb:version 2 ; pdb:kind pdb:Diff ;
+    pdb:parent be:1 ; pdb:edge pdb:VersionEdge ; pdb:depth 1 ;
+    pdb:timestampRoot be:1 ; pdb:member <urn:uuid:ssh-d2> ;
+    pdb:state <urn:uuid:eq-1>, <urn:uuid:ssh-d2>, <urn:uuid:eqbd> .
 
-# after Checkpoint.create(db, SnapshotRef.of("2016-01-01", "1.1")):
-s:1.1 pdb:full <http://powsybl.org/rdfdb/2016-01-01/materialized/…/1.1/SSH>, <urn:uuid:eq-1> .
+<urn:uuid:ssh-d2> a dm:DifferenceModel ; pdb:subset "SSH" ; pdb:snapshot be:2 ;
+    md:Model.Supersedes <urn:uuid:ssh-1> ; md:Model.modelingAuthoritySet "http://elia.be/CGMES/2.4.15" ;
+    md:Model.scenarioTime "2016-01-01T00:00:00Z" .   # + the v1 terms
+
+# the root of a second authority links the same boundary model and uploads nothing of it
+<http://powsybl.org/rdfdb/2016-01-01/http%3A%2F%2Ftennet.nl%2FCGMES%2F2.4.15/snapshot/2016-01-01T00%3A00%3A00Z/1>
+    a pdb:Snapshot ; pdb:modellingAuthority "http://tennet.nl/CGMES/2.4.15" ; … ; pdb:state <urn:uuid:eqbd>, … .
+
+# after Checkpoint.create(db, SnapshotRef.of("2016-01-01", "http://elia.be/CGMES/2.4.15", null, 2)):
+be:2 pdb:full <http://powsybl.org/rdfdb/2016-01-01/materialized/http%3A%2F%2Felia.be%2FCGMES%2F2.4.15/…/2/SSH>,
+    <urn:uuid:eq-1>, <urn:uuid:eqbd> .
 ```
 
-A second scenario repeats the whole structure under `http://powsybl.org/rdfdb/<other scenario>/`, with no edge of
-any kind between the two.
+The snapshot IRI is `http://powsybl.org/rdfdb/<scenario>/<authority>/snapshot/<ISO instant>/<version>`, every
+segment percent-encoded, and `RdfDbNames.refOf` reads all four keys back off it without a request. A second
+scenario repeats the whole structure under `http://powsybl.org/rdfdb/<other scenario>/`, with no edge of any kind
+between the two.
 
-A snapshot node carries no boolean that repeats what its links already say. Two used to:
+**No migration.** A scenario whose metadata graph has snapshots but no `pdb:schema 3` — in particular one written
+by the earlier `(scenario, timestep, version)` schema, recognisable by its `pdb:Catalog` node or its `pdb:timestep`
+keys — is refused at the first read or write that touches it:
+
+> scenario 'S' was written by the (scenario, timestep, version) schema of an earlier release (a pdb:Catalog node);
+> this release reads only stores of schema 3, addressed by (scenario, modelling authority, timestamp, version).
+> There is no migration: clear the scenario (RdfDbConnection.clear) and re-ingest it
+
+A graph carrying another schema number is refused the same way (*"carries pdb:schema 4, and this release reads
+only stores of schema 3"*). `RdfDbConnection.clear(scenario)` still works on such a scenario: it is the way out.
+The earlier schema lived inside one unreleased change, and re-ingesting a day costs minutes.
+
+A snapshot node carries no boolean that repeats what its links already say:
 
 * the fast-route capability is stored **once**, on the difference model (`pdb:fastPredicatesOnly`). The `fast`
   column of a snapshot listing — `SnapshotInfo.fast()` in Java, the `fast` column of `db.snapshots(...)` in
@@ -635,13 +693,8 @@ A snapshot node carries no boolean that repeats what its links already say. Two 
 * whether a materialisation may start at a snapshot is *having* a `pdb:full` link. `SnapshotInfo.hasFull()` and
   the `has_full` column are `!fullModels().isEmpty()`, computed from the rows the listing already returns.
 
-Databases written by an earlier release carry `pdb:fast` and `pdb:hasFull` triples on their snapshot nodes; this
-release ignores both — never read, never rewritten, never deleted — so a store filled before the change is read
-correctly without a migration. One consequence is worth stating for a mixed-release deployment: a checkpoint
-written here adds the `pdb:full` links and leaves a legacy `pdb:hasFull false` beside them, so a client of the
-*previous* shape reading that store would still believe the snapshot has no full graphs. Such a client would
-reload rather than start at the checkpoint — slower, never wrong — and the situation ends as soon as every client
-reads the links.
+The typed literals of the key (`xsd:dateTime`, `xsd:integer`) are written in one lexical form and matched as
+constants and compared numerically on both backends, which `RdfDbSparqlSemanticsTest` asserts.
 
 `pdb:graph` is a **string literal**, not an IRI: the in-process backend keeps the graphs of an unversioned
 scenario under the plain instance file name, and a CGMES file name is not always writable as an IRI — the CGMES 3
@@ -687,62 +740,69 @@ is between two medians of the same warm state.
 * A checkpoint of a fifty-difference chain costs 120 ms on Fuseki, about what one materialisation costs, and takes
   the load from 107 ms to 97 ms.
 
-## Timesteps: the outer dimension
+## Timestamps, and one tree per modelling authority
 
 A day is not one grid state but ninety-six of them, and a study run is another dimension on top of each. Both live
-inside the same scenario, and they are not the same kind of key:
+inside the tree of one modelling authority, and they are not the same kind of key:
 
 ```
-scenario "2016-01-01"                     scenario "2016-01-02"   (a different day = a different scenario)
-  catalog: base 00:00, offset Z             ...no edge of any kind between the two...
-  00:00  1.0 ──── 1.1 ──── 1.2             the same structure again
-          │        │
-          │        └── 08:30  1.0 ── 1.1        pdb:TimestepEdge down, pdb:VersionEdge across
-          └── 08:15  1.0
+scenario "2016-01-01"   (one metadata graph, one boundary)          scenario "2016-01-02"
+  authority BE                         authority NL                   ...no edge of any kind...
+  00:00  1 ──── 2 ──── 3               00:00  1 ──── 2                 the same structure again
+         │      │                             │
+         │      └── 08:30  1 ── 2             └── 08:30  1
+         └── 08:15  1                  pdb:TimestampEdge down, pdb:VersionEdge across
+
+  assembly(08:30, null) = { BE: (BE, 08:30, 2), NL: (NL, 08:30, 1) }   — the CGM of that moment, one query
 ```
 
 **Versions are the inner dimension** because they change more often — every study run adds one — while the
-timesteps of a day are fixed by its schedule. So a timestep is a *root* snapshot pinned to a version of the **base
-chain** by a `pdb:TimestepEdge`, with a version chain of its own below it. Three things follow:
+timestamps of a day are fixed by its schedule. So a timestamp is a *root* snapshot pinned to a version of the
+**base chain of its own authority** by a `pdb:TimestampEdge`, with a version chain of its own below it. Three
+things follow:
 
-* every timestep is "the base plus a handful of differences", however many study versions the other timesteps
-  accumulate, which is what keeps a fetch of any timestep cheap;
-* a walk from one timestep to another is the ordinary lowest-common-ancestor plan: up the first timestep's
-  versions, up to the pin, then down into the second. Two fast differences, one composed update;
-* a timestep root may only derive from the **base** chain. A client sitting at 08:30 that wants to write 08:45
+* every timestamp is "the base plus a handful of differences", however many study versions the other timestamps
+  accumulate, which is what keeps a fetch of any timestamp cheap;
+* a walk from one timestamp to another of the same authority is the ordinary lowest-common-ancestor plan: up the
+  first timestamp's versions, up to the pin, then down into the second. Two fast differences, one composed update;
+* a timestamp root may only derive from the **base** chain. A client sitting at 08:30 that wants to write 08:45
   first brings itself back to the base head — which is fast when its own differences are fast — and is told so:
-  *"timestep roots derive from the base timestep of scenario 'S'; update the network to the base head first"*.
+  *"timestamp roots derive from the base timestamp of modelling authority 'A' of scenario 'S'; update the network
+  to the base head first"*.
 
-Writing one is the ordinary export, with the timestep in the address:
+Writing one is the ordinary export, with the timestamp in the address:
 
 ```java
-// a recorder at the base head writes the 08:30 timestep of that day. A label belongs to a scenario - it means
-// that wall time on *its* base day - so the form taking one takes the scenario with it
-RdfDbExport.export(network, events, db, "2016-01-01", "1.0", "8:30", options, reportNode);
-// a study on top of it
-RdfDbExport.export(network, events, db, "2016-01-01", "1.1", "8:30", options, reportNode);
-// the same address as a value: SnapshotRef.of(version, text, catalog) resolves the label in that scenario
-SnapshotRef at0830 = SnapshotRef.of("1.1", "8:30", db.snapshots("2016-01-01"));
+String mas = "http://elia.be/CGMES/2.4.15";
+Instant at0830 = Instant.parse("2016-01-01T08:30:00Z");
+// a recorder at the base head writes the 08:30 timestamp of that day: version 1 of it
+RdfDbExport.export(network, events, db, SnapshotRef.latestAt("2016-01-01", mas, at0830), options, reportNode);
+// a study on top of it: version 2
+RdfDbExport.export(network, events, db, SnapshotRef.latestAt("2016-01-01", mas, at0830), options, reportNode);
 
-db.snapshots("2016-01-01").timesteps();        // one row per timestep: label, root, head, how many versions
-db.snapshots("2016-01-01").versions("8:30");   // the chain inside one timestep
-Network n = RdfDbNetworkLoader.load(db, "2016-01-01", "1.1", "8:30", null, params, rn);
+db.snapshots("2016-01-01").timestamps(mas);           // one row per timestamp: root, head, how many versions
+db.snapshots("2016-01-01").versions(mas, at0830);     // the chain inside one timestamp
+Network n = RdfDbNetworkLoader.load(db, SnapshotRef.of("2016-01-01", mas, at0830, 2), null, params, rn);
 ```
 
 ### Ingesting a day from its files
 
 A TSO does not record its schedule on a network: it exports ninety-six sets of instance files. `putAsDiff` is what
-turns one of them into a version of the scenario:
+turns one of them into a version of its tree:
 
 ```java
-db.snapshots("2016-01-01").putAsDiff(filesOf0830, null,
-        SnapshotRef.of("1.0", "8:30", db.snapshots("2016-01-01")), importParams, reportNode);
+db.snapshots("2016-01-01").putAsDiff(filesOf0830, null, SnapshotRef.latestAt("2016-01-01", null, at0830),
+        null, importParams, reportNode);   // authority from the files, EQ and SSH compared
 ```
 
 It materialises the parent state as triples (the first half of an ordinary materialisation, from the cache after
-the first timestep of the day), parses the new files, and compares the two graphs profile by profile. What comes
+the first timestamp of the day), parses the new files, and compares the two graphs profile by profile. What comes
 out is an ordinary difference model, so every rule, guard and message of a recorded difference applies to an
 ingested one.
+
+The profiles compared are the caller's projection, `EQ` and `SSH` when it names none. A listed profile the files do
+not carry is refused; a file of a profile that is not compared is read for its header alone, reported, and the
+snapshot inherits the parent's state of it. The boundary is never compared.
 
 What the comparison does and does not call a change:
 
@@ -753,28 +813,29 @@ What the comparison does and does not call a change:
 * an added object arrives as a forward `rdf:type` plus its properties, a removed one as a reverse type plus all of
   them — which is exactly what the store-level applier and the fast-route check expect.
 
-**EQ drift is allowed.** When the equipment of a timestep differs from the base — a renamed line, an added base
+**EQ drift is allowed.** When the equipment of a timestamp differs from the base — a renamed line, an added base
 voltage — the ingested EQ difference states properties no in-place update reads, the planner answers `FULL`, and
 the client materialises. Nothing fails; the fast route is simply not taken, and the reason names the difference.
 
 **The boundary never changes.** A boundary gives the objects of a grid model their identity, so a set of files
-whose boundary model differs from the scenario's root is refused: a new boundary is a new base grid model, and a
-new base grid model is a new scenario.
+whose boundary model differs from the scenario's is refused: a new boundary is a new base grid model, and a new
+base grid model is a new scenario.
 
-Two rules of the timestep dimension, both enforced by the guard of the write:
+Two rules of the timestamp dimension, both enforced by the guard of the write:
 
-1. **one root per (scenario, timestep)** — a second writer of the same new timestep loses and is told so;
+1. **one root per (scenario, modellingAuthority, timestamp)** — a second writer of the same new timestamp loses and
+   is told so;
 2. **a snapshot and its members describe the same moment**: a difference whose `md:Model.scenarioTime` disagrees
-   with the timestep it is written at is refused. A difference that states no scenario time at all belongs to the
-   timestep of its snapshot, which is the ordinary case for a change recorded on a network.
+   with the timestamp it is written at is refused. A difference that states no scenario time at all belongs to the
+   timestamp of its snapshot, which is the ordinary case for a change recorded on a network.
 
-Inside one timestep the version chain stays linear, exactly as on the base chain. What is *not* linear any more is
-`md:Model.Supersedes` of a base model: every timestep of a day supersedes the same base steady-state model, which
-is the fan in the picture above. That is deliberate — it is what "base plus differences per timestep" means — and
-the linearity that matters is guarded on the snapshot (one root per timestep, one version successor per snapshot)
+Inside one timestamp the version chain stays linear, exactly as on the base chain. What is *not* linear any more is
+`md:Model.Supersedes` of a base model: every timestamp of a day supersedes the same base steady-state model, which
+is the fan in the picture above. That is deliberate — it is what "base plus differences per timestamp" means — and
+the linearity that matters is guarded on the snapshot (one root per timestamp, one version successor per snapshot)
 rather than on the model.
 
-## Timesteps and versions as network variants
+## Timestamps and versions as network variants
 
 Everything above moves *one* network from one stored state to another. This section is the other way of using the
 same store: a network that holds **several** stored states at once, one per IIDM variant, so that a whole day is one
@@ -807,20 +868,24 @@ possible &mdash; whether a `FULL_RELOAD` with a new network object can still hap
 `variantBindings()`: a tracked clone produces a binding without opting in.
 
 ```java
-// A day of 96 timesteps in one network
-VariantLoadResult day = RdfDbNetworkLoader.loadVariants(db, "2016-01-01", "1.0",
-        List.of("08:00", "08:15", "08:30", /* … */), new RdfDbVariantLoadOptions(), null, params, reportNode);
-Network network = day.network();
-network.getVariantManager().setWorkingVariant("08:30");
+// A day of 96 timestamps in one network, version 1 of each
+List<VariantRequest> requests = day.stream()
+        .map(instant -> VariantRequest.of(SnapshotRef.of("2016-01-01", mas, instant, 1))).toList();
+VariantLoadResult loaded = RdfDbNetworkLoader.loadVariants(db, "2016-01-01", requests,
+        new RdfDbVariantLoadOptions(), null, params, reportNode);
+Network network = loaded.network();
+network.getVariantManager().setWorkingVariant("2016-01-01T08:30:00Z");
 LoadFlow.run(network);                       // the state of 08:30, the other variants untouched
 
 // One more variant, created on demand
-RdfDbNetworkLoader.update(network, db, "2016-01-01", "1.1", "08:30", "study@08:30", params, reportNode);
+RdfDbNetworkLoader.update(network, db, SnapshotRef.of("2016-01-01", mas, at0830, 2),
+        new RdfDbUpdateOptions().setTargetVariant("study@08:30"), params, reportNode);
 ```
 
 ### What a variant stands for
 
-A bound variant is a `VariantBinding`: the snapshot address `(scenario, version, timestep)`, the snapshot IRI, the
+A bound variant is a `VariantBinding`: the snapshot address `(scenario, modellingAuthority, timestamp, version)`
+(`modellingAuthority()`, `timestamp()`, `version()`), the snapshot IRI, the
 stored model per CGMES profile, the case date of that moment, and which variant it was cloned from. The bindings
 live on the `RdfDbProvenance` extension of the network and are read with `variantBindings()` and
 `variantBinding(id)`.
@@ -942,7 +1007,7 @@ aggregate nor a back-fill tool.
 
 ### Loading a day, and what it costs in requests
 
-`loadVariants` does in a constant number of requests what a loop would do per timestep:
+`loadVariants` does in a constant number of requests what a loop would do per timestamp:
 
 1. one `chains` query binds every requested address and walks all of their chains at once, returning each reached
    snapshot's detail rows exactly once;
@@ -954,28 +1019,30 @@ aggregate nor a back-fill tool.
 5. the variants sourced from the primary are created in a single `cloneVariant(primary, list)`, and each target is
    then brought to its snapshot inside its own scope.
 
-Measured on the embedded server (`RdfDbRequestCountTest`): **13 requests for 2 timesteps and 13 for 8** — the cost
-is the fixture's instance files plus a constant, not a function of the number of timesteps. Creating or moving a
+Measured on the embedded server (`RdfDbRequestCountTest`): **13 requests for 2 timestamps and 13 for 8** — the cost
+is the fixture's instance files plus a constant, not a function of the number of timestamps. Creating or moving a
 single variant is 3 requests, exactly like a snapshot update.
 
-Naming: an explicit identifier wins; otherwise the `HH:MM` label of the timestep when the labels of all requests are
-distinct (a day reads as `08:30`), and `version@label` when they are not (a study reads as `1.1@08:30`). A timestep
-without a label falls back to its canonical instant. Duplicate identifiers, `InitialState` and an empty request list
+Naming: an explicit identifier wins (`RdfDbVariantLoadOptions.setNaming` for a rule); otherwise the ISO instant of
+the timestamp when the timestamps of all requests are distinct (a day reads as `2016-01-01T08:30:00Z`), and
+`version@instant` when they are not (a study reads as `2@2016-01-01T08:30:00Z`). A variant never crosses a
+modelling authority: a variant of a BE network asked to stand for an NL snapshot is `VARIANT_REFUSED`, decided off
+the IRIs without a request. Duplicate identifiers, `InitialState` and an empty request list
 are `IllegalArgumentException`; an address the scenario does not hold is an `RdfDbException` naming every missing
 one, raised before anything is loaded.
 
 ### Writing one history per variant
 
-A network whose variants are the timesteps of a day holds parallel histories, and an export keeps them apart:
+A network whose variants are the timestamps of a day holds parallel histories, and an export keeps them apart:
 
 ```java
 Map<String, RdfDbExport.VariantExport> written =
         RdfDbExport.exportPerVariant(network, recorder.getEvents(), db, null, options, reportNode);
 ```
 
-* the target of a variant is the successor of **that variant's** snapshot: same scenario, same timestep, next
-  version of that timestep's chain. A caller-given scenario time that is not the variant's timestep is an error,
-  not a silent move;
+* the target of a variant is the successor of **that variant's** snapshot: same scenario, same modelling
+  authority, same timestamp, next version of that timestamp's chain (or the `Integer newVersion` given). A
+  caller-given scenario time that is not the variant's timestamp is an error, not a silent move;
 * the export runs inside the variant's scope, so the values written are that variant's and the `Supersedes` names
   that variant's model;
 * changes recorded on another variant are **dropped** — naming a variant is a selection;
@@ -1017,9 +1084,9 @@ case, the 96 variants come to about 1 MB; see the caveat under the table below.
 
 ### Performance of the variant flows
 
-MicroGrid BE, 96 steady-state timesteps of one version, medians of five runs after two warm-ups, eight-core
+MicroGrid BE, 96 steady-state timestamps of one version, medians of five runs after two warm-ups, eight-core
 machine, loopback Fuseki and the in-process backend, milliseconds. `lv` is `loadVariants` of the whole day, `sep`
-is ninety-six separate loads of the same timesteps, `walk` is one network updated ninety-six times (which keeps no
+is ninety-six separate loads of the same timestamps, `walk` is one network updated ninety-six times (which keeps no
 history at all).
 
 ```text
@@ -1029,7 +1096,7 @@ fuseki   rich       752        667      70    117      1    412   med 4 / max 10
 memory   thin       366        319      21      3      0    262   med 2 / max 6    2734     497
 memory   rich       481        407      16      5      0    357   med 3 / max 6    2625     517
 
-TARGET MET on both shapes: a warm load of the 96 timesteps on the in-process backend takes 319 ms (thin) and
+TARGET MET on both shapes: a warm load of the 96 timestamps on the in-process backend takes 319 ms (thin) and
 407 ms (rich), against a target of 1 000 ms. Every per-variant apply is far inside the 100 ms budget, so no
 profiling run was needed. The 96 variants cost about 1 MB of heap on this fixture; the measurement - the same
 network read after a collection with and without them - resolves no better than that.
@@ -1039,29 +1106,32 @@ Target: a warm `lv` on the in-process backend under 1 000 ms for both shapes. Th
 (`TARGET MET` / `TARGET MISSED`) and never asserted, because it is a statement about an *idle* machine: the same
 run on a machine with a load average of ten measured 763 ms and 968 ms. What
 `-Dpowsybl.rdfdb.benchmark.strict=true` asserts is the ratio the design is about &mdash; a day as variants is at
-least three times cheaper than loading every timestep on its own &mdash; with both figures taken from the same
+least three times cheaper than loading every timestamp on its own &mdash; with both figures taken from the same
 run, so that a busy machine slows them together. The numbers in the table above therefore need an idle machine to
 be reproduced: the same build measured 319, 354 and 763 ms for the warm thin day at load averages of roughly 1, 5
 and 10, while `lv : sep` stayed between 9 and 11 throughout.
 
 ## Limitations of this work package
 
-* **A CGM produces one network.** Subnetworks are separated at file level, by the importer, before any triple
-  store exists. To get subnetworks out of a database, load each IGM into its own scenario and merge the networks.
-  The tests compare CGMs with `iidm.import.cgmes.cgm-with-subnetworks=false` on both sides.
+* **A CGM is a query and several loads; one network per IGM.** The IGMs of one day are the trees of the modelling
+  authorities of one scenario, and `SnapshotCatalog.assembly(timestamp, version)` names the snapshot of each at one
+  moment. Loading them as one network is the caller's: load each IGM by its address and merge the networks.
+  Subnetworks of a file-loaded CGM are separated at file level, by the importer, before any triple store exists;
+  the tests compare CGMs with `iidm.import.cgmes.cgm-with-subnetworks=false` on both sides.
 * **Graphs are mutable** in the unversioned flow, so caching is opt-in there (above). A graph a snapshot refers
   to is written once and never rewritten, and is trusted by the cache by default.
-* **One base day per scenario, and no link between two scenarios.** Walking from the last timestep of one day to
-  the first of the next is a full reload of the other scenario. That is what keeps every chain bounded and the
+* **One base day per scenario, and no link between two scenarios or two modelling authorities.** Walking from the
+  last timestamp of one day to the first of the next, or from one authority's tree to another's, is a full reload. That is what keeps every chain bounded and the
   plan query independent of how much the database holds; the base graphs of the other day are cached, so the
   reload is a materialisation and not an upload.
-* **File-based timestep ingestion compares the equipment model and the steady state hypothesis only.**
+* **File-based timestamp ingestion compares the equipment model and the steady state hypothesis by default.**
   `SnapshotCatalog.putAsDiff` materialises the parent state, compares it with the files triple by triple
   (`TripleDiffCalculator`) and writes the result as an ordinary version. State variables and topology change
-  wholesale between timesteps, so a difference of them would be as large as the data: their files are read,
-  reported and left alone, and the snapshot inherits the parent's. A network loaded at such a timestep therefore
-  carries the **base's** state variables; a caller wanting consistent flows runs a load flow. Storing them whole
-  per timestep is the next step and the schema already allows it (`pdb:full` on a diff snapshot).
+  wholesale between timestamps, so a difference of them would be as large as the data: unless the caller lists
+  them in the profile projection, their files are read for their headers, reported and left alone, and the snapshot
+  inherits the parent's. A network loaded at such a timestamp therefore carries the **base's** state variables; a
+  caller wanting consistent flows runs a load flow. Storing them whole per timestamp is the next step and the
+  schema already allows it (`pdb:full` on a diff snapshot).
 * **Network variants do not make the equipment description per variant.** Operational limit values, voltage
   limits, branch impedances, the rating and loss factor of an HVDC line in the default simplified DC model, the
   power factor of a line commutated converter and every IIDM property are single fields of the network. A
@@ -1080,32 +1150,33 @@ and 10, while `lv : sep` stayed between 9 and 11 throughout.
   loaded again from the database, which is one `loadVariants` call.
 * **Creating a variant while other threads read the network is unsupported** &mdash; that is an IIDM property,
   not one of this layer. Create the variants first (above).
-* **The 96-timestep ingestion benchmark and its store-size claim are not measured.** What is measured is a
+* **The 96-timestamp ingestion benchmark and its store-size claim are not measured.** What is measured is a
   fifty-difference chain (above); what is not is a whole day of ingestion and the claim that the difference store
   stays under a quarter of ninety-six full steady-state models.
-* **Daylight saving is not handled** by the `HH:MM` labels: a scenario has one fixed zone offset, recorded on its
-  catalogue node at the root. Callers working across a transition pass instants.
+* **There are no wall-time labels.** The key is an instant; rendering it in a local zone, daylight saving
+  included, is the caller's.
 * **A snapshot cannot be deleted**; a scenario can be dropped whole (`RdfDbConnection.clear`,
   `SnapshotCatalog.dropAll`).
 * **The pre-versioning entry points mean "the newest snapshot" on a versioned scenario.**
   `RdfDbNetworkLoader.load(db, scenario, …)` and `update(…, DiffTarget.head(), …)` delegate to the snapshot path
-  when the scenario holds snapshots; the catalogue read they make anyway is what tells them, so the delegation
-  costs no request. A *named* `DiffTarget` keeps the model-level path, which is what a caller addressing
+  when the scenario holds snapshots of exactly one modelling authority (a scenario of several is refused with the
+  list of them: address it with a `SnapshotRef`); the catalogue read they make anyway is what tells them. A *named* `DiffTarget` keeps the model-level path, which is what a caller addressing
   individual stored models asked for.
-* **`CatalogSnapshot.head(subset)` is ambiguous on a scenario with several timesteps**, and says so rather than
-  picking one: every timestep of a day supersedes the same base steady-state model, so that profile has one
-  successor per timestep. Such a scenario is addressed by `SnapshotRef`, which says *which* newest state is meant.
+* **`CatalogSnapshot.head(subset)` is ambiguous on a scenario with several timestamps**, and says so rather than
+  picking one: every timestamp of a day supersedes the same base steady-state model, so that profile has one
+  successor per timestamp. Such a scenario is addressed by `SnapshotRef`, which says *which* newest state is meant.
   The copies a `Checkpoint` folds are not affected: they are `pdb:Materialized` nodes and the catalogue of stored
   models ignores them.
 * **`loadCgmes` is refused on a versioned scenario**: its instance files are immutable graphs a snapshot refers
   to, and a second, unversioned set next to them would be unreachable. Use `SnapshotCatalog.putFull` for the root
-  and `putAsDiff` for a timestep.
-* **A timestep label is `HH:MM`, and `HH:MM:SS` when the timestep is not on the minute**, so that two timesteps
-  thirty seconds apart never show the same label.
+  and `putAsDiff` for a timestamp.
+* **No migration of an earlier store.** A scenario of the earlier `(scenario, timestep, version)` schema is refused
+  with a message; clear it and ingest it again.
 * **`REMOTE` query mode cannot read a versioned scenario**: the differences would have to be applied on the
   server. `Checkpoint` is what applies them there, and it produces graphs a plain load can read.
 * **Authentication** is HTTP basic or a fixed header.
-* **Restricting a load to some CGMES subsets** (`RdfDbLoadOptions.setSubsets`, and the default of an update) is
+* **Restricting a scenario-addressed load to some CGMES profiles** (`RdfDbLoadOptions.setProfiles`, and the
+  default of an update) is
   honoured in `LOCAL` mode on both backends and in `REMOTE` mode on a SPARQL database, where it becomes the
   dataset of every query. It is **not** honoured by `REMOTE` mode on the in-process `memory:` backend, which has
   one store per scenario and no dataset parameters: a remote-mode subset load there sees the whole scenario.
@@ -1125,12 +1196,15 @@ and 10, while `lv : sep` stayed between 9 and 11 throughout.
   terminal flows and the solved tap position of the equipment the difference touched. The update workflow clears
   them because the hypothesis they were computed for is gone; a conversion keeps what the state variables file
   says. Both values are stale and no difference model can carry the disagreement away.
-* **A partial load of a versioned scenario is refused.** `RdfDbLoadOptions.setSubsets` restricts a plain load; on a
-  scenario that holds differences it would build a network from a state that never existed, and the load fails with
-  a message saying so.
+* **A partial load is addressed, not scenario-wide.** `RdfDbLoadOptions.setProfiles` restricts a plain load; on a
+  scenario that holds differences it would build a network from a state that never existed, and that load fails
+  with a message saying so. A snapshot is loaded with a profile projection through
+  `RdfDbNetworkLoader.load(db, ref, profiles, …)`, which takes each named profile at the state the snapshot has
+  for it.
 * **One model per profile.** A network carrying two CGMES models of one profile — a merged model with two modelling
   authorities — cannot be the sender or the receiver of a difference: a stored chain versions one model. Such a
-  network is refused rather than silently halved. Load the individual grid models into scenarios of their own.
+  network is refused rather than silently halved: write each authority's changes from a network of that
+  authority (or from its variant), into its own tree.
 * **A crash between the two phases of a large write leaves orphan graphs.** They are invisible to every reader;
   `ModelCatalog.orphanGraphs()` lists them.
 * **No pre-parsed on-disk cache.** Serialising the parsed graphs as RDF4J binary RDF under a cache directory would
