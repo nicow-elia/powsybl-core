@@ -54,13 +54,10 @@ At the end, PowSyBl will contain the operational data for all 24 hours, with eac
 
 A difference model is an IEC 61970-552 `dm:DifferenceModel` document: it says what a CGMES model said *before* a
 change and what it says *after* it, as two lists of statements. PowSyBl writes such documents from a recorded change
-log (see {ref}`difference model export <cgmes-difference-model-export>`) and reads them back here. Difference
-models can also come from an [RDF database](rdf_database.md#difference-models-in-the-database) &mdash; where a
-state is addressed by `(scenario, modelling authority, timestamp, version)`, see
-[versioning](rdf_database.md#versioning-snapshots-modelling-authorities-timestamps-and-versions) and
-[timestamps](rdf_database.md#timestamps-and-one-tree-per-modelling-authority) &mdash; rather than from
-documents: the stored differences between the version a network holds and the version it is to reach are fetched and
-applied by the very same code.
+log (see {ref}`difference model export <cgmes-difference-model-export>`) and reads them back here. The entry points
+take a `DifferenceModelSet`, wherever it comes from: a document, or a store that composed it, such as the
+[RDF database](rdf_database.md); how a stored path of differences reaches this importer, and how a refusal travels
+back, is on the [integration page](rdf_database_integration.md#import-the-diff-route-the-full-route-and-how-a-refusal-travels-back).
 
 Applying one *in place* means feeding its forward statements through the ordinary network update workflow: no file is
 re-read, no network is rebuilt, and the result is exactly what the partial SSH file of the same change would have
@@ -261,9 +258,10 @@ terminal of a node/breaker voltage level that has no fictitious switch yet (the 
 requires the scoped update, because the full update writes properties and validation levels that belong to the
 whole network.
 
-There is no import parameter for it: it is set by the layer that binds a variant to a stored state, see
-[the RDF database](rdf_database.md), and `Network.update(dataSource)` has no variant to name. The authoritative
-table of what is and is not per variant is in that document.
+There is no import parameter for it: it is set by the layer that binds a variant to a stored state (the RDF
+database, see [variant mode](rdf_database_integration.md#variant-mode)), and `Network.update(dataSource)` has no
+variant to name. The authoritative table of what is and is not per variant is
+[in the RDF database page](rdf_database.md#which-changes-stay-inside-a-variant).
 
 Reverting a difference that closed a branch CGMES models as a switch states `connected = false` for its terminals,
 and since powsybl-core #4085 the update then creates the fictitious switch of each node/breaker terminal that has none:
@@ -324,10 +322,10 @@ files around, will not grow a second RDF engine, and will never apply structural
 that callers and databases can route a difference without trying, (3) a small statement applier for *its own* triple
 store, `CgmesDiffImport.applyToTripleStore(store, difference, contextName, baseName)`, which replaces property values
 inside one named graph through SPARQL UPDATE and therefore works on an in-memory store as well as on a remote
-repository, and (4) with the RDF database integration, a database-side merge fallback: when a path of differences is
-not fast, the base graphs are already at hand in the store, the differences are merged there and the conversion is
-re-run &mdash; a slow route without files. OpenCGMES is also the reference the difference-model file structure is
-validated against.
+repository; `applyToGraph` is the same operation on a local store, which is what a caller holding base graphs uses as
+a slow route without files &mdash; the RDF database does, see its
+[full route](rdf_database_integration.md#import-the-diff-route-the-full-route-and-how-a-refusal-travels-back).
+OpenCGMES is also the reference the difference-model file structure is validated against.
 
 (cgmes-import-level-of-detail)=
 ## Levels of detail: node/breaker and bus/branch

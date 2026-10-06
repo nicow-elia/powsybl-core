@@ -365,7 +365,7 @@ The export is three steps, and a caller can stop after any of them:
 
 1. the recorded `NetworkEvent`s are compacted to one change per attribute, keeping what the *first* change of each attribute replaced;
 2. `toDifferences` translates them into `CgmesStatement`s, in both directions, without writing anything;
-3. a `DifferenceSink` stores the result, as a document per profile through `DifferenceModelWriter`, in a triple store, or in an RDF database through `RdfDbDifferenceSink` &mdash; see [storing difference models](rdf_database.md#storing-difference-models), which also versions them and advances the sender. A database export addresses the modelling authority, the timestamp and the version it writes, see [versioning](rdf_database.md#versioning-snapshots-modelling-authorities-timestamps-and-versions) and [timestamps](rdf_database.md#timestamps-and-one-tree-per-modelling-authority).
+3. a `DifferenceSink` stores the result, as a document per profile through `DifferenceModelWriter`, in a triple store, or in any other store that implements the interface. The RDF database is one such store; what it does with the statements and the two verdicts it asks `FastRouteCapabilities` for is on the [integration page](rdf_database_integration.md#export-from-a-recorded-change-to-a-stored-snapshot).
 
 `CgmesStatement` is one RDF triple about an object that already exists in the model the difference applies to: a subject identifier, a CIM property, a value and how that value is written (a literal, a CIM enumeration literal or a reference). Statements of one profile are bundled in a `DifferenceModel`, and the models of one change set in a `DifferenceModelSet`. Two statements are equal when they say the same thing about the same object, whatever CIM class the producer believed the subject to have, so a generated statement and one parsed back from a document compare equal.
 
@@ -527,22 +527,17 @@ selection, and the export runs with that variant selected so the values written 
 variant of the calling thread is restored afterwards, including when the export throws.
 
 That selects the *values*. It does not change what the header says the difference **supersedes**, which is the
-model the network as a whole is at. A network whose variants stand for stored snapshots therefore wraps the call
-in `RdfDbProvenance.inVariant(network, id, …)` (see [the RDF database](rdf_database.md)), which installs that
-variant's identity for the duration of the export as well:
-
-```java
-RdfDbProvenance.inVariant(network, "08:30",
-        () -> CgmesDiffExport.toString(network, events, CgmesSubset.STEADY_STATE_HYPOTHESIS, FAIL));
-```
+model the network as a whole is at (its `CgmesMetadataModels`). A layer that binds variants to stored states has to
+install the variant's identity around the call as well; the RDF database does, see
+[variant mode](rdf_database_integration.md#variant-mode).
 
 `setRejectSharedChanges(true)` turns a change IIDM does not store per variant into an unsupported change. Such a
 change is recorded *without* a variant identifier, which is how it is recognised; with more than one variant in
 the network it describes the state of all of them, so writing it into the history of one would be a lie about the
 others. Both options are off by default, and the golden files of this exporter are what pins that.
 
-See [the RDF database](rdf_database.md) for `RdfDbExport.exportVariant` and `exportPerVariant`, which write one
-history per variant.
+Writing one history per variant into a database is the database's side, see
+[the RDF database](rdf_database.md#writing-one-history-per-variant).
 
 ### Limitations
 

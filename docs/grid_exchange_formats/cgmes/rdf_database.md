@@ -17,6 +17,9 @@ flows of the follow-up work packages are built on.
 The second step is not a compromise for the sake of sharing: on the reference fixtures it is **faster** than
 reading the files, see [Performance](#performance).
 
+Where this module meets the CGMES conversion &mdash; which types cross, and who decides what on each flow &mdash; is
+drawn on the [integration page](rdf_database_integration.md).
+
 ## Scenarios
 
 One database holds the data of many days and many base grid models at the same time. What keeps them apart is the
@@ -1016,10 +1019,8 @@ statement writes per-variant state, and the answer is stored next to `pdb:fastPr
 <urn:uuid:ssh-d2> pdb:fastPredicatesOnly true ; pdb:variantSafe true .
 ```
 
-A node that does not carry it at all — every store written before this release — means **unknown**, and the planner
-is optimistic: the path proceeds, and the network-aware check that runs on every variant update anyway refuses it at
-apply time. Being wrong costs one fetch and never a wrong result, which is why there is neither a snapshot-level
-aggregate nor a back-fill tool.
+A node without it (a store written before it existed) means *unknown*. How the stored half and the apply-time half
+of the verdict divide the work is on the [integration page](rdf_database_integration.md#variant-mode).
 
 ### Loading a day, and what it costs in requests
 
@@ -1282,16 +1283,9 @@ registered as a `ReportResourceBundle` service), so `powsybl-commons` carries no
 
 **What it needs from core.** A small set of public types exists because a client outside their module builds on
 them; each says so in its javadoc ("Public API: a client outside this module builds on this signature", on the class,
-or on the two members of `CgmesImport`), so that changing one is visibly a change of public API:
-
-| Module | Members | What the database layer does with them |
-|---|---|---|
-| `powsybl-cgmes-conversion` | `TripleStoreNetworkLoader`; `CgmesImport.tripleStoreOptions`, `config` | converts the statements of a fetched snapshot to a network with the configuration a file import would use |
-| `powsybl-cgmes-conversion` | `CgmesDiffImport` (`apply`/`revert` with a `Conversion.Config`, `applyToGraph`, `Options`, `Decision`, `Route`); `CgmesDiffNotApplicableException` | applies stored differences to a network (fast route) or to a graph (materialisation), and turns a refusal into the reasons of an update result |
-| `powsybl-cgmes-conversion` | `FastRouteCapabilities.check`, `checkVariantSafe` | decides, when a difference is stored, whether it may take the fast route and whether it stays inside one variant |
-| `powsybl-cgmes-conversion` | `CgmesDiffExport` (`toDifferences`, `variantOf`, `ExportOptions`, `Result`) | turns recorded network changes into difference models before they are stored |
-| `powsybl-cgmes-model` | `StatementDiff`, `DifferenceSink`, `CgmesTripleStoreLoader` | compares two snapshots statement by statement, receives exported differences, parses instance files into a store |
-| `powsybl-triple-store-impl-rdf4j-sparql` | the whole package (`TripleStoreRDF4JSparql`, `SparqlEndpoint`, `GraphStoreClient`, `ScenarioGraphNames`) | talks to the SPARQL endpoint; the module has no other consumer in core and moves out together with the database layer |
+or on the two members of `CgmesImport`), so that changing one is visibly a change of public API. The table of those
+types, grouped by purpose with what the database reads from each and what it never assumes, and the flows they
+serve, are on the [integration page](rdf_database_integration.md#what-the-database-knows-about-powsybl-internals).
 
 Everything else it uses is ordinary public API, used as any other client uses it: `ReportNode`, `PowsyblException`,
 `PlatformConfig`, data sources and extensions from `powsybl-commons`; `Network`, `NetworkFactory`, the variant
@@ -1319,5 +1313,7 @@ Outside core, pypowsybl uses its public API.
 
 ## See also
 
+* [RDF database integration](rdf_database_integration.md) — every flow between the database and the CGMES
+  conversion, with the types that cross and who decides what.
 * [Triple store](triple_store.md) — the RDF4J store the file import uses, and the `rdf4j-sparql` implementation.
 * [Import](import.md) — the CGMES import parameters, which a database load honours unchanged.
