@@ -274,9 +274,11 @@ public final class VersionGraph {
         Set<String> bChain = new LinkedHashSet<>(to.stream().map(SnapshotInfo::iri).toList());
         SnapshotInfo lca = from.stream().filter(info -> bChain.contains(info.iri())).findFirst().orElse(null);
         if (lca == null) {
+            String why = from.get(0).modellingAuthority().equals(b.modellingAuthority()) ? ""
+                    : ": diffs never cross modelling authorities";
             return new UpdatePlan(UpdatePlan.Kind.FULL, from.get(0).iri(), b.iri(), List.of(),
                     List.of("no common ancestor of " + from.get(0) + " and " + b + " in scenario '" + scenario
-                            + "'"), 0, checkpointRecommended(to, options), distanceToFull(to),
+                            + "'" + why), 0, checkpointRecommended(to, options), distanceToFull(to),
                     targetState);
         }
         List<Hop> steps = new ArrayList<>();

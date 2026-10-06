@@ -20,7 +20,9 @@ import java.util.Set;
 import java.util.stream.Stream;
 
 import static com.powsybl.cgmes.rdfdb.Backends.BE;
+import static com.powsybl.cgmes.rdfdb.Backends.NL;
 import static com.powsybl.cgmes.rdfdb.Backends.microGridBe;
+import static com.powsybl.cgmes.rdfdb.Backends.microGridNl;
 import static com.powsybl.cgmes.rdfdb.Backends.params;
 import static com.powsybl.cgmes.rdfdb.Backends.ref;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -135,6 +137,27 @@ class RdfDbVariantBulkLoadTest {
 
             assertThat(result.outcomes().stream().map(VariantOutcome::variantId).toList())
                     .containsExactly("1@2014-06-01T10:30:00Z", "2@2014-06-01T10:30:00Z");
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void theNamingRuleQualifiesWithTheAuthorityWhenRequestsSpanSeveral(String backend) {
+        try (RdfDbConnection db = rootOnly(backend)) {
+            db.snapshots(S).putFull(microGridNl(), null, SnapshotRef.latest(S, NL), null, params(),
+                    ReportNode.NO_OP);
+
+            VariantLoadResult result = RdfDbNetworkLoader.loadVariants(db, S, List.of(
+                    VariantRequest.of(SnapshotRef.latest(S, NL)),
+                    VariantRequest.of(SnapshotRef.latest(S, BE))),
+                    new RdfDbVariantLoadOptions(), null, params(), ReportNode.NO_OP);
+
+            assertThat(result.outcomes().stream().map(VariantOutcome::variantId).toList())
+                    .containsExactly(NL + "/1@2014-06-01T10:30:00Z", BE + "/1@2014-06-01T10:30:00Z");
+            // The first one binds; the other is of another tree, which no difference reaches
+            VariantOutcome be = result.outcomes().get(1);
+            assertThat(be.status()).isEqualTo(VariantOutcome.Status.REFUSED);
+            assertThat(be.reasons()).anyMatch(reason -> reason.contains("diffs never cross modelling authorities"));
         }
     }
 

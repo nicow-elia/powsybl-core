@@ -351,19 +351,27 @@ final class VariantBulkLoader {
      * <p>An explicit one wins. Otherwise the ISO instant of the timestamp when the timestamps of all requests are
      * different, and {@code version@instant} when they are not &mdash; a day walked timestamp by timestamp reads as
      * {@code 2021-02-09T08:30:00Z}, a study comparing two versions of one moment as
-     * {@code 2@2021-02-09T08:30:00Z}.</p>
+     * {@code 2@2021-02-09T08:30:00Z}. Requests of several modelling authorities are named
+     * {@code authority/version@instant}, so that two trees at the same moment and version never collide.</p>
      */
     private static List<String> namesOf(List<VariantRequest> requests, List<SnapshotInfo> targets,
                                         RdfDbVariantLoadOptions options) {
         List<String> labels = targets.stream().map(info -> info.timestamp().toString()).toList();
         boolean distinct = new LinkedHashSet<>(labels).size() == labels.size();
+        boolean severalAuthorities = targets.stream().map(SnapshotInfo::modellingAuthority).distinct().count() > 1;
         List<String> names = new ArrayList<>();
         Set<String> used = new LinkedHashSet<>();
         for (int i = 0; i < requests.size(); i++) {
             String name = requests.get(i).variantId();
             if (name == null) {
-                name = options.getNaming() != null ? options.getNaming().apply(targets.get(i))
-                        : distinct ? labels.get(i) : targets.get(i).version() + "@" + labels.get(i);
+                SnapshotInfo target = targets.get(i);
+                if (options.getNaming() != null) {
+                    name = options.getNaming().apply(target);
+                } else if (severalAuthorities) {
+                    name = target.modellingAuthority() + "/" + target.version() + "@" + labels.get(i);
+                } else {
+                    name = distinct ? labels.get(i) : target.version() + "@" + labels.get(i);
+                }
             }
             if (!used.add(name)) {
                 throw new IllegalArgumentException("the naming rule gives the variant name '" + name + "' to more"

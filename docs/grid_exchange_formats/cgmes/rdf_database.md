@@ -1047,7 +1047,8 @@ single variant is 3 requests, exactly like a snapshot update.
 
 Naming: an explicit identifier wins (`RdfDbVariantLoadOptions.setNaming` for a rule); otherwise the ISO instant of
 the timestamp when the timestamps of all requests are distinct (a day reads as `2016-01-01T08:30:00Z`), and
-`version@instant` when they are not (a study reads as `2@2016-01-01T08:30:00Z`). A variant never crosses a
+`version@instant` when they are not (a study reads as `2@2016-01-01T08:30:00Z`); requests of several modelling
+authorities are named `authority/version@instant`, so two trees at one moment never collide. A variant never crosses a
 modelling authority: a variant of a BE network asked to stand for an NL snapshot is `VARIANT_REFUSED`, decided off
 the IRIs without a request. Duplicate identifiers, `InitialState` and an empty request list
 are `IllegalArgumentException`; an address the scenario does not hold is an `RdfDbException` naming every missing
