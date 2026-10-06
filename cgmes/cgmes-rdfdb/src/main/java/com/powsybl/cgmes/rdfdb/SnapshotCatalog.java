@@ -1249,8 +1249,11 @@ public final class SnapshotCatalog {
             return indexes;
         }
         String fallbackBase = RdfDbMaterializer.subjectBase(plan, stateModels);
+        // Only the profiles still to be indexed; the projection keeps the boundary, which is never compared
+        Set<CgmesSubset> toIndex = EnumSet.copyOf(keys.keySet());
+        toIndex.removeAll(indexes.keySet());
         try (RdfDbMaterializer.MaterialisedStore parentState = RdfDbMaterializer.materializeStore(
-                connection, scenario, plan, stateModels, importParams)) {
+                connection, scenario, plan.project(toIndex), stateModels, importParams)) {
             for (Map.Entry<CgmesSubset, String> entry : keys.entrySet()) {
                 CgmesSubset subset = entry.getKey();
                 if (indexes.containsKey(subset)) {
