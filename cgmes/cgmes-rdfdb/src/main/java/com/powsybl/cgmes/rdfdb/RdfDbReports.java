@@ -22,8 +22,8 @@ import java.util.List;
  * has a reason a user can act on. Both go into the report next to everything else the conversion said, rather than
  * only into a log.</p>
  *
- * <p>The message templates live in the shared bundle of {@code powsybl-commons}, as every other powsybl report
- * does.</p>
+ * <p>The message templates live in the module's own bundle ({@link RdfDbReportResourceBundle}), so that nothing
+ * outside the module carries its texts.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
