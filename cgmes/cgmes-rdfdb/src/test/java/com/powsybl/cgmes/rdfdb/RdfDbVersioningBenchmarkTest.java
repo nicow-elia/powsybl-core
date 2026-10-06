@@ -21,12 +21,15 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Supplier;
 
+import static com.powsybl.cgmes.rdfdb.Backends.BE;
 import static com.powsybl.cgmes.rdfdb.Backends.microGridBe;
 import static com.powsybl.cgmes.rdfdb.Backends.params;
+import static com.powsybl.cgmes.rdfdb.Backends.ref;
 import static com.powsybl.cgmes.rdfdb.BenchMeters.millis;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -82,11 +85,11 @@ class RdfDbVersioningBenchmarkTest {
         try (RdfDbConnection db = RdfDbConnection.open(Backends.database(backend, "versioning-bench"))) {
             db.clear(S);
             SnapshotCatalog catalog = db.snapshots(S);
-            SnapshotInfo head = catalog.putFull(microGridBe(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
+            SnapshotInfo head = catalog.putFull(microGridBe(), null, ref(S, 1), null, params(), ReportNode.NO_OP);
             List<SnapshotRef> refs = new ArrayList<>();
             refs.add(head.ref());
             for (int i = 1; i <= DEPTH; i++) {
-                head = catalog.putDiff(step(head, i), SnapshotRef.of(S, "1." + i));
+                head = catalog.putDiff(step(head, i), ref(S, i + 1));
                 refs.add(head.ref());
             }
             SnapshotRef top = refs.get(DEPTH);
@@ -200,13 +203,15 @@ class RdfDbVersioningBenchmarkTest {
         String meta = SparqlText.iri(RdfDbNames.metaGraph(scenario));
         StringBuilder update = new StringBuilder(RdfDbVocabulary.PREFIXES)
                 .append("INSERT DATA { GRAPH ").append(meta).append(" { ");
-        StringBuilder filler = new StringBuilder();
-        String timestep = "2016-01-01T00:00:00Z";
+        StringBuilder filler = new StringBuilder(SparqlText.iri(RdfDbNames.schemaNode(scenario)) + " pdb:schema "
+                + SparqlText.integer(RdfDbVocabulary.SCHEMA_VERSION) + " . ");
+        Instant timestamp = Instant.parse("2016-01-01T00:00:00Z");
         for (int i = 0; i < snapshots; i++) {
-            String iri = RdfDbNames.snapshot(scenario, timestep, "1." + i);
+            String iri = RdfDbNames.snapshot(scenario, BE, timestamp, i + 1);
             update.append(SparqlText.iri(iri)).append(" a pdb:Snapshot ; pdb:scenario ")
-                    .append(SparqlText.str(scenario)).append(" ; pdb:version ")
-                    .append(SparqlText.str("1." + i)).append(" ; pdb:timestep ").append(SparqlText.str(timestep))
+                    .append(SparqlText.str(scenario)).append(" ; pdb:modellingAuthority ").append(SparqlText.str(BE))
+                    .append(" ; pdb:version ").append(SparqlText.integer(i + 1L))
+                    .append(" ; pdb:timestamp ").append(SparqlText.dateTime(timestamp))
                     .append(" ; pdb:depth ").append(SparqlText.integer(i));
             if (i == 0) {
                 // The root of a chain is where a materialisation could start, which the pdb:full link says. A
@@ -217,7 +222,7 @@ class RdfDbVersioningBenchmarkTest {
             }
             if (i > 0) {
                 update.append(" ; pdb:parent ")
-                        .append(SparqlText.iri(RdfDbNames.snapshot(scenario, timestep, "1." + (i - 1))))
+                        .append(SparqlText.iri(RdfDbNames.snapshot(scenario, BE, timestamp, i)))
                         .append(" ; pdb:edge pdb:VersionEdge");
             }
             update.append(" . ");

@@ -123,13 +123,13 @@ class ScaleVersioningBenchmarkTest {
             List<String> others = new ArrayList<>();
             SnapshotCatalog catalog = db.snapshots(scenario);
             long build = System.nanoTime();
-            SnapshotInfo head = catalog.putFull(ds, null, SnapshotRef.of(scenario, "1.0"), Backends.params(),
+            SnapshotInfo head = catalog.putFull(ds, null, SnapshotRef.latest(scenario, null), null, Backends.params(),
                     ReportNode.NO_OP);
             List<SnapshotRef> refs = new ArrayList<>();
             refs.add(head.ref());
             for (int i = 1; i <= DEPTH; i++) {
                 head = catalog.putDiff(ScaleLoadBenchmarkTest.step(head, i, loadId, loadClass, !grid.svedala()),
-                        SnapshotRef.of(scenario, "1." + i));
+                        head.ref().withVersion(i + 1));
                 refs.add(head.ref());
             }
             long buildMs = (System.nanoTime() - build) / 1_000_000;

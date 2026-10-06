@@ -35,7 +35,6 @@ import org.slf4j.LoggerFactory;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
-import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -46,6 +45,7 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.stream.Stream;
 
+import static com.powsybl.cgmes.rdfdb.Backends.svk;
 import static com.powsybl.cgmes.rdfdb.BenchMeters.add;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -63,7 +63,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@link Checkpoint#create}, {@code mck} = the warm load after it.</p>
  *
  * <p><b>F</b> (grids of {@code -Dpowsybl.bench.variants.grids}, default {@code sv6,sv20} in a campaign run and none
- * in the ordinary build): a day of 96 rich SSH timesteps (every generator {@code targetP} and every load
+ * in the ordinary build): a day of 96 rich SSH timestamps (every generator {@code targetP} and every load
  * {@code p0} moves), each one difference from the base, loaded with {@link RdfDbNetworkLoader#loadVariants}:
  * first and warm, phases, per-variant apply median and max, {@code sep} = 96 separate loads <em>extrapolated from
  * three</em> (a real 96 at IGM size would cost minutes and says nothing three do not), {@code walk} = 96 updates of
@@ -93,7 +93,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * sv6   memory     3402   1484      9     93    414    961   1452   1480   138   1429  0.44
  * sv20  memory    11463   5191     27    297   1606   3204   5060   5149   443   5170  0.45
  *
- * F (96 rich timesteps)   lv(warm)  apply  per variant med/max   sep (96 x 3 sampled)  walk  heap of 95 variants
+ * F (96 rich timestamps)   lv(warm)  apply  per variant med/max   sep (96 x 3 sampled)  walk  heap of 95 variants
  * sv6  fuseki                 8870   2409        25.1 / 33.3                212544  17469                 5 MB
  * sv6  memory                 4015   2361        24.6 / 27.6                135360   4448                 2 MB
  * sv20 memory                13968   7646        79.1 / 156.5               524256  14869                10 MB
@@ -110,9 +110,9 @@ class ScaleLoadBenchmarkTest {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ScaleLoadBenchmarkTest.class);
 
-    private static final String ANCHOR = "2020-12-02T00:00:00Z";
+    private static final Instant ANCHOR = Instant.parse("2020-12-02T00:00:00Z");
     private static final int CHAIN = 50;
-    private static final int TIMESTEPS = 96;
+    private static final int TIMESTAMPS = 96;
     private static final int SEPARATE_SAMPLE = 3;
     private static final long CATALOGUE_FLOOR_MS = 30;
     private static final String CIM16 = "http://iec.ch/TC57/2013/CIM-schema-cim16#";
@@ -404,11 +404,11 @@ class ScaleLoadBenchmarkTest {
                 new GraphCache().trustImmutableGraphs(true)))) {
             db.clear(scenario);
             SnapshotCatalog catalog = db.snapshots(scenario);
-            SnapshotInfo head = catalog.putFull(grid.dataSource(), null, SnapshotRef.of(scenario, "1.0"), p,
+            SnapshotInfo head = catalog.putFull(grid.dataSource(), null, SnapshotRef.latest(scenario, null), null, p,
                     ReportNode.NO_OP);
             SnapshotRef root = head.ref();
             for (int i = 1; i <= CHAIN; i++) {
-                head = catalog.putDiff(step(head, i, loadId, loadClass, cim16), SnapshotRef.of(scenario, "1." + i));
+                head = catalog.putDiff(step(head, i, loadId, loadClass, cim16), head.ref().withVersion(i + 1));
             }
             SnapshotRef top = head.ref();
             int warmups = BenchMeters.warmups(grid);
@@ -462,30 +462,29 @@ class ScaleLoadBenchmarkTest {
     private long measureVariants(String backend, String key, int n, List<String> table) {
         Properties p = Backends.params();
         String scenario = "scale-var-" + key + "-" + backend;
-        List<String> timesteps = new ArrayList<>();
-        for (int i = 0; i < TIMESTEPS; i++) {
-            timesteps.add(Timesteps.canonical(Instant.parse(ANCHOR).plus(Duration.ofMinutes(15L * i))
-                    .atZone(ZoneOffset.UTC)));
+        List<Instant> timestamps = new ArrayList<>();
+        for (int i = 0; i < TIMESTAMPS; i++) {
+            timestamps.add(ANCHOR.plus(Duration.ofMinutes(15L * i)));
         }
         int runs = Integer.getInteger("powsybl.bench.runs", n >= 20 ? 1 : 3);
         try (RdfDbConnection db = RdfDbConnection.open(Backends.database(backend, scenario))) {
             db.clear(scenario);
-            long build = BenchMeters.millis(() -> buildDay(db, scenario, n, timesteps));
+            long build = BenchMeters.millis(() -> buildDay(db, scenario, n, timestamps));
 
             BenchMeters.resetPeak();
-            long first = BenchMeters.millis(() -> loadDay(db, scenario, timesteps));
+            long first = BenchMeters.millis(() -> loadDay(db, scenario, timestamps));
             long peak = BenchMeters.peakHeap();
             List<Long> warm = new ArrayList<>();
             VariantLoadResult last = null;
             for (int i = 0; i < runs; i++) {
                 last = null;
                 long start = System.nanoTime();
-                last = loadDay(db, scenario, timesteps);
+                last = loadDay(db, scenario, timestamps);
                 warm.add((System.nanoTime() - start) / 1_000_000);
             }
             long lvWarm = BenchMeters.median(warm);
             assertThat(last.refused()).isEmpty();
-            assertThat(last.bound()).hasSize(TIMESTEPS);
+            assertThat(last.bound()).hasSize(TIMESTAMPS);
             long[] applies = last.bound().stream().mapToLong(o -> o.apply().toNanos()).sorted().toArray();
             long applyMedian = applies[applies.length / 2];
             long applyMax = applies[applies.length - 1];
@@ -498,23 +497,23 @@ class ScaleLoadBenchmarkTest {
             // (sep) separate loads, extrapolated from a sample of three
             List<Long> separate = new ArrayList<>();
             for (int i = 0; i < SEPARATE_SAMPLE; i++) {
-                String timestep = timesteps.get(1 + i * 31);
-                separate.add(BenchMeters.millis(() -> RdfDbNetworkLoader.load(db, scenario, "1.0", timestep, null, p,
+                Instant timestamp = timestamps.get(1 + i * 31);
+                separate.add(BenchMeters.millis(() -> RdfDbNetworkLoader.load(db, svk(scenario, 1, timestamp), null, p,
                         ReportNode.NO_OP)));
             }
-            long sep = TIMESTEPS * BenchMeters.median(separate);
+            long sep = TIMESTAMPS * BenchMeters.median(separate);
 
-            // (walk) one network updated timestep by timestep
+            // (walk) one network updated timestamp by timestamp
             long walk = BenchMeters.millis(() -> {
-                Network network = RdfDbNetworkLoader.load(db, scenario, "1.0", timesteps.get(0), null, p,
+                Network network = RdfDbNetworkLoader.load(db, svk(scenario, 1, timestamps.get(0)), null, p,
                         ReportNode.NO_OP);
-                for (String timestep : timesteps) {
-                    RdfDbNetworkLoader.update(network, db, new SnapshotRef(scenario, "1.0", timestep),
+                for (Instant timestamp : timestamps) {
+                    RdfDbNetworkLoader.update(network, db, svk(scenario, 1, timestamp),
                             new RdfDbUpdateOptions(), p, ReportNode.NO_OP);
                 }
             });
 
-            long heap = heapDeltaOfTheVariants(db, scenario, timesteps);
+            long heap = heapDeltaOfTheVariants(db, scenario, timestamps);
             table.add(String.format(Locale.ROOT, "F %-5s %-7s build=%d lv(first)=%d lv(warm)=%d [%s, per variant"
                             + " median %.1f max %.1f ms, %d diff(s)] sep(extrapolated 96x%d)=%d walk=%d"
                             + " heap(95 variants)=%d MB peak(first lv)=%d MB", key, backend, build, first, lvWarm,
@@ -530,39 +529,40 @@ class ScaleLoadBenchmarkTest {
         }
     }
 
-    private static VariantLoadResult loadDay(RdfDbConnection db, String scenario, List<String> timesteps) {
-        return RdfDbNetworkLoader.loadVariants(db, scenario, "1.0", timesteps, new RdfDbVariantLoadOptions(), null,
-                Backends.params(), ReportNode.NO_OP);
+    private static VariantLoadResult loadDay(RdfDbConnection db, String scenario, List<Instant> timestamps) {
+        return RdfDbNetworkLoader.loadVariants(db, scenario,
+                timestamps.stream().map(t -> VariantRequest.of(svk(scenario, 1, t))).toList(),
+                new RdfDbVariantLoadOptions(), null, Backends.params(), ReportNode.NO_OP);
     }
 
-    /** 95 rich timesteps, each one difference from the base, exported from a network brought back to the base. */
-    private static void buildDay(RdfDbConnection db, String scenario, int n, List<String> timesteps) {
+    /** 95 rich timestamps, each one difference from the base, exported from a network brought back to the base. */
+    private static void buildDay(RdfDbConnection db, String scenario, int n, List<Instant> timestamps) {
         Properties p = Backends.params();
-        db.snapshots(scenario).putFull(ReplicatedSvedala.anchor(n, ANCHOR), null, SnapshotRef.of(scenario, "1.0"),
+        db.snapshots(scenario).putFull(ReplicatedSvedala.anchor(n, ANCHOR), null, svk(scenario, 1, null), null,
                 p, ReportNode.NO_OP);
-        Network sender = RdfDbNetworkLoader.load(db, scenario, "1.0", timesteps.get(0), null, p, ReportNode.NO_OP);
+        Network sender = RdfDbNetworkLoader.load(db, svk(scenario, 1, timestamps.get(0)), null, p, ReportNode.NO_OP);
         Map<String, Double> targetP = new HashMap<>();
         Map<String, Double> p0 = new HashMap<>();
         sender.getGenerators().forEach(g -> targetP.put(g.getId(), g.getTargetP()));
         sender.getLoads().forEach(l -> p0.put(l.getId(), l.getP0()));
-        for (int i = 1; i < timesteps.size(); i++) {
+        for (int i = 1; i < timestamps.size(); i++) {
             double delta = 0.1 * i;
             List<NetworkEvent> events = Changes.record(sender, net -> {
                 net.getGenerators().forEach(g -> g.setTargetP(targetP.get(g.getId()) + delta));
                 net.getLoads().forEach(l -> l.setP0(p0.get(l.getId()) + delta));
             });
-            RdfDbExport.export(sender, events, db, new SnapshotRef(scenario, "1.0", timesteps.get(i)),
-                    new CgmesDiffExport.ExportOptions().setScenarioTime(ZonedDateTime.parse(timesteps.get(i))),
+            RdfDbExport.export(sender, events, db, svk(scenario, 1, timestamps.get(i)),
+                    new CgmesDiffExport.ExportOptions().setScenarioTime(timestamps.get(i).atZone(ZoneOffset.UTC)),
                     ReportNode.NO_OP);
             // Back to the base through the database, as RdfDbVariantsBenchmarkTest does: the export moved the
-            // network's provenance to the timestep, and the next timestep must again be one difference from the base
-            RdfDbNetworkLoader.update(sender, db, new SnapshotRef(scenario, "1.0", timesteps.get(0)),
+            // network's provenance to the timestamp, and the next timestamp must again be one difference from the base
+            RdfDbNetworkLoader.update(sender, db, svk(scenario, 1, timestamps.get(0)),
                     new RdfDbUpdateOptions(), p, ReportNode.NO_OP);
         }
     }
 
-    private static long heapDeltaOfTheVariants(RdfDbConnection db, String scenario, List<String> timesteps) {
-        Network network = loadDay(db, scenario, timesteps).network();
+    private static long heapDeltaOfTheVariants(RdfDbConnection db, String scenario, List<Instant> timestamps) {
+        Network network = loadDay(db, scenario, timestamps).network();
         long withVariants = BenchMeters.heapAfterGc();
         List<String> toRemove = new ArrayList<>(network.getVariantManager().getVariantIds());
         toRemove.remove(RdfDbProvenance.PRIMARY_VARIANT);
