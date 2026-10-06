@@ -251,6 +251,7 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
 
     /**
      * A hook that runs between the two phases of a large write, so that a test can make a concurrent writer win.
+     * A test seam only: production code never sets it, so it is {@code null} there and costs one comparison.
      *
      * @param hook what to run, or {@code null} for nothing
      */

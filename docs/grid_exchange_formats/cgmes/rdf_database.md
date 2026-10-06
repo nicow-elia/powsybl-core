@@ -547,13 +547,18 @@ try (RdfDbConnection db = RdfDbConnection.open(RdfDatabase.sparql("http://localh
 ```
 
 The rules. Every one a concurrent writer could break is enforced by the guard of the write itself rather than by a
-check before it; rule 7 is a property of the files and is checked on them before anything is written:
+check before it; rules 2 and 7 are properties of the files and are checked on them before anything is written (rule 2
+with the first-root guard behind it):
 
 1. one root per `(scenario, modellingAuthority)` (`putFull` twice for one authority is a conflict — another day is
    another scenario);
 2. **one boundary per scenario**: the first root uploads the boundary models (its full models of `EQ_BD` and `TP_BD`); every
    later root must carry the very same boundary model identifiers, links the stored graphs into its own state and
-   uploads nothing of them; a root with another boundary is refused with *"a new boundary is a new scenario"*;
+   uploads nothing of them; a root with another boundary is refused with *"a new boundary is a new scenario"*.
+   The stored boundary keeps the subject base of the first root's files; a load, an update or an ingestion of a
+   later authority moves its IRIs to that authority's base while fetching it, and the stored graphs are never
+   rewritten. A direct SPARQL query on the server (or the `REMOTE` query mode) that joins a later authority's graphs
+   with the boundary therefore has to apply the same rewrite: the two do not meet by IRI;
 3. a graph of `…/<scenario>/graph/` is written once and never overwritten;
 4. a difference must supersede exactly what the parent snapshot states for its profile, otherwise the writer is
    told where the head is: *"update the network to the head and re-record"*;

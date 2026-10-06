@@ -56,7 +56,7 @@ sequenceDiagram
     E-->>X: Result (DifferenceModelSet, exported events)
     X->>C: putDiff(set, SnapshotRef)
     C->>S: accept(set) with the snapshot node
-    S->>F: check(model).route() == FAST
+    S->>F: per difference model, in a one-member set:<br/>check(set).route() == FAST
     S->>F: checkVariantSafe(model).route() == FAST
     S->>D: one guarded INSERT ... WHERE<br/>(model nodes, forward/reverse graphs, snapshot node)
     D-->>C: written, or nothing (guard failed)
@@ -68,7 +68,7 @@ sequenceDiagram
 |---|---|---|
 | which changes become statements, and which are refused (with a remedy) | `CgmesDiffExport.Result`, `Refusal` | cgmes-conversion (the mapping) |
 | the statements of one profile, forward and reverse | `DifferenceModel` in a `DifferenceModelSet` | cgmes-conversion |
-| "every statement is in a block an in-place update reads" | `FastRouteCapabilities.check(set).route() == FAST` → `pdb:fastPredicatesOnly` on the difference model node | cgmes-conversion decides, rdfdb stores |
+| "every statement is in a block an in-place update reads" | `FastRouteCapabilities.check(set).route() == FAST`, per difference model wrapped in a one-member set → `pdb:fastPredicatesOnly` on the difference model node | cgmes-conversion decides, rdfdb stores |
 | "every property is per-variant state" (the network-dependent cases are left to apply time) | `FastRouteCapabilities.checkVariantSafe(set).route() == FAST` → `pdb:variantSafe` on the difference model node | cgmes-conversion decides, rdfdb stores |
 | the address of the new snapshot, the version rule, the chain guards | `SnapshotRef`, the guarded `INSERT` | rdfdb |
 | where the sending network now stands | `CgmesMetadataModels`, `RdfDbProvenance` | rdfdb writes the extension the conversion defines |
@@ -83,14 +83,14 @@ sequenceDiagram
     participant P as caller / pypowsybl
     participant L as RdfDbNetworkLoader
     participant V as VersionGraph
-    participant G as GraphFetcher
+    participant G as RdfDbDiffSource
     participant I as CgmesDiffImport<br/>(cgmes-conversion)
     participant M as RdfDbMaterializer
     participant T as TripleStoreNetworkLoader<br/>(cgmes-conversion)
     P->>L: update(network, db, SnapshotRef, RdfDbUpdateOptions)
     L->>V: plan: one query, both ends, every pdb:fastPredicatesOnly on the path, maxDiffChain
     alt DIFF
-        L->>G: forward / reverse graphs of the path, one request
+        L->>G: fetchById: forward / reverse graphs of the path<br/>(Graph Store GET per graph, or one SELECT ... VALUES ?g)
         Note over L: DifferenceModel.compose per profile
         L->>I: apply(network, composed, Conversion.Config, Options, reportNode)
         alt applied in place
@@ -103,7 +103,7 @@ sequenceDiagram
             L-->>P: FULL_RELOAD (new network) or FULL_REQUIRED, reasons = Decision.reasons()
         end
     else FULL (another scenario or authority, a slow difference, a chain too long)
-        L->>M: fetch the pdb:full graphs, apply the chain on a local store (CgmesDiffImport.applyToGraph)
+        L->>M: fetch the pdb:full graphs (GraphFetcher, the shared boundary moved to the snapshot's subject base),<br/>apply the chain on a local store (CgmesDiffImport.applyToGraph)
         M->>T: load(local store): the ordinary conversion, post-processors from ImportConfig
         L-->>P: FULL_RELOAD with a new network, or FULL_REQUIRED when reloads are not allowed
     end
@@ -127,7 +127,8 @@ What a caller sees. Java: the `UpdateResult` (route, reasons, statistics, the ne
 `FULL_RELOAD`), an `RdfDbException` for a request that cannot be served at all (an address the scenario does not
 hold, a store of an earlier schema), an `RdfDbConflictException` for a write a guard refused. pypowsybl:
 `Network.update_from_rdf_db` returns `'noop'`, `'diff'` or `'full'` (and swaps the Java network behind the Python
-object on `'full'`); `VARIANT_REFUSED` becomes `RdfDbVariantRefusedError` with the reasons; the reasons of a full
+object on `'full'`), or `'update'` for an un-versioned scenario named without an address, where the profiles are
+replaced from the stored graphs; `VARIANT_REFUSED` becomes `RdfDbVariantRefusedError` with the reasons; the reasons of a full
 reload are in the report node. The `Refusal` texts of the export never reach an importer: they are the reasons a
 change could not be *written*, not a difference could not be *applied*.
 

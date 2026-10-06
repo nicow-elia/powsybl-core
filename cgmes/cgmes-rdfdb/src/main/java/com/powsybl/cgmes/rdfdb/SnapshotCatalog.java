@@ -681,6 +681,7 @@ public final class SnapshotCatalog {
     /**
      * A hook that runs between the parse of a root and its guarded write, so that a test can make a concurrent
      * writer win.
+     * A test seam only: production code never sets it, so it is {@code null} there and costs one comparison.
      *
      * @param hook what to run, or {@code null} for nothing
      */
