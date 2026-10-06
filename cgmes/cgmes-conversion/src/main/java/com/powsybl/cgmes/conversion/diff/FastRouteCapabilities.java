@@ -57,6 +57,8 @@ import static java.util.Map.entry;
  * difference as fast applicable without having a network at hand; the network aware part &mdash; do the subjects
  * exist, are they of the right kind, are the groups complete &mdash; is {@code FastRoutePlan}.</p>
  *
+ * <p>Public API: a client outside this module builds on this signature.</p>
+ *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 public final class FastRouteCapabilities {
@@ -480,9 +482,6 @@ public final class FastRouteCapabilities {
      * network aware half in {@code FastRoutePlan} runs on every variant update anyway and decides the
      * {@link VariantSafety#NETWORK_DEPENDENT} cases against the receiving network.</p>
      *
-     * <p>Public API: used by the RDF database layer ({@code powsybl-cgmes-rdfdb}); changing this signature is a
-     * breaking change for it.</p>
-     *
      * @param diffs the difference models
      * @return {@link CgmesDiffImport.Route#FAST} when nothing in the documents forbids a variant local update,
      *         the answer of {@link #check(DifferenceModelSet)} when that already refuses the in-place route, and
@@ -537,9 +536,6 @@ public final class FastRouteCapabilities {
      * is to tell a caller <em>everything</em> that stands in the way. A {@link CgmesDiffImport.Route#FAST} answer
      * here means "nothing in the document forbids it"; whether the subjects exist and the groups are complete is
      * decided against a network afterwards.</p>
-     *
-     * <p>Public API: used by the RDF database layer ({@code powsybl-cgmes-rdfdb}); changing this signature is a
-     * breaking change for it.</p>
      */
     public static CgmesDiffImport.Decision check(DifferenceModelSet diffs) {
         Objects.requireNonNull(diffs);

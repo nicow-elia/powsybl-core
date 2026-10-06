@@ -1,8 +1,10 @@
 # The powsybl-core types the main code of powsybl-cgmes-rdfdb uses, pinned by MoveOutReadinessTest.
-# One fully qualified type per line, sorted within each block. A new entry is a new dependency on core.
+# One fully qualified top-level type per line, sorted within each block in ASCII order (upper case before lower
+# case). A new entry is a new dependency on core.
 #
-# Block 1 - the frozen surface: types whose members say "Public API: used by the RDF database layer" in their
-# javadoc, and the package com.powsybl.triplestore.impl.rdf4j.sparql, which moves out together with the module.
+# Block 1 - the frozen surface: types that say "Public API: a client outside this module builds on this signature"
+# in their javadoc (on the class, or on the members of CgmesImport), and the package
+# com.powsybl.triplestore.impl.rdf4j.sparql, which moves out together with the module.
 com.powsybl.cgmes.conversion.CgmesImport
 com.powsybl.cgmes.conversion.TripleStoreNetworkLoader
 com.powsybl.cgmes.conversion.diff.CgmesDiffImport

@@ -35,8 +35,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * fully qualified {@code com.powsybl.…} type named in code, has to be on the allow-list
  * {@code allowed-core-imports.txt} next to this test; every entry of the list has to be used. A new dependency on
  * core therefore shows up in a review as a one-line addition to the list, and a dependency that went away as a
- * removal. The first block of the list is the surface whose members say in their javadoc that they are used by the
- * RDF database layer; the second block is ordinary public API. Wildcard imports of core are refused, since they
+ * removal. The first block of the list is the surface that says in its javadoc "Public API: a client outside this
+ * module builds on this signature"; the second block is ordinary public API. A nested type or a static import of a
+ * member counts as its top-level type. Wildcard imports of core are refused, since they
  * would hide what is used. The module's own package is not core and is not listed.</p>
  *
  * <p>A source scan rather than a bytecode analysis: it needs no extra dependency and reads the same files a
@@ -79,9 +80,8 @@ class MoveOutReadinessTest {
                     wildcards.add(name + ": " + trimmed);
                     continue;
                 }
-                String target = imported.group(2);
-                // A static import names a member: the type is everything before it.
-                use(imported.group(1) != null ? target.substring(0, target.lastIndexOf('.')) : target, name);
+                // A static import names a member, a nested import a nested type: both count as their top-level type
+                use(imported.group(2), name);
             } else if (!trimmed.startsWith("package ") && !trimmed.startsWith("*") && !trimmed.startsWith("/")) {
                 Matcher qualified = QUALIFIED.matcher(trimmed);
                 while (qualified.find()) {
@@ -91,10 +91,25 @@ class MoveOutReadinessTest {
         }
     }
 
-    private static void use(String type, String file) {
+    private static void use(String name, String file) {
+        String type = topLevelType(name);
         if (!type.startsWith(OWN_PACKAGE)) {
             used.computeIfAbsent(type, t -> new ArrayList<>()).add(file);
         }
+    }
+
+    /** {@code a.b.Outer.Inner.MEMBER} is {@code a.b.Outer}: the name up to its first capitalised segment. */
+    static String topLevelType(String name) {
+        int start = 0;
+        while (start < name.length()) {
+            int dot = name.indexOf('.', start);
+            int end = dot < 0 ? name.length() : dot;
+            if (Character.isUpperCase(name.charAt(start))) {
+                return name.substring(0, end);
+            }
+            start = end + 1;
+        }
+        return name;
     }
 
     private static List<List<String>> readAllowList() throws IOException {
@@ -124,6 +139,15 @@ class MoveOutReadinessTest {
         TreeSet<String> allowed = new TreeSet<>();
         allowListBlocks.forEach(allowed::addAll);
         return allowed;
+    }
+
+    @Test
+    void aNestedTypeOrAStaticMemberCountsAsItsTopLevelType() {
+        assertThat(topLevelType("com.powsybl.cgmes.conversion.diff.CgmesDiffImport.Route.FAST"))
+                .isEqualTo("com.powsybl.cgmes.conversion.diff.CgmesDiffImport");
+        assertThat(topLevelType("com.powsybl.cgmes.conversion.Conversion.Config"))
+                .isEqualTo("com.powsybl.cgmes.conversion.Conversion");
+        assertThat(topLevelType("com.powsybl.commons.report.ReportNode")).isEqualTo("com.powsybl.commons.report.ReportNode");
     }
 
     @Test

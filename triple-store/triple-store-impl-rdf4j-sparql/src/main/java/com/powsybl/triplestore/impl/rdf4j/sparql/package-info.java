@@ -10,9 +10,8 @@
  * A triple store on a remote SPARQL 1.1 endpoint: the store itself, its endpoint, the graph store client that moves
  * whole graphs, and the scenario graph naming.
  *
- * <p>Public API: used by the RDF database layer ({@code powsybl-cgmes-rdfdb}); changing a public signature of this
- * package is a breaking change for it. The module has no other consumer inside powsybl-core and moves out together
- * with that layer.</p>
+ * <p>Public API: clients outside this module build on the public signatures of this package, which has no consumer
+ * inside powsybl-core.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */

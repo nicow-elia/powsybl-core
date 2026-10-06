@@ -82,6 +82,8 @@ import java.util.UUID;
  * Applying such a difference is the generic RDF operation "base graph minus reverse plus forward" and belongs to RDF
  * tooling; {@link #applyToTripleStore} is the building block this library offers for it.</p>
  *
+ * <p>Public API: a client outside this module builds on this signature.</p>
+ *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 public final class CgmesDiffImport {
@@ -128,9 +130,6 @@ public final class CgmesDiffImport {
     /**
      * What this importer decided about a difference model set.
      *
-     * <p>Public API: used by the RDF database layer ({@code powsybl-cgmes-rdfdb}); changing this signature is a
-     * breaking change for it.</p>
-     *
      * @param route    the route the difference can take
      * @param blocking everything that stands in the way of the fast route, empty unless the route is
      *                 {@link Route#SLOW_REQUIRED}
@@ -148,9 +147,6 @@ public final class CgmesDiffImport {
 
     /**
      * How a difference model is applied.
-     *
-     * <p>Public API: used by the RDF database layer ({@code powsybl-cgmes-rdfdb}); changing this signature is a
-     * breaking change for it.</p>
      */
     public static final class Options {
 
@@ -469,9 +465,6 @@ public final class CgmesDiffImport {
      * <p>This overload does no platform configuration lookup at all, which is what the CGMES importer and a database
      * layer need: they already hold the configuration the network was read with.</p>
      *
-     * <p>Public API: used by the RDF database layer ({@code powsybl-cgmes-rdfdb}); changing this signature is a
-     * breaking change for it.</p>
-     *
      * @return the decision taken, {@link Route#NOOP} when the set says nothing and {@link Route#FAST} after a
      *         successful update
      * @throws CgmesDiffNotApplicableException if a statement cannot be applied in place. The network is untouched
@@ -495,9 +488,6 @@ public final class CgmesDiffImport {
 
     /**
      * Undo a difference with an explicit conversion configuration.
-     *
-     * <p>Public API: used by the RDF database layer ({@code powsybl-cgmes-rdfdb}); changing this signature is a
-     * breaking change for it.</p>
      */
     public static Decision revert(Network network, DifferenceModelSet diffs, Conversion.Config config, Options options,
                                   ReportNode reportNode) {
@@ -631,9 +621,6 @@ public final class CgmesDiffImport {
      * <p>An identifier that is already an absolute IRI ({@code urn:}, {@code http:}, {@code https:}) is used as it
      * is, which is how a statement about a model header or about an object outside the instance file's base can be
      * expressed.</p>
-     *
-     * <p>Public API: used by the RDF database layer ({@code powsybl-cgmes-rdfdb}); changing this signature is a
-     * breaking change for it.</p>
      *
      * @param store       the triple store to change
      * @param diff        the difference to apply

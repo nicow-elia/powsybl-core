@@ -39,7 +39,6 @@ import com.powsybl.commons.util.ServiceLoaderCache;
 import com.powsybl.iidm.network.Importer;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.NetworkFactory;
-import com.powsybl.triplestore.api.TripleStore;
 import com.powsybl.triplestore.api.TripleStoreFactory;
 import com.powsybl.triplestore.api.TripleStoreOptions;
 import org.slf4j.Logger;
@@ -307,9 +306,6 @@ public class CgmesImport implements Importer {
      * CGMES model that was <em>not</em> read from files &mdash; one whose statements came out of an RDF database
      * &mdash; end up as the very same network: the configuration, the pre- and post-processors and the closing of
      * the model are the importer's, not a second interpretation of the same parameters.</p>
-     *
-     * <p>Public API: used by the RDF database layer ({@code powsybl-cgmes-rdfdb}); changing this signature is a
-     * breaking change for it.</p>
      *
      * @param cgmes          the model to convert. It is closed by the conversion unless the parameters ask for it
      *                       to be kept as a network extension
@@ -668,42 +664,13 @@ public class CgmesImport implements Importer {
     }
 
     /**
-     * Read a CGMES data source into a triple store the caller supplies, and describe the result as a CGMES model.
-     *
-     * <p>The overload without a {@code target} lets the {@code powsybl-triplestore} parameter pick a fresh store.
-     * This one writes into a store that already exists, which is how CGMES files reach an RDF database: the target
-     * is a remote store, the statements leave the process, and no network is built. The boundary location comes
-     * from the same parameter as always.</p>
-     *
-     * <p>The store must have been created with {@link #tripleStoreOptions(Properties)} of the same parameters,
-     * otherwise identifiers would be normalised differently here and in a later conversion.</p>
-     *
-     * <p>Public API: used by the RDF database layer ({@code powsybl-cgmes-rdfdb}); changing this signature is a
-     * breaking change for it.</p>
-     *
-     * @param ds         the data source holding the instance files
-     * @param target     the triple store the statements are written to
-     * @param p          the import parameters
-     * @param reportNode where the reader reports the files it read
-     * @return a CGMES model on the target store, sharing it with whoever else uses it
-     */
-    public CgmesModel readCgmes(ReadOnlyDataSource ds, TripleStore target, Properties p, ReportNode reportNode) {
-        Objects.requireNonNull(ds);
-        Objects.requireNonNull(target);
-        Objects.requireNonNull(reportNode);
-        ReportNode tripleStoreReportNode = CgmesReports.readingCgmesTriplestoreReport(reportNode);
-        return CgmesModelFactory.create(ds, boundary(p), target, tripleStoreReportNode);
-    }
-
-    /**
      * The triple store options described by the given import parameters.
      *
      * <p>Public so that a caller that creates the triple store itself &mdash; a database layer loading CGMES files
      * into a remote store, or converting a store it already holds &mdash; configures it exactly as a file import
      * would. Reading the same data with different options yields different IIDM identifiers.</p>
      *
-     * <p>Public API: used by the RDF database layer ({@code powsybl-cgmes-rdfdb}); changing this signature is a
-     * breaking change for it.</p>
+     * <p>Public API: a client outside this module builds on this signature.</p>
      *
      * @param p the import parameters
      * @return the options, with the query catalog left at its default (the import catalog)
@@ -793,8 +760,7 @@ public class CgmesImport implements Importer {
      * layer &mdash; can build the very configuration a file import would use, instead of a second interpretation of
      * the same parameter names.</p>
      *
-     * <p>Public API: used by the RDF database layer ({@code powsybl-cgmes-rdfdb}); changing this signature is a
-     * breaking change for it.</p>
+     * <p>Public API: a client outside this module builds on this signature.</p>
      */
     public Conversion.Config config(Properties p) {
         Conversion.Config config = new Conversion.Config()

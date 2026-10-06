@@ -89,6 +89,8 @@ import java.util.Set;
  * same network supersedes the same source model as the first one. A caller building a chain says so explicitly with
  * {@link HeaderOptions#chainAfter(DifferenceModelHeader)}.</p>
  *
+ * <p>Public API: a client outside this module builds on this signature.</p>
+ *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 public final class CgmesDiffExport {
@@ -203,9 +205,6 @@ public final class CgmesDiffExport {
 
     /**
      * Optional settings of a difference model export.
-     *
-     * <p>Public API: used by the RDF database layer ({@code powsybl-cgmes-rdfdb}); changing this signature is a
-     * breaking change for it.</p>
      */
     public static final class ExportOptions {
 
@@ -361,9 +360,6 @@ public final class CgmesDiffExport {
     /**
      * What an export produced.
      *
-     * <p>Public API: used by the RDF database layer ({@code powsybl-cgmes-rdfdb}); changing this signature is a
-     * breaking change for it.</p>
-     *
      * @param differences    the difference models, one per touched profile
      * @param exportedEvents the changes that reached them, in the order in which they were written. With
      *                       {@link UnsupportedChangeBehavior#FAIL} this is every compacted change; with
@@ -374,9 +370,6 @@ public final class CgmesDiffExport {
 
     /**
      * Translate recorded changes into difference models, without writing anything.
-     *
-     * <p>Public API: used by the RDF database layer ({@code powsybl-cgmes-rdfdb}); changing this signature is a
-     * breaking change for it.</p>
      *
      * @param network       the network the changes were recorded on. It has to be an individual grid model
      * @param events        the recorded changes
