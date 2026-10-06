@@ -24,7 +24,9 @@ import java.util.Map;
 import java.util.Set;
 
 import static com.powsybl.cgmes.rdfdb.Backends.BE;
+import static com.powsybl.cgmes.rdfdb.Backends.NL;
 import static com.powsybl.cgmes.rdfdb.Backends.microGridBe;
+import static com.powsybl.cgmes.rdfdb.Backends.microGridNl;
 import static com.powsybl.cgmes.rdfdb.Backends.params;
 import static com.powsybl.cgmes.rdfdb.Backends.ref;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -88,6 +90,27 @@ class RdfDbVersionedFlowTest {
             assertThat(provenance.snapshot()).contains(RdfDbNames.snapshot(S, BE, Instant.parse("2014-06-01T10:30:00Z"), 1));
             assertThat(db.snapshots(S).snapshotOf(fromDb)).isPresent();
             assertThat(db.snapshots(OTHER).snapshotOf(fromDb)).isEmpty();
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void theSecondModellingAuthorityLoadsWithTheSharedBoundary(String backend) {
+        try (RdfDbConnection db = twoScenarios(backend)) {
+            // NL is stored after BE: it links BE's boundary graphs instead of uploading them
+            db.snapshots(S).putFull(microGridNl(), null, SnapshotRef.latest(S, NL), null, params(),
+                    ReportNode.NO_OP);
+
+            Network fromDb = RdfDbNetworkLoader.load(db, SnapshotRef.latest(S, NL), null, params(),
+                    ReportNode.NO_OP);
+            Networks.assertSameNetwork(Network.read(microGridNl(), params()), fromDb, IDENTITY);
+            // And the first authority still loads as before
+            Network be = load(db, S, 1);
+            Networks.assertSameNetwork(Network.read(microGridBe(), params()), be, IDENTITY);
+            // The full route of an update reaches the second authority the same way
+            UpdateResult toNl = update(be, db, SnapshotRef.latest(S, NL), new RdfDbUpdateOptions());
+            assertThat(toNl.route()).isEqualTo(UpdateResult.Route.FULL_RELOAD);
+            Networks.assertSameNetwork(Network.read(microGridNl(), params()), toNl.network(), IDENTITY);
         }
     }
 

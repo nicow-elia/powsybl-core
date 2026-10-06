@@ -29,6 +29,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -224,6 +225,7 @@ final class RdfDbMaterializer {
             long fetchStart = System.nanoTime();
             GraphFetcher.FetchStatistics fetchStatistics = new GraphFetcher(db, scenario)
                     .fetchInto(local, localToRemote);
+            rebaseSharedModels(local, plan, stateModels, contextOfSubset);
             Duration fetchWallClock = Duration.ofNanos(System.nanoTime() - fetchStart);
 
             long applyStart = System.nanoTime();
@@ -295,6 +297,7 @@ final class RdfDbMaterializer {
                 contexts.put(entry.getKey(), localName);
             }
             new GraphFetcher(db, scenario).fetchInto(local, localToRemote);
+            rebaseSharedModels(local, plan, models, contexts);
             applySteps(db, local, plan, contexts);
             handedOver = true;
             return new MaterialisedStore(local, contexts, subjectBase(plan, models));
@@ -318,10 +321,50 @@ final class RdfDbMaterializer {
      * @return the subject base, or the empty string when no target state names one
      */
     static String subjectBase(MaterializationPlan plan, Map<String, StoredModel> models) {
+        // The boundary last: a scenario shares it among its modelling authorities, and it speaks the subject
+        // base of the first root, which is not the one of the others
         return plan.targetState().values().stream()
                 .map(models::get).filter(Objects::nonNull)
+                .sorted(Comparator.comparing(StoredModel::isBoundary))
                 .map(StoredModel::subjectBase).filter(base -> !base.isEmpty())
                 .findFirst().orElse("");
+    }
+
+    /**
+     * Make the shared boundary speak the subject base of the snapshot it is materialised for.
+     *
+     * <p>Relative identifiers of CGMES files ({@code rdf:about="#_…"}) are resolved against a base that the parse
+     * takes from the data source, so the files of two modelling authorities carry two subject bases. The boundary
+     * of a scenario is stored once, by the first root, and every later root links it: in the store of the second
+     * authority its equipment then points at {@code <base of NL>#_bv} while the base voltage stored with the
+     * boundary is {@code <base of BE>#_bv}, and the conversion finds no nominal voltage. Rewriting the boundary
+     * graph's subjects and objects in the local store to the snapshot's base is what the files themselves, read
+     * together, would have given; the stored graph stays as it was written.</p>
+     */
+    private static void rebaseSharedModels(TripleStoreRDF4J local, MaterializationPlan plan,
+                                           Map<String, StoredModel> models, Map<CgmesSubset, String> contexts) {
+        String base = subjectBase(plan, models);
+        if (base.isEmpty()) {
+            return;
+        }
+        plan.startModel().forEach((subset, source) -> {
+            StoredModel model = models.get(source.modelId());
+            if (model == null || model.subjectBase().isEmpty() || model.subjectBase().equals(base)) {
+                return;
+            }
+            String graph = SparqlText.iri(contexts.get(subset));
+            String from = SparqlText.str(model.subjectBase());
+            String rebase = "DELETE { GRAPH " + graph + " { ?s ?p ?o } } INSERT { GRAPH " + graph + " { ?s2 ?p ?o2 } }"
+                    + " WHERE { GRAPH " + graph + " { ?s ?p ?o }"
+                    + " FILTER(STRSTARTS(STR(?s), " + from + ") || (isIRI(?o) && STRSTARTS(STR(?o), " + from + ")))"
+                    + " BIND(IF(STRSTARTS(STR(?s), " + from + "), IRI(CONCAT(" + SparqlText.str(base)
+                    + ", STRAFTER(STR(?s), " + from + "))), ?s) AS ?s2)"
+                    + " BIND(IF(isIRI(?o) && STRSTARTS(STR(?o), " + from + "), IRI(CONCAT(" + SparqlText.str(base)
+                    + ", STRAFTER(STR(?o), " + from + "))), ?o) AS ?o2) }";
+            try (var conn = local.getRepository().getConnection()) {
+                conn.prepareUpdate(rebase).execute();
+            }
+        });
     }
 
     /** Fetch every difference of the plan in one request and apply them, folded, one profile at a time. */
