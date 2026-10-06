@@ -791,14 +791,16 @@ public final class SnapshotCatalog {
      * realistic IGM is one: its equipment and topology come from the TSO's modelling tool, its state variables from
      * the merging agent that ran the power flow. So an explicit authority is taken as given, whatever the members
      * state. Without one, the equipment and the steady state hypothesis decide &mdash; the profiles a TSO owns
-     * &mdash; and only when they agree; the other profiles decide only when neither of the two is there (a
-     * difference set of the state variables alone, say). The boundary is never asked, it is the scenario's.</p>
+     * &mdash; and only when they agree. A set with neither of the two (a difference of the state variables alone,
+     * say, recorded from a merged model) is refused rather than filed under whatever its other members state: that
+     * would be the merging agent's tree. The boundary is never asked, it is the scenario's.</p>
      *
      * @param stated what each non-boundary member states, by profile
      * @param given  the authority of the address, or {@code null}
      * @param what   what the members are, for the message
      * @return the authority
-     * @throws RdfDbException if the address names none and the deciding members state none or several
+     * @throws RdfDbException if the address names none and the deciding members are missing, state none or state
+     *                        several
      */
     private String authorityOf(Map<CgmesSubset, String> stated, String given, String what) {
         if (given != null) {
@@ -807,7 +809,13 @@ public final class SnapshotCatalog {
         Map<CgmesSubset, String> deciding = new EnumMap<>(CgmesSubset.class);
         deciding.putAll(stated);
         deciding.keySet().retainAll(DECIDING_PROFILES);
-        Set<String> authorities = new TreeSet<>((deciding.isEmpty() ? stated : deciding).values());
+        if (deciding.isEmpty() && !stated.isEmpty()) {
+            throw new RdfDbException(what + " of scenario '" + scenario + "' state the modelling authorities "
+                    + byIdentifier(stated) + ", but no equipment or steady state hypothesis member states one, and"
+                    + " only those two decide the modelling authority of an address that names none: pass the"
+                    + " modelling authority in the address");
+        }
+        Set<String> authorities = new TreeSet<>(deciding.values());
         if (authorities.size() == 1) {
             return authorities.iterator().next();
         }
@@ -860,8 +868,9 @@ public final class SnapshotCatalog {
      * the parent.</p>
      *
      * @param set        the difference models
-     * @param target     the address the new snapshot gets. A {@code null} modelling authority is the one the
-     *                   difference headers state (those of EQ and SSH deciding); a {@code null} timestamp is the base timestamp of that
+     * @param target     the address the new snapshot gets. A {@code null} modelling authority is the one the EQ
+     *                   and SSH difference headers agree on, and a set with neither is refused; a {@code null}
+     *                   timestamp is the base timestamp of that
      *                   authority's tree; a {@code null} version is the head's plus one (1 for a new timestamp).
      *                   An explicit version must be greater than the head's; gaps are allowed
      * @param reportNode where the write reports

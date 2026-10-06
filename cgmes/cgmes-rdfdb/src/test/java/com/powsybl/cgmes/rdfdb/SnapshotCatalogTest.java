@@ -171,6 +171,34 @@ class SnapshotCatalogTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void aDifferenceWithoutEquipmentOrSteadyStateMustNameItsAuthority(String backend) {
+        try (RdfDbConnection db = open(backend)) {
+            SnapshotInfo be = root(db, S, null);
+            // State variables recorded from a merged model: the merging agent's header must not pick the tree
+            CgmesSubset sv = CgmesSubset.STATE_VARIABLES;
+            DifferenceModelHeader header = DifferenceModelHeader.builder("urn:uuid:sv-merged", sv, CIM16)
+                    .supersedes(List.of(be.state().get(sv)))
+                    .modelingAuthoritySet("http://merging.agent/CGMES")
+                    .build();
+            CgmesStatement forward = CgmesStatement.literal("_bus", "SvVoltage", "SvVoltage.v", "231.0");
+            CgmesStatement reverse = CgmesStatement.literal("_bus", "SvVoltage", "SvVoltage.v", "230.0");
+            DifferenceModelSet svOnly = new DifferenceModelSet(List.of(new DifferenceModel(header,
+                    List.of(forward), List.of(reverse), List.of())));
+            SnapshotCatalog catalog = db.snapshots(S);
+
+            assertThatThrownBy(() -> catalog.putDiff(svOnly, SnapshotRef.latest(S, null)))
+                    .isInstanceOf(RdfDbException.class)
+                    .hasMessageContaining("SV=http://merging.agent/CGMES")
+                    .hasMessageContaining("only those two decide the modelling authority")
+                    .hasMessageContaining("pass the modelling authority in the address");
+            assertThat(catalog.snapshots()).containsExactly(be);
+            // Named, it is the address's tree, whatever the header states
+            assertThat(catalog.putDiff(svOnly, SnapshotRef.latest(S, BE)).modellingAuthority()).isEqualTo(BE);
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void rootPerScenario(String backend) {
         try (RdfDbConnection db = open(backend)) {
             SnapshotInfo here = root(db, S, 1);
