@@ -651,7 +651,8 @@ public final class RdfDbNetworkLoader {
      * Build the network of one snapshot from some of its profiles.
      *
      * <p>The profiles are a projection, not a part of the address: the snapshot is the same, and the network holds
-     * the profiles named here, each at the state the snapshot has for it. The equipment profile is what a network
+     * the profiles named here, each at the state the snapshot has for it, and always the boundary, which belongs to
+     * the scenario rather than to a projection. The equipment profile is what a network
      * is built from, so a projection without it fails in the conversion.</p>
      *
      * @param db             the open connection

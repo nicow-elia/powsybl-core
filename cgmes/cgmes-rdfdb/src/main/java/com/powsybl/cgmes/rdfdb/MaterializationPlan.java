@@ -62,8 +62,11 @@ public record MaterializationPlan(String target, Map<CgmesSubset, FullSource> st
     /**
      * The same plan for fewer profiles: what a load with a profile projection materialises.
      *
+     * <p>The boundary is always kept: it belongs to the scenario, not to the projection, and the equipment of every
+     * modelling authority refers to it &mdash; the same rule {@code putFull} applies to a projected write.</p>
+     *
      * @param profiles the profiles to keep, or {@code null} or empty for all of them
-     * @return the plan, restricted to those profiles
+     * @return the plan, restricted to those profiles and the boundary
      * @throws RdfDbException if a profile is not part of the snapshot's state
      */
     public MaterializationPlan project(Set<CgmesSubset> profiles) {
@@ -78,11 +81,13 @@ public record MaterializationPlan(String target, Map<CgmesSubset, FullSource> st
         }
         Map<CgmesSubset, FullSource> start = new EnumMap<>(CgmesSubset.class);
         Map<CgmesSubset, String> state = new EnumMap<>(CgmesSubset.class);
-        profiles.forEach(subset -> {
-            start.put(subset, startModel.get(subset));
-            state.put(subset, targetState.get(subset));
-        });
+        targetState.keySet().stream()
+                .filter(subset -> profiles.contains(subset) || StoredModel.isBoundaryProfile(subset))
+                .forEach(subset -> {
+                    start.put(subset, startModel.get(subset));
+                    state.put(subset, targetState.get(subset));
+                });
         return new MaterializationPlan(target, start,
-                steps.stream().filter(step -> profiles.contains(step.model().subset())).toList(), state);
+                steps.stream().filter(step -> state.containsKey(step.model().subset())).toList(), state);
     }
 }

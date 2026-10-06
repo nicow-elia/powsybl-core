@@ -116,6 +116,31 @@ class RdfDbVersionedFlowTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void aProjectedLoadKeepsTheBoundary(String backend) {
+        try (RdfDbConnection db = twoScenarios(backend)) {
+            db.snapshots(S).putFull(microGridNl(), null, SnapshotRef.latest(S, NL), null, params(),
+                    ReportNode.NO_OP);
+            Set<CgmesSubset> projection = Set.of(CgmesSubset.EQUIPMENT, CgmesSubset.TOPOLOGY, SSH,
+                    CgmesSubset.STATE_VARIABLES);
+
+            // The boundary belongs to the scenario, not to the projection: the first root and the second
+            for (String authority : List.of(BE, NL)) {
+                Network projected = RdfDbNetworkLoader.load(db, SnapshotRef.latest(S, authority), projection, null,
+                        params(), ReportNode.NO_OP);
+                Network full = RdfDbNetworkLoader.load(db, SnapshotRef.latest(S, authority), null, params(),
+                        ReportNode.NO_OP);
+                Networks.assertSameNetwork(full, projected, IDENTITY);
+            }
+            // Equipment and steady state hypothesis alone: the boundary's base voltages are there
+            Network eqSsh = RdfDbNetworkLoader.load(db, SnapshotRef.latest(S, NL), Set.of(CgmesSubset.EQUIPMENT, SSH),
+                    null, params(), ReportNode.NO_OP);
+            assertThat(eqSsh.getVoltageLevelCount())
+                    .isEqualTo(Network.read(microGridNl(), params()).getVoltageLevelCount());
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void latestResolvesTheHead(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network sender = load(db, S, 1);

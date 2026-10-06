@@ -1217,7 +1217,7 @@ and 10, while `lv : sep` stayed between 9 and 11 throughout.
   scenario that holds differences it would build a network from a state that never existed, and that load fails
   with a message saying so. A snapshot is loaded with a profile projection through
   `RdfDbNetworkLoader.load(db, ref, profiles, …)`, which takes each named profile at the state the snapshot has
-  for it.
+  for it, and always the boundary.
 * **One model per profile.** A network carrying two CGMES models of one profile — a merged model with two modelling
   authorities — cannot be the sender or the receiver of a difference: a stored chain versions one model. Such a
   network is refused rather than silently halved: write each authority's changes from a network of that
