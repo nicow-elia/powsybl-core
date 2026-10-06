@@ -40,7 +40,7 @@ import java.util.Optional;
  * </pre>
  *
  * <p>Without that module the factory fails with a message saying so, rather than silently producing a store that
- * points nowhere. Programmatic callers &mdash; {@code cgmes-rdfdb} &mdash; construct
+ * points nowhere. Programmatic callers &mdash; the versioning layer built on this store &mdash; construct
  * {@link TripleStoreRDF4JSparql} directly and never come through here.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
@@ -53,8 +53,8 @@ public class TripleStoreFactoryServiceRDF4JSparql implements TripleStoreFactoryS
 
     private static final String MISSING_CONFIG = "Triple store '" + TripleStoreRDF4JSparql.NAME
             + "' needs a configured endpoint (platform configuration module '" + MODULE_NAME
-            + "', keys url or query-url, and scenario). Use com.powsybl.cgmes.rdfdb to address a database"
-            + " programmatically.";
+            + "', keys url or query-url, and scenario). Use the versioning layer built on this store to address a"
+            + " database programmatically.";
 
     @Override
     public TripleStore create() {
@@ -113,7 +113,7 @@ public class TripleStoreFactoryServiceRDF4JSparql implements TripleStoreFactoryS
     @Override
     public TripleStore copy(TripleStore source) {
         throw new PowsyblException("A remote triple store cannot be copied;"
-                + " fetch its graphs with com.powsybl.cgmes.rdfdb.GraphFetcher");
+                + " fetch its graphs with a graph fetcher of the versioning layer");
     }
 
     @Override

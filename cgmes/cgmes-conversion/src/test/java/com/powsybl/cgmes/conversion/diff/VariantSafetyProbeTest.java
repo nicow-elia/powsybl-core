@@ -70,9 +70,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>Three network-level values are excluded from the comparison and documented as such: the case date, the
  * forecast distance and the {@code cgmesMetadataModels} extension. IIDM stores none of them per variant, and the
- * layer that binds a variant to a stored snapshot swaps them in and out around the update instead
- * ({@code VariantScope} in {@code cgmes-rdfdb}). Everything else &mdash; every setpoint, every switch, every tap
- * position, every limit, every impedance, every property of every identifiable &mdash; is compared exactly.</p>
+ * layer that binds a variant to a stored snapshot swaps them in and out around the update instead. Everything
+ * else &mdash; every setpoint, every switch, every tap position, every limit, every impedance, every property of
+ * every identifiable &mdash; is compared exactly.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */

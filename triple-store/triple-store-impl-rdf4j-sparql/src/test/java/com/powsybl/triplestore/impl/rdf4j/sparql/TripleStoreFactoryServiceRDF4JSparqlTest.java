@@ -32,7 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>Registering a triple store implementation that needs configuration to exist is a risk: a test that iterates
  * {@code TripleStoreFactory.allImplementations()} and calls {@code create()} on each would break. That is why the
  * failure is a clear {@link PowsyblException} naming the configuration it wants, and why this module is a
- * dependency of nothing but {@code cgmes-rdfdb}.</p>
+ * dependency of nothing but the versioning layer built on it.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
@@ -132,7 +132,7 @@ class TripleStoreFactoryServiceRDF4JSparqlTest {
         TripleStore store = factory.create(platformConfig, new TripleStoreOptions());
         try {
             PowsyblException e = assertThrows(PowsyblException.class, () -> factory.copy(store));
-            assertThat(e.getMessage()).contains("GraphFetcher");
+            assertThat(e.getMessage()).contains("fetch its graphs");
         } finally {
             store.close();
         }
