@@ -12,6 +12,8 @@ import com.powsybl.cgmes.model.CgmesSubset;
 import org.eclipse.rdf4j.model.Literal;
 import org.eclipse.rdf4j.model.Value;
 
+import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
@@ -37,14 +39,13 @@ import java.util.Optional;
  * request that returns the rows &mdash; the flag lives on the member model and is read from there, never from the
  * snapshot node.</p>
  *
- * <p>Two components of {@link SnapshotInfo} are computed here rather than read: {@code fast} from the bindings
- * above, and {@code hasFull} from the {@code pdb:full} links the rows already carry &mdash; a snapshot can start a
- * materialisation exactly when it names a full model, so the boolean earlier releases stored beside the links is
- * not read.</p>
+ * <p>One component of {@link SnapshotInfo} is computed here rather than read: {@code fast}, from the bindings
+ * above.</p>
  *
- * <p>Unknown predicates are ignored on purpose: a metadata graph written by a later release has to be readable by
- * this one, and the schema only ever grows. That is also what makes the two retired booleans of the snapshot node,
- * {@code pdb:fast} and {@code pdb:hasFull}, harmless in a store written before this release.</p>
+ * <p>Unknown predicates are ignored on purpose: a metadata graph written by a later release of the same schema has
+ * to be readable by this one, and a schema only ever grows. The one predicate that is <em>not</em> ignored is the
+ * key of the earlier addressing schema, {@code pdb:timestep}: a node carrying it would be decoded into nothing, or
+ * worse into a wrong address, so it is refused ({@link #legacySchema}).</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
@@ -84,14 +85,34 @@ final class SnapshotRows {
             + " OPTIONAL { ?o pdb:fastPredicatesOnly ?" + MEMBER_FAST + " } } ";
 
     /**
-     * What {@link RdfDbVocabulary#TIMESTEP_LABEL} was called before this release.
+     * The key term of the earlier {@code (scenario, timestep, version)} schema.
      *
-     * <p>Read, never written. A metadata graph filled by an earlier release names the display rendering of a
-     * timestep {@code pdb:label}, and a listing of it has to keep showing {@code "08:30"} rather than nothing.</p>
+     * <p>Never written by this release, and never read as data: a snapshot node carrying it belongs to a store this
+     * release refuses, see {@link #legacySchema}.</p>
      */
-    private static final String LEGACY_LABEL = RdfDbVocabulary.NS + "label";
+    static final String LEGACY_TIMESTEP = RdfDbVocabulary.NS + "timestep";
+
+    /** The per-scenario node class of the earlier schema, which held its base timestep and offset. */
+    static final String LEGACY_CATALOG = RdfDbVocabulary.NS + "Catalog";
 
     private SnapshotRows() {
+    }
+
+    /**
+     * The refusal of a scenario written in an addressing schema this release does not read.
+     *
+     * <p>There is no migration: the earlier schema lived inside one unreleased change, and re-ingesting a day costs
+     * minutes. The message says what was found and what to do.</p>
+     *
+     * @param scenario the scenario
+     * @param found    what the metadata graph carries instead of {@code pdb:schema 3}
+     * @return the exception to throw
+     */
+    static RdfDbException legacySchema(String scenario, String found) {
+        return new RdfDbException("scenario '" + scenario + "' was written by the (scenario, timestep, version)"
+                + " schema of an earlier release (" + found + "); this release reads only stores of schema "
+                + RdfDbVocabulary.SCHEMA_VERSION + ", addressed by (scenario, modelling authority, timestamp,"
+                + " version). There is no migration: clear the scenario (RdfDbConnection.clear) and re-ingest it");
     }
 
     /**
@@ -112,6 +133,9 @@ final class SnapshotRows {
             if (s == null || p == null || o == null) {
                 continue;
             }
+            if (LEGACY_TIMESTEP.equals(p.stringValue())) {
+                throw legacySchema(scenario, "a snapshot node keyed by pdb:timestep");
+            }
             builders.computeIfAbsent(s.stringValue(), Builder::new)
                     .add(p.stringValue(), o, row.get("sub"), row.get(MEMBER_KIND), row.get(MEMBER_FAST));
         }
@@ -120,11 +144,12 @@ final class SnapshotRows {
         return snapshots;
     }
 
-    /** The natural order of a listing: by timestep, then by depth in the chain. */
-    static Comparator<SnapshotInfo> byTimestepAndDepth() {
-        return Comparator.comparing(SnapshotInfo::timestep)
+    /** The natural order of a listing: by modelling authority, by timestamp, then by depth in the chain. */
+    static Comparator<SnapshotInfo> byTimestampAndDepth() {
+        return Comparator.comparing(SnapshotInfo::modellingAuthority)
+                .thenComparing(SnapshotInfo::timestamp)
                 .thenComparingInt(SnapshotInfo::depth)
-                .thenComparing(SnapshotInfo::version);
+                .thenComparingInt(SnapshotInfo::version);
     }
 
     static CgmesSubset subsetOf(Value value) {
@@ -163,6 +188,15 @@ final class SnapshotRows {
         }
     }
 
+    /** The instant of an {@code xsd:dateTime} literal, whatever offset the backend writes it back with. */
+    static Instant instantOf(Value value) {
+        try {
+            return OffsetDateTime.parse(value.stringValue()).toInstant();
+        } catch (DateTimeParseException e) {
+            return null;
+        }
+    }
+
     static ZonedDateTime dateOf(Value value) {
         if (value == null) {
             return null;
@@ -184,15 +218,13 @@ final class SnapshotRows {
     private static final class Builder {
 
         private final String iri;
-        private String version;
-        private String timestep;
-        private String timestepLabel;
-        /** What a store written before the term was renamed carries, used only when the new one is absent. */
-        private String legacyLabel;
+        private String modellingAuthority;
+        private Instant timestamp;
+        private int version;
         private String kind;
         private String parent;
         private String edge;
-        private String timestepRoot;
+        private String timestampRoot;
         private String description;
         private int depth;
         /** The conjunction over the difference members seen so far; a snapshot without any is fast. */
@@ -211,14 +243,13 @@ final class SnapshotRows {
             switch (predicate) {
                 case RdfDbVocabulary.RDF_TYPE -> isSnapshot |= RdfDbVocabulary.SNAPSHOT_CLASS.equals(
                         object.stringValue());
-                case RdfDbVocabulary.VERSION -> version = object.stringValue();
-                case RdfDbVocabulary.TIMESTEP -> timestep = object.stringValue();
-                case RdfDbVocabulary.TIMESTEP_LABEL -> timestepLabel = object.stringValue();
-                case LEGACY_LABEL -> legacyLabel = object.stringValue();
+                case RdfDbVocabulary.MODELLING_AUTHORITY -> modellingAuthority = object.stringValue();
+                case RdfDbVocabulary.TIMESTAMP -> timestamp = instantOf(object);
+                case RdfDbVocabulary.VERSION -> version = intOf(object);
                 case RdfDbVocabulary.KIND -> kind = object.stringValue();
                 case RdfDbVocabulary.PARENT -> parent = object.stringValue();
                 case RdfDbVocabulary.EDGE -> edge = object.stringValue();
-                case RdfDbVocabulary.TIMESTEP_ROOT -> timestepRoot = object.stringValue();
+                case RdfDbVocabulary.TIMESTAMP_ROOT -> timestampRoot = object.stringValue();
                 case RdfDbVocabulary.DESCRIPTION -> description = object.stringValue();
                 case RdfDbVocabulary.DEPTH -> depth = intOf(object);
                 case RdfDbVocabulary.CREATED -> created = dateOf(object);
@@ -232,21 +263,6 @@ final class SnapshotRows {
                     // A term of a later schema version, or a term of the model header this view does not read
                 }
             }
-        }
-
-        /**
-         * The display rendering of the timestep, preferring the current term over the retired one.
-         *
-         * <p>Empty when the node carries neither. It is not computed from the timestep here: that needs the base
-         * offset of the scenario, which this class does not hold and cannot fetch without a request &mdash; and a
-         * listing must not grow one. Callers that need something to show fall back to the timestep itself, which
-         * is what {@code VariantBulkLoader} has always done.</p>
-         */
-        private String labelOrEmpty() {
-            if (timestepLabel != null) {
-                return timestepLabel;
-            }
-            return legacyLabel == null ? "" : legacyLabel;
         }
 
         /**
@@ -279,7 +295,7 @@ final class SnapshotRows {
         }
 
         Optional<SnapshotInfo> build(String scenario) {
-            if (!isSnapshot || version == null || timestep == null) {
+            if (!isSnapshot || modellingAuthority == null || timestamp == null || version < 1) {
                 return Optional.empty();
             }
             SnapshotInfo.Kind snapshotKind = RdfDbVocabulary.FULL.equals(kind)
@@ -287,14 +303,14 @@ final class SnapshotRows {
             SnapshotInfo.EdgeKind edgeKind;
             if (parent == null) {
                 edgeKind = SnapshotInfo.EdgeKind.NONE;
-            } else if (RdfDbVocabulary.TIMESTEP_EDGE.equals(edge)) {
-                edgeKind = SnapshotInfo.EdgeKind.TIMESTEP;
+            } else if (RdfDbVocabulary.TIMESTAMP_EDGE.equals(edge)) {
+                edgeKind = SnapshotInfo.EdgeKind.TIMESTAMP;
             } else {
                 edgeKind = SnapshotInfo.EdgeKind.VERSION;
             }
-            return Optional.of(new SnapshotInfo(scenario, iri, version, timestep,
-                    labelOrEmpty(), snapshotKind, parent, edgeKind, depth, fast,
-                    state, members, full, timestepRoot == null ? iri : timestepRoot, created, description));
+            return Optional.of(new SnapshotInfo(scenario, iri, modellingAuthority, timestamp, version, snapshotKind,
+                    parent, edgeKind, depth, fast, state, members, full, timestampRoot == null ? iri : timestampRoot,
+                    created, description));
         }
     }
 }

@@ -79,8 +79,7 @@ public final class RdfDbVocabulary {
      *
      * <p>This is the one place the fast-route capability is stored. A snapshot is fast when every difference it
      * adds says so, and that conjunction is derived where it is needed ({@link SnapshotInfo#fast()}) rather than
-     * written a second time onto the snapshot node. Stores written before this release carry a
-     * {@code pdb:fast} triple on their snapshot nodes; it is never read, never rewritten and never deleted.</p>
+     * written a second time onto the snapshot node.</p>
      */
     public static final String FAST_PREDICATES_ONLY = NS + "fastPredicatesOnly";
 
@@ -135,54 +134,64 @@ public final class RdfDbVocabulary {
     /** {@code md:Model.Supersedes}, which is the version chain of a profile inside a scenario. */
     public static final String MODEL_SUPERSEDES = MD_NS + "Model.Supersedes";
 
+    /** Whether a full model belongs to the boundary a scenario's modelling authorities share. */
+    public static final String BOUNDARY = NS + "boundary";
+
     // ------------------------------------------------------------------ versioning
 
-    /** {@code pdb:Snapshot}, the class of a consistent grid state addressed by (scenario, timestep, version). */
+    /**
+     * {@code pdb:Snapshot}, the class of a consistent grid state addressed by
+     * {@code (scenario, modellingAuthority, timestamp, version)}.
+     */
     public static final String SNAPSHOT_CLASS = NS + "Snapshot";
 
-    /** {@code pdb:Catalog}, the class of the single per-scenario node holding its base timestep and offset. */
-    public static final String CATALOG_CLASS = NS + "Catalog";
+    /**
+     * The addressing schema a scenario's metadata graph is written in, on the node
+     * {@code RdfDbNames.schemaNode(scenario)}.
+     *
+     * <p>Written with every root snapshot. A reader that finds snapshots but not the value
+     * {@value #SCHEMA_VERSION} refuses the scenario instead of reading it in a schema it does not know.</p>
+     */
+    public static final String SCHEMA = NS + "schema";
+
+    /** The value of {@link #SCHEMA} this release writes and reads. */
+    public static final int SCHEMA_VERSION = 3;
 
     /** {@code pdb:Materialized}, the class of a model node whose graph a checkpoint copied and folded. */
     public static final String MATERIALIZED = NS + "Materialized";
 
-    /** Value of {@link #EDGE} for the link from a snapshot to the previous version of the same timestep. */
+    /** Value of {@link #EDGE} for the link from a snapshot to the previous version of the same timestamp. */
     public static final String VERSION_EDGE = NS + "VersionEdge";
 
-    /** Value of {@link #EDGE} for the link from a timestep root to the base-chain snapshot it derives from. */
-    public static final String TIMESTEP_EDGE = NS + "TimestepEdge";
+    /** Value of {@link #EDGE} for the link from a timestamp root to the base-chain snapshot it derives from. */
+    public static final String TIMESTAMP_EDGE = NS + "TimestampEdge";
 
-    /** The user-facing version label of a snapshot, for instance {@code "1.1"}. */
+    /** The version of a snapshot, an {@code xsd:integer} of at least 1. */
     public static final String VERSION = NS + "version";
 
     /**
-     * The canonical ISO instant a snapshot describes, equal to {@code md:Model.scenarioTime} of its members.
+     * The {@code md:Model.modelingAuthoritySet} a snapshot belongs to, as a plain literal.
      *
-     * <p>This is the <strong>key</strong>: one third of the unique {@code (scenario, timestep, version)} address,
-     * and the only form of the moment a lookup ever matches on.</p>
+     * <p>One quarter of the key: every modelling authority of a scenario owns its own snapshot tree, and the members
+     * of a snapshot that state an authority state this one.</p>
      */
-    public static final String TIMESTEP = NS + "timestep";
+    public static final String MODELLING_AUTHORITY = NS + "modellingAuthority";
 
     /**
-     * The {@code HH:MM} rendering of {@link #TIMESTEP} in the scenario's base offset, for display only.
+     * The moment a snapshot describes, an {@code xsd:dateTime} in UTC with second precision, equal to
+     * {@code md:Model.scenarioTime} of its members.
      *
-     * <p>Derived at write time by {@code Timesteps.label(timestep, baseOffset)} and never matched on: a caller
-     * that passes {@code "08:30"} has it resolved against the scenario's base day <em>before</em> any query is
-     * sent, so two scenarios describing two days may carry the same rendering for two different instants.</p>
-     *
-     * <p>It was called {@code pdb:label} until this release, which was ambiguous in two directions &mdash;
-     * {@code rdfs:label} names a thing, and a snapshot's <em>version</em> is also a free-form label. A store
-     * written earlier carries the old term and is still read: the reader prefers this one and falls back to it.</p>
+     * <p>One quarter of the key, and the only form of the moment a lookup ever matches on.</p>
      */
-    public static final String TIMESTEP_LABEL = NS + "timestepLabel";
+    public static final String TIMESTAMP = NS + "timestamp";
 
     /** The snapshot this one was derived from, at most one. */
     public static final String PARENT = NS + "parent";
 
-    /** Which kind of link {@link #PARENT} is: {@link #VERSION_EDGE} or {@link #TIMESTEP_EDGE}. */
+    /** Which kind of link {@link #PARENT} is: {@link #VERSION_EDGE} or {@link #TIMESTAMP_EDGE}. */
     public static final String EDGE = NS + "edge";
 
-    /** How many snapshots lie between this one and the root of its scenario; 0 for the root. */
+    /** How many snapshots lie between this one and the root of its tree; 0 for a root. */
     public static final String DEPTH = NS + "depth";
 
     /** The models that <em>define</em> the snapshot: the full models of a root, the differences of a diff. */
@@ -194,9 +203,8 @@ public final class RdfDbVocabulary {
     /**
      * The models with a full graph a materialisation of this snapshot can start from, per profile.
      *
-     * <p>Whether a snapshot can start one at all is <em>this link existing</em>, nothing else: there is no
-     * {@code pdb:hasFull} boolean beside it, and {@link SnapshotInfo#hasFull()} is derived from the links. Stores
-     * written before this release carry such a boolean; it is never read, never rewritten and never deleted.</p>
+     * <p>Whether a snapshot can start one at all is <em>this link existing</em>, nothing else, and
+     * {@link SnapshotInfo#hasFull()} is derived from the links.</p>
      */
     public static final String FULL_MODELS = NS + "full";
 
@@ -206,14 +214,8 @@ public final class RdfDbVocabulary {
     /** The state model a {@link #MATERIALIZED} node carries the statements of. */
     public static final String OF_MODEL = NS + "ofModel";
 
-    /** The root snapshot of the timestep a snapshot belongs to. */
-    public static final String TIMESTEP_ROOT = NS + "timestepRoot";
-
-    /** The base timestep of a scenario, on the per-scenario {@link #CATALOG_CLASS} node. */
-    public static final String BASE_TIMESTEP = NS + "baseTimestep";
-
-    /** The zone offset the labels of a scenario are written in, on the {@link #CATALOG_CLASS} node. */
-    public static final String BASE_OFFSET = NS + "baseOffset";
+    /** The root snapshot of the timestamp a snapshot belongs to. */
+    public static final String TIMESTAMP_ROOT = NS + "timestampRoot";
 
     /** Free text a writer attached to a snapshot. */
     public static final String DESCRIPTION = NS + "description";
