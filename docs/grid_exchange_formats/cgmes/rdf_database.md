@@ -1183,6 +1183,48 @@ classpath — which, through `powsybl-cgmes-rdfdb`, is the whole powsybl distrib
 list and calls `create()` on every entry will get that exception for `rdf4j-sparql` unless the module is
 configured.
 
+## What the module depends on, and what depends on it
+
+`powsybl-cgmes-rdfdb` lives in powsybl-core for now and is built to move out of it later. It is its own package
+(`com.powsybl.cgmes.rdfdb`), so it can only reach the **public** API of other modules, and it uses no reflection
+to get past that. Its messages come from its own report bundle (`com/powsybl/cgmes/rdfdb/reports*.properties`,
+registered as a `ReportResourceBundle` service), so `powsybl-commons` carries none of its texts.
+
+**What it needs from core.** A small set of public members exists because the database layer needs them; each of
+them says so in its javadoc ("Public API: used by the RDF database layer"), so that changing one is visibly a
+breaking change:
+
+| Module | Members | What the database layer does with them |
+|---|---|---|
+| `powsybl-cgmes-conversion` | `TripleStoreNetworkLoader`; `CgmesImport.convert`, `readCgmes(ds, target, …)`, `tripleStoreOptions`, `config` | converts the statements of a fetched snapshot to a network with the configuration a file import would use |
+| `powsybl-cgmes-conversion` | `CgmesDiffImport.apply`/`revert` with a `Conversion.Config`, `applyToGraph`, `Options`, `Decision`; `CgmesDiffNotApplicableException` | applies stored differences to a network (fast route) or to a graph (materialisation), and turns a refusal into the reasons of an update result |
+| `powsybl-cgmes-conversion` | `FastRouteCapabilities.check`, `checkVariantSafe` | decides, when a difference is stored, whether it may take the fast route and whether it stays inside one variant |
+| `powsybl-cgmes-conversion` | `CgmesDiffExport.toDifferences`, `ExportOptions`, `Result` | turns recorded network changes into difference models before they are stored |
+| `powsybl-cgmes-model` | `StatementDiff`, `DifferenceSink`, `CgmesTripleStoreLoader` | compares two snapshots statement by statement, receives exported differences, parses instance files into a store |
+| `powsybl-triple-store-impl-rdf4j-sparql` | the whole package (`TripleStoreRDF4JSparql`, `SparqlEndpoint`, `GraphStoreClient`, `ScenarioGraphNames`) | talks to the SPARQL endpoint; the module has no other consumer in core and moves out together with the database layer |
+
+Everything else it uses is ordinary public API, used as any other client uses it: `ReportNode`, `PowsyblException`,
+`PlatformConfig`, data sources and extensions from `powsybl-commons`; `Network`, `NetworkFactory`, the variant
+manager, network events and the import post-processors from `powsybl-iidm-api`; `CgmesSubset`, `CgmesNamespace`,
+the difference model types and metadata models from `powsybl-cgmes-model` and `powsybl-cgmes-extensions`; the
+computation manager; `TripleStore` and `TripleStoreRDF4J`. The module's `pom.xml` declares every artefact its
+classes reference (`mvn dependency:analyze` finds nothing used but undeclared in its main code).
+
+The list is pinned by a test: `MoveOutReadinessTest` reads the module's main sources and requires every
+`com.powsybl` type they import or name to be on `src/test/resources/com/powsybl/cgmes/rdfdb/allowed-core-imports.txt`
+(one type per line, the marked surface first), and every entry of that list to be used. A new dependency on core
+is therefore a one-line addition a reviewer sees.
+
+**What depends on it.** Nothing in core: no other module imports `com.powsybl.cgmes.rdfdb`. The module appears only
+in the reactor (`cgmes/pom.xml`), in the root `dependencyManagement` and in `distribution-core`. To check:
+
+```bash
+grep -rl 'com.powsybl.cgmes.rdfdb' --include=*.java . | grep -v cgmes-rdfdb
+```
+
+prints nothing, and removing the module from the reactor and from `distribution-core` leaves a reactor that builds.
+Outside core, pypowsybl uses its public API.
+
 ## See also
 
 * [Triple store](triple_store.md) — the RDF4J store the file import uses, and the `rdf4j-sparql` implementation.
