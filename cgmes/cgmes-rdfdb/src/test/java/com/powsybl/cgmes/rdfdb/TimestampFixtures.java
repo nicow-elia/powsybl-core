@@ -43,6 +43,7 @@ final class TimestampFixtures {
     private static final String EQ = "MicroGridTestConfiguration_BC_BE_EQ_V2.xml";
 
     private static final String EQ_BD = "MicroGridTestConfiguration_EQ_BD.xml";
+    private static final String TP_BD = "MicroGridTestConfiguration_TP_BD.xml";
 
     /**
      * The files of the base case that a timestamp does not touch &mdash; the boundary included.
@@ -118,8 +119,8 @@ final class TimestampFixtures {
     }
 
     /**
-     * The MicroGrid NL base case with a boundary that claims to be a different model: another authority of the
-     * same day that does not share the boundary of the scenario.
+     * The MicroGrid NL base case with a boundary whose two models claim to be different models: another authority
+     * of the same day that does not share the boundary of the scenario.
      *
      * @param suffix what makes the boundary identifier unique
      * @return a data source holding the whole set
@@ -130,10 +131,10 @@ final class TimestampFixtures {
         try {
             for (String name : nl.listNames(".*")) {
                 String content = read(nl, name);
-                put(source, name, EQ_BD.equals(name)
-                        ? content.replaceFirst("rdf:about=\"urn:uuid:[^\"]*\"",
-                                Matcher.quoteReplacement("rdf:about=\"urn:uuid:eqbd-" + suffix + "\""))
-                        : content);
+                String renamed = EQ_BD.equals(name) ? "eqbd-" : TP_BD.equals(name) ? "tpbd-" : null;
+                put(source, name, renamed == null ? content
+                        : content.replaceFirst("rdf:about=\"urn:uuid:[^\"]*\"",
+                                Matcher.quoteReplacement("rdf:about=\"urn:uuid:" + renamed + suffix + "\"")));
             }
         } catch (IOException e) {
             throw new UncheckedIOException(e);

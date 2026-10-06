@@ -114,6 +114,8 @@ public final class SnapshotCatalog {
      */
     private final Map<String, SnapshotInfo> rootByAuthority = new ConcurrentHashMap<>();
     private volatile IngestStatistics lastIngest;
+    /** Runs between the parse of a root and its guarded write, so that a test can make a concurrent writer win. */
+    private Runnable beforeRootWrite;
 
     /** How often a whole timestamp was answered out of the parent index cache: test-only telemetry. */
     private final AtomicLong parentIndexHits = new AtomicLong();
@@ -627,7 +629,10 @@ public final class SnapshotCatalog {
             String snapshotIri = RdfDbNames.snapshot(scenario, authority, timestamp, version);
             Map<CgmesSubset, String> state = new EnumMap<>(CgmesSubset.class);
             headers.forEach((context, header) -> state.put(GraphInfo.subsetOf(context), header.id));
-            sparql().update(rootWrite(own, localToRemote, parsed, state,
+            if (beforeRootWrite != null) {
+                beforeRootWrite.run();
+            }
+            sparql().update(rootWrite(own, localToRemote, parsed, state, roots.isEmpty(),
                     RdfDbDifferenceSink.SnapshotWrite.root(snapshotIri, authority, version, timestamp, state),
                     counts(repository, own.keySet())));
             // A new root is a new set of states, and the decoded parents of the old ones are of no use to anyone
@@ -645,6 +650,16 @@ public final class SnapshotCatalog {
         } finally {
             scratch.close();
         }
+    }
+
+    /**
+     * A hook that runs between the parse of a root and its guarded write, so that a test can make a concurrent
+     * writer win.
+     *
+     * @param hook what to run, or {@code null} for nothing
+     */
+    void beforeRootWrite(Runnable hook) {
+        this.beforeRootWrite = hook;
     }
 
     private void refuseSecondRoot(Map<String, SnapshotInfo> roots, String authority) {
@@ -1489,7 +1504,7 @@ public final class SnapshotCatalog {
 
     private String rootWrite(Map<String, Header> own, Map<String, String> graphs,
                              CgmesTripleStoreLoader.Result parsed, Map<CgmesSubset, String> state,
-                             RdfDbDifferenceSink.SnapshotWrite root, Map<String, Long> counts) {
+                             boolean first, RdfDbDifferenceSink.SnapshotWrite root, Map<String, Long> counts) {
         String subjectBase = ModelCatalog.subjectBaseOf(parsed.baseName());
         ZonedDateTime now = ZonedDateTime.now();
         String meta = SparqlText.iri(metaGraph);
@@ -1509,6 +1524,11 @@ public final class SnapshotCatalog {
                 .append(" ; pdb:modellingAuthority ").append(SparqlText.str(root.modellingAuthority()))
                 .append(" } } FILTER NOT EXISTS { GRAPH ").append(meta)
                 .append(" { ").append(SparqlText.iri(root.iri())).append(" ?p ?o } }");
+        if (first) {
+            // The boundary was checked against no root at all: a root written meanwhile has its own boundary
+            update.append(" FILTER NOT EXISTS { GRAPH ").append(meta).append(" { ?any a pdb:Snapshot ; pdb:depth ")
+                    .append(SparqlText.integer(0)).append(" } }");
+        }
         own.values().forEach(header -> update.append(" FILTER NOT EXISTS { GRAPH ")
                 .append(meta).append(" { ").append(SparqlText.iri(header.id))
                 .append(" ?p1 ?o1 } }"));

@@ -252,6 +252,24 @@ class SnapshotCatalogTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void twoFirstRootsWithDifferentBoundariesCannotBothBeWritten(String backend) {
+        try (RdfDbConnection db = open(backend)) {
+            SnapshotCatalog nlWriter = new SnapshotCatalog(db, S);
+            // The NL writer has found the scenario empty and parsed its files; BE becomes the first root meanwhile
+            nlWriter.beforeRootWrite(() -> root(db, S, 1));
+            assertThatThrownBy(() -> nlWriter.putFull(TimestampFixtures.changedBoundaryNl("race"), null,
+                    SnapshotRef.latest(S, NL), null, params(), ReportNode.NO_OP))
+                    .isInstanceOf(RdfDbConflictException.class)
+                    .hasMessageContaining("another writer created the root");
+            assertThat(db.snapshots(S).modellingAuthorities()).containsExactly(BE);
+            // The loser's uploaded graphs are dropped again
+            assertThat(Backends.count(db, S, RdfDbNames.fullGraph(S, "urn:uuid:eqbd-race"), "?s ?p ?o")).isZero();
+            db.snapshots(S).verify();
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void anAssemblyIsEveryModellingAuthorityAtOneMoment(String backend) {
         try (RdfDbConnection db = open(backend)) {
             SnapshotCatalog catalog = db.snapshots(S);

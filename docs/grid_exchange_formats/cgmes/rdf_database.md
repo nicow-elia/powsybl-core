@@ -540,7 +540,8 @@ try (RdfDbConnection db = RdfDbConnection.open(RdfDatabase.sparql("http://localh
 }
 ```
 
-The rules, all of them enforced by the guard of the write itself rather than by a check before it:
+The rules. Every one a concurrent writer could break is enforced by the guard of the write itself rather than by a
+check before it; rule 7 is a property of the files and is checked on them before anything is written:
 
 1. one root per `(scenario, modellingAuthority)` (`putFull` twice for one authority is a conflict — another day is
    another scenario);
@@ -560,8 +561,10 @@ The rules, all of them enforced by the guard of the write itself rather than by 
    always of the same authority.
 
 Concurrent writers: the guard decides, the loser gets a `RdfDbConflictException` naming the rule, and there is no
-retry. Writers of two authorities never conflict — every guard is scoped by the authority — and writers of two
-scenarios never touch the same graph.
+retry. Writers of two authorities never conflict — every guard is scoped by the authority — with one exception:
+two *first* roots of an empty scenario. Each checked its boundary against no root at all, so the guard of a first
+root also requires that the scenario still has no root; the loser gets the conflict, and retried it is a second root
+whose boundary is compared with the winner's. Writers of two scenarios never touch the same graph.
 
 ### A CGM is a query
 
