@@ -145,7 +145,7 @@ final class Backends {
 
     /** A version of the MicroGrid BE tree of a scenario, at its base timestamp. */
     static SnapshotRef ref(String scenario, int version) {
-        return SnapshotRef.of(scenario, BE, (Instant) null, version);
+        return SnapshotRef.of(scenario, BE, null, version);
     }
 
     /** A version of the MicroGrid BE tree of a scenario, at a timestamp. */

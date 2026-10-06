@@ -484,7 +484,7 @@ A snapshot is addressed by **`(scenario, modellingAuthority, timestamp, version)
 
 ```java
 SnapshotRef.of("2016-01-01", "http://elia.be/CGMES/2.4.15", Instant.parse("2016-01-01T08:30:00Z"), 2);
-SnapshotRef.of("2016-01-01", mas, OffsetDateTime.parse("2016-01-01T09:30:00+01:00"), 2);  // the same address
+SnapshotRef.of("2016-01-01", mas, OffsetDateTime.parse("2016-01-01T09:30:00+01:00").toInstant(), 2); // the same
 SnapshotRef.latest("2016-01-01", mas);            // base timestamp, head
 SnapshotRef.latestAt("2016-01-01", mas, instant); // that timestamp, head
 ```

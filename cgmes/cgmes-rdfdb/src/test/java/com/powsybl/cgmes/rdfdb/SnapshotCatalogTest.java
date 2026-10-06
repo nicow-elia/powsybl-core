@@ -60,12 +60,12 @@ class SnapshotCatalogTest {
     }
 
     private static SnapshotInfo root(RdfDbConnection db, String scenario, Integer version) {
-        return db.snapshots(scenario).putFull(microGridBe(), null, SnapshotRef.of(scenario, BE, (Instant) null,
+        return db.snapshots(scenario).putFull(microGridBe(), null, SnapshotRef.of(scenario, BE, null,
                 version), Set.of(), params(), ReportNode.NO_OP);
     }
 
     private static SnapshotRef at(String scenario, Integer version) {
-        return SnapshotRef.of(scenario, BE, (Instant) null, version);
+        return SnapshotRef.of(scenario, BE, null, version);
     }
 
     /** A difference of one profile superseding what the given snapshot states for it. */

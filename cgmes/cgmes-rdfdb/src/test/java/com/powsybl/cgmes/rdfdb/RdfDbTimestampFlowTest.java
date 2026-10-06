@@ -240,7 +240,7 @@ class RdfDbTimestampFlowTest {
             SnapshotCatalog catalog = db.snapshots(S);
 
             // An offset date-time is the instant it means, and sub-second precision is not part of the key
-            assertThat(catalog.find(SnapshotRef.of(S, BE, OffsetDateTime.parse("2014-06-01T12:00:00+01:00"), 1)))
+            assertThat(catalog.find(SnapshotRef.of(S, BE, OffsetDateTime.parse("2014-06-01T12:00:00+01:00").toInstant(), 1)))
                     .contains(written);
             assertThat(catalog.find(ref(S, 1, T1.plusMillis(250)))).contains(written);
             assertThat(catalog.find(SnapshotRef.latestAt(S, BE, T1))).contains(written);

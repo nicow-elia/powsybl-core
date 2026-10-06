@@ -86,10 +86,9 @@ class SnapshotRefTest {
     void theTimestampIsAnInstantOfSecondPrecision() {
         // A naive date-time cannot even be passed: the key is an Instant, so there is no zone to guess
         assertThat(SnapshotRef.of(S, MAS, Instant.parse("2016-01-01T08:30:00.123Z"), 1).timestamp()).isEqualTo(T);
-        assertThat(SnapshotRef.of(S, MAS, OffsetDateTime.of(2016, 1, 1, 9, 30, 0, 0, ZoneOffset.ofHours(1)), 1)
+        assertThat(SnapshotRef.of(S, MAS, OffsetDateTime.of(2016, 1, 1, 9, 30, 0, 0, ZoneOffset.ofHours(1)).toInstant(), 1)
                 .timestamp()).isEqualTo(T);
-        assertThat(SnapshotRef.of(S, MAS, (Instant) null, 1).timestamp()).isNull();
-        assertThat(SnapshotRef.of(S, MAS, (OffsetDateTime) null, 1).timestamp()).isNull();
+        assertThat(SnapshotRef.of(S, MAS, null, 1).timestamp()).isNull();
     }
 
     @Test

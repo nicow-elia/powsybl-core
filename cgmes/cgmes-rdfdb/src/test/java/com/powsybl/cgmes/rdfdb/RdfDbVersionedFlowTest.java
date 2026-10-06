@@ -66,7 +66,7 @@ class RdfDbVersionedFlowTest {
     }
 
     private static Network load(RdfDbConnection db, String scenario, Integer version) {
-        return RdfDbNetworkLoader.load(db, SnapshotRef.of(scenario, BE, (Instant) null, version), null, params(),
+        return RdfDbNetworkLoader.load(db, SnapshotRef.of(scenario, BE, null, version), null, params(),
                 ReportNode.NO_OP);
     }
 
@@ -416,7 +416,7 @@ class RdfDbVersionedFlowTest {
 
             Network receiver = load(db, S, 1);
             UpdateResult result = RdfDbNetworkLoader.update(receiver, db,
-                    SnapshotRef.of(S, BE, OffsetDateTime.parse("2014-06-01T12:30:00+02:00"), 2),
+                    SnapshotRef.of(S, BE, OffsetDateTime.parse("2014-06-01T12:30:00+02:00").toInstant(), 2),
                     new RdfDbUpdateOptions(), params(), ReportNode.NO_OP);
 
             assertThat(result.route()).isEqualTo(UpdateResult.Route.DIFF_APPLIED);

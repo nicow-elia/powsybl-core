@@ -87,21 +87,6 @@ public record SnapshotRef(String scenario, String modellingAuthority, Instant ti
     }
 
     /**
-     * An address whose moment is given with an offset, which is converted to the instant it means.
-     *
-     * @param scenario           the scenario
-     * @param modellingAuthority the modelling authority set
-     * @param timestamp          the moment, or {@code null} for the base timestamp
-     * @param version            the version, or {@code null}
-     * @return the reference
-     */
-    public static SnapshotRef of(String scenario, String modellingAuthority, OffsetDateTime timestamp,
-                                 Integer version) {
-        return new SnapshotRef(scenario, modellingAuthority, timestamp == null ? null : timestamp.toInstant(),
-                version);
-    }
-
-    /**
      * The newest version of the base timestamp of a modelling authority.
      *
      * @param scenario           the scenario
