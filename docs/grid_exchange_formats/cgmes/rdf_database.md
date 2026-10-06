@@ -544,7 +544,7 @@ The rules, all of them enforced by the guard of the write itself rather than by 
 
 1. one root per `(scenario, modellingAuthority)` (`putFull` twice for one authority is a conflict — another day is
    another scenario);
-2. **one boundary per scenario**: the first root uploads the boundary models and marks them `pdb:boundary`; every
+2. **one boundary per scenario**: the first root uploads the boundary models (its full models of `EQ_BD` and `TP_BD`); every
    later root must carry the very same boundary model identifiers, links the stored graphs into its own state and
    uploads nothing of them; a root with another boundary is refused with *"a new boundary is a new scenario"*;
 3. a graph of `…/<scenario>/graph/` is written once and never overwritten;
@@ -654,7 +654,7 @@ be:1 a pdb:Snapshot ; pdb:scenario "2016-01-01" ; pdb:modellingAuthority "http:/
     pdb:state  <urn:uuid:eq-1>, <urn:uuid:ssh-1>, <urn:uuid:eqbd> ;   # what a reader is at once it reaches it
     pdb:full   <urn:uuid:eq-1>, <urn:uuid:ssh-1>, <urn:uuid:eqbd> .   # where a materialisation may start
 
-<urn:uuid:eqbd> a md:FullModel ; pdb:subset "EQ_BD" ; pdb:boundary true ; pdb:snapshot be:1 .   # + the v1 terms
+<urn:uuid:eqbd> a md:FullModel ; pdb:subset "EQ_BD" ; pdb:snapshot be:1 .   # + the v1 terms; the profile makes it the boundary
 
 be:2 a pdb:Snapshot ; pdb:modellingAuthority "http://elia.be/CGMES/2.4.15" ;
     pdb:timestamp "2016-01-01T00:00:00Z"^^xsd:dateTime ; pdb:version 2 ; pdb:kind pdb:Diff ;

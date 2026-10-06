@@ -121,8 +121,8 @@ public record StoredModel(String scenario, String id, CgmesSubset subset, Stored
     /**
      * Whether this is a model of the boundary every modelling authority of a scenario shares.
      *
-     * <p>Derived from the profile, which is also what the {@code pdb:boundary} term a root writes on such a node
-     * says; the two cannot disagree, so the term is written for readers of the metadata graph and not read back.</p>
+     * <p>Derived from the profile: the boundary of a scenario is its full models of the two boundary profiles, so
+     * the metadata graph needs no term of its own to say so.</p>
      *
      * @return whether the model is a full model of {@code EQ_BD} or {@code TP_BD}
      */

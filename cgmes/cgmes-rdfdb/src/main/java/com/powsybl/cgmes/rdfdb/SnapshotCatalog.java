@@ -572,8 +572,8 @@ public final class SnapshotCatalog {
      * together. The guard is what makes "one root per modelling authority" a property of the database rather than
      * of the caller: a second root of the same authority, or a second upload of the same model, is refused.</p>
      *
-     * <p>The boundary is shared by the scenario. The first root uploads it and marks its models
-     * {@code pdb:boundary}; every later root &mdash; another modelling authority of the same day &mdash; must carry
+     * <p>The boundary is shared by the scenario. The first root uploads its models (the full models of
+     * {@code EQ_BD} and {@code TP_BD}); every later root &mdash; another modelling authority of the same day &mdash; must carry
      * the very same boundary models, whose stored graphs it then links into its own state rather than uploading them
      * again. A root with another boundary is refused: a new boundary is a new scenario.</p>
      *
@@ -1547,10 +1547,6 @@ public final class SnapshotCatalog {
                 .append(SparqlText.str(graph.cimNamespace())).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.CREATED)).append(' ')
                 .append(SparqlText.dateTime(now));
-        if (StoredModel.isBoundaryProfile(graph.subset())) {
-            update.append(" ; ").append(SparqlText.iri(RdfDbVocabulary.BOUNDARY)).append(' ')
-                    .append(SparqlText.bool(true));
-        }
         header.terms.forEach((predicate, values) -> values.forEach(value -> update.append(" ; ")
                 .append(SparqlText.iri(predicate)).append(' ')
                 .append(value instanceof IRI iri ? SparqlText.iri(iri.stringValue())

@@ -134,9 +134,6 @@ public final class RdfDbVocabulary {
     /** {@code md:Model.Supersedes}, which is the version chain of a profile inside a scenario. */
     public static final String MODEL_SUPERSEDES = MD_NS + "Model.Supersedes";
 
-    /** Whether a full model belongs to the boundary a scenario's modelling authorities share. */
-    public static final String BOUNDARY = NS + "boundary";
-
     // ------------------------------------------------------------------ versioning
 
     /**
