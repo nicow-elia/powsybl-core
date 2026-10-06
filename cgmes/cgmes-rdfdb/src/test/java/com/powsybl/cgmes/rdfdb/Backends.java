@@ -10,10 +10,13 @@ package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
 import com.powsybl.cgmes.conversion.CgmesImport;
+import com.powsybl.commons.datasource.DataSource;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import org.eclipse.rdf4j.model.Value;
 import org.junit.jupiter.params.provider.Arguments;
 
+import java.net.URISyntaxException;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -123,6 +126,22 @@ final class Backends {
     static ReadOnlyDataSource microGridNl() {
         return CgmesConformity1Catalog.microGridBaseCaseNL().dataSource();
     }
+
+    /**
+     * {@code CGMES_Full.zip} of pypowsybl: a realistic IGM whose profiles name different modelling authorities
+     * (EQ and TP {@code powsybl.org}, SSH {@link #CGMES_FULL_SSH}, SV {@code http://tennet.nl/CGMES}, the merging
+     * agent's), with the ENTSO-E EQ boundary inside.
+     */
+    static ReadOnlyDataSource cgmesFull() {
+        try {
+            return DataSource.fromPath(Path.of(Backends.class.getResource("CGMES_Full.zip").toURI()));
+        } catch (URISyntaxException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** The modelling authority set the SSH file of {@link #cgmesFull()} states. */
+    static final String CGMES_FULL_SSH = "http://elia.be/CGMES";
 
     /** A version of the MicroGrid BE tree of a scenario, at its base timestamp. */
     static SnapshotRef ref(String scenario, int version) {

@@ -24,7 +24,9 @@ import java.util.Set;
 
 import static com.powsybl.cgmes.rdfdb.Backends.BASE;
 import static com.powsybl.cgmes.rdfdb.Backends.BE;
+import static com.powsybl.cgmes.rdfdb.Backends.CGMES_FULL_SSH;
 import static com.powsybl.cgmes.rdfdb.Backends.NL;
+import static com.powsybl.cgmes.rdfdb.Backends.cgmesFull;
 import static com.powsybl.cgmes.rdfdb.Backends.microGridBe;
 import static com.powsybl.cgmes.rdfdb.Backends.microGridNl;
 import static com.powsybl.cgmes.rdfdb.Backends.params;
@@ -133,13 +135,37 @@ class SnapshotCatalogTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
-    void anAddressThatContradictsTheFilesIsRefused(String backend) {
+    void anExplicitAuthorityStoresFilesOfAnyAuthorityUnderIt(String backend) {
         try (RdfDbConnection db = open(backend)) {
-            assertThatThrownBy(() -> db.snapshots(S).putFull(microGridBe(), null, SnapshotRef.latest(S, NL),
-                    null, params(), ReportNode.NO_OP))
+            // The MicroGrid BE files stored as NL's tree: the address decides, not the files
+            SnapshotInfo nl = db.snapshots(S).putFull(microGridBe(), null, SnapshotRef.latest(S, NL), null,
+                    params(), ReportNode.NO_OP);
+            assertThat(nl.modellingAuthority()).isEqualTo(NL);
+            // A realistic IGM: EQ/TP of one party, SSH of the TSO, SV of the merging agent
+            SnapshotInfo full = db.snapshots(OTHER).putFull(cgmesFull(), null,
+                    SnapshotRef.latest(OTHER, CGMES_FULL_SSH), null, params(), ReportNode.NO_OP);
+            assertThat(full.modellingAuthority()).isEqualTo(CGMES_FULL_SSH);
+            assertThat(full.profiles()).contains(EQ, SSH, CgmesSubset.TOPOLOGY, CgmesSubset.STATE_VARIABLES);
+            db.snapshots(OTHER).verify();
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void withoutAnAuthorityTheEquipmentAndSteadyStateFilesMustAgree(String backend) {
+        try (RdfDbConnection db = open(backend)) {
+            assertThatThrownBy(() -> db.snapshots(S).putFull(cgmesFull(), null, SnapshotRef.latest(S, null), null,
+                    params(), ReportNode.NO_OP))
                     .isInstanceOf(RdfDbException.class)
-                    .hasMessageContaining("state the modelling authority [" + BE + "]")
-                    .hasMessageContaining("tree of '" + NL + "'");
+                    .hasMessageContaining("EQ=powsybl.org")
+                    .hasMessageContaining("SSH=" + CGMES_FULL_SSH)
+                    .hasMessageContaining("SV=http://tennet.nl/CGMES")
+                    .hasMessageContaining("pass the modelling authority in the address");
+            assertThat(db.snapshots(S).snapshots()).isEmpty();
+            // The state variables of another party never decide: without SSH in the projection, EQ does
+            SnapshotInfo eqTp = db.snapshots(S).putFull(cgmesFull(), null, SnapshotRef.latest(S, null),
+                    Set.of(EQ, CgmesSubset.TOPOLOGY, CgmesSubset.STATE_VARIABLES), params(), ReportNode.NO_OP);
+            assertThat(eqTp.modellingAuthority()).isEqualTo("powsybl.org");
         }
     }
 

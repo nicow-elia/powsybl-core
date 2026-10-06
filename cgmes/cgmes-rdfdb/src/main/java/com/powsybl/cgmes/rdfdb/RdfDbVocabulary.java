@@ -170,10 +170,11 @@ public final class RdfDbVocabulary {
     public static final String VERSION = NS + "version";
 
     /**
-     * The {@code md:Model.modelingAuthoritySet} a snapshot belongs to, as a plain literal.
+     * The {@code md:Model.modelingAuthoritySet} a snapshot is stored under, as a plain literal.
      *
-     * <p>One quarter of the key: every modelling authority of a scenario owns its own snapshot tree, and the members
-     * of a snapshot that state an authority state this one.</p>
+     * <p>One quarter of the key: every modelling authority of a scenario owns its own snapshot tree. The members of
+     * a snapshot may state other authorities (the state variables of an IGM are the merging agent's); the
+     * authority is the address's, or the one the equipment and steady state hypothesis members agree on.</p>
      */
     public static final String MODELLING_AUTHORITY = NS + "modellingAuthority";
 

@@ -94,6 +94,10 @@ public final class SnapshotCatalog {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(SnapshotCatalog.class);
 
+    /** The profiles whose stated modelling authority decides the authority of a snapshot that names none. */
+    private static final Set<CgmesSubset> DECIDING_PROFILES =
+            EnumSet.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS);
+
     /** What {@link #putAsDiff} compares when the caller names no profile: the two that carry a schedule. */
     private static final Set<CgmesSubset> DEFAULT_COMPARED =
             Set.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS);
@@ -575,8 +579,9 @@ public final class SnapshotCatalog {
      *
      * @param ds           the data source holding the instance files
      * @param boundary     the data source holding the boundary files, or {@code null} when {@code ds} carries them
-     * @param ref          the address of the root. Its modelling authority may be {@code null} and is then the
-     *                     {@code md:Model.modelingAuthoritySet} the files state; its timestamp may be {@code null}
+     * @param ref          the address of the root. An explicit modelling authority is taken whatever the
+     *                     files state; a {@code null} one is the {@code md:Model.modelingAuthoritySet} the equipment
+     *                     and steady state hypothesis files agree on, refused when they do not; its timestamp may be {@code null}
      *                     and is then the {@code md:Model.scenarioTime} of the steady state file; its version may be
      *                     {@code null} and is then 1
      * @param profiles     the profiles to store, or {@code null} or empty for every profile the files carry. The
@@ -717,43 +722,60 @@ public final class SnapshotCatalog {
     }
 
     /**
-     * The modelling authority a write belongs to: the one its address names, checked against what the models
-     * state, or the one the models state when the address names none.
+     * The modelling authority a snapshot is stored under: the one its address names, or the one its equipment and
+     * steady state hypothesis members state when the address names none.
      *
-     * <p>Checked like the scenario time: a member that states an authority states the snapshot's. The boundary of
-     * a root is not asked, it is the scenario's and states the authority of whoever maintains it.</p>
+     * <p>One snapshot is stored under one modelling authority; the files it carries may come from several. A
+     * realistic IGM is one: its equipment and topology come from the TSO's modelling tool, its state variables from
+     * the merging agent that ran the power flow. So an explicit authority is taken as given, whatever the members
+     * state. Without one, the equipment and the steady state hypothesis decide &mdash; the profiles a TSO owns
+     * &mdash; and only when they agree; the other profiles decide only when neither of the two is there (a
+     * difference set of the state variables alone, say). The boundary is never asked, it is the scenario's.</p>
      *
-     * @param stated what the members state, each at most once
+     * @param stated what each non-boundary member states, by profile
      * @param given  the authority of the address, or {@code null}
      * @param what   what the members are, for the message
      * @return the authority
+     * @throws RdfDbException if the address names none and the deciding members state none or several
      */
-    private String authorityOf(Set<String> stated, String given, String what) {
-        if (given == null) {
-            if (stated.size() == 1) {
-                return stated.iterator().next();
-            }
-            throw new RdfDbException(stated.isEmpty()
-                    ? what + " of scenario '" + scenario + "' state no md:Model.modelingAuthoritySet: pass the"
-                        + " modelling authority in the address"
-                    : what + " of scenario '" + scenario + "' state the modelling authorities " + stated
-                        + ", and one snapshot belongs to one");
+    private String authorityOf(Map<CgmesSubset, String> stated, String given, String what) {
+        if (given != null) {
+            return given;
         }
-        if (!stated.isEmpty() && !stated.equals(Set.of(given))) {
-            throw new RdfDbException(what + " state the modelling authority " + stated + " but are written into the"
-                    + " tree of '" + given + "' of scenario '" + scenario + "': a snapshot and its members belong to"
-                    + " one modelling authority");
+        Map<CgmesSubset, String> deciding = new EnumMap<>(CgmesSubset.class);
+        deciding.putAll(stated);
+        deciding.keySet().retainAll(DECIDING_PROFILES);
+        Set<String> authorities = new TreeSet<>((deciding.isEmpty() ? stated : deciding).values());
+        if (authorities.size() == 1) {
+            return authorities.iterator().next();
         }
-        return given;
+        throw new RdfDbException(authorities.isEmpty()
+                ? what + " of scenario '" + scenario + "' state no md:Model.modelingAuthoritySet: pass the"
+                    + " modelling authority in the address"
+                : what + " of scenario '" + scenario + "' state the modelling authorities " + byIdentifier(stated)
+                    + ", and the equipment and steady state hypothesis members do not agree on one: pass the"
+                    + " modelling authority in the address (one snapshot is stored under one modelling authority;"
+                    + " the files it carries may come from several)");
     }
 
-    /** The {@code md:Model.modelingAuthoritySet} the non-boundary files state. */
-    private static Set<String> statedAuthorities(Collection<Header> headers) {
-        return headers.stream()
+    private static Map<String, String> byIdentifier(Map<CgmesSubset, String> stated) {
+        Map<String, String> named = new LinkedHashMap<>();
+        stated.forEach((subset, authority) -> named.put(subset.getIdentifier(), authority));
+        return named;
+    }
+
+    /** The {@code md:Model.modelingAuthoritySet} each non-boundary file states, by profile. */
+    private static Map<CgmesSubset, String> statedAuthorities(Collection<Header> headers) {
+        Map<CgmesSubset, String> stated = new EnumMap<>(CgmesSubset.class);
+        headers.stream()
                 .filter(header -> !StoredModel.isBoundaryProfile(header.subset))
-                .map(header -> header.term(RdfDbVocabulary.MODEL_MODELING_AUTHORITY_SET))
-                .filter(Objects::nonNull)
-                .collect(Collectors.toCollection(TreeSet::new));
+                .forEach(header -> {
+                    String authority = header.term(RdfDbVocabulary.MODEL_MODELING_AUTHORITY_SET);
+                    if (authority != null) {
+                        stated.put(header.subset, authority);
+                    }
+                });
+        return stated;
     }
 
     /**
@@ -777,7 +799,7 @@ public final class SnapshotCatalog {
      *
      * @param set        the difference models
      * @param target     the address the new snapshot gets. A {@code null} modelling authority is the one the
-     *                   difference headers state; a {@code null} timestamp is the base timestamp of that
+     *                   difference headers state (those of EQ and SSH deciding); a {@code null} timestamp is the base timestamp of that
      *                   authority's tree; a {@code null} version is the head's plus one (1 for a new timestamp).
      *                   An explicit version must be greater than the head's; gaps are allowed
      * @param reportNode where the write reports
@@ -791,9 +813,10 @@ public final class SnapshotCatalog {
         if (models.isEmpty()) {
             throw new RdfDbException("no difference to store as " + target + " of scenario '" + scenario + "'");
         }
-        String authority = authorityOf(models.stream().map(model -> model.header().modelingAuthoritySet())
-                .filter(Objects::nonNull).collect(Collectors.toCollection(TreeSet::new)),
-                target.modellingAuthority(), "the difference models");
+        Map<CgmesSubset, String> stated = new EnumMap<>(CgmesSubset.class);
+        models.stream().filter(model -> model.header().modelingAuthoritySet() != null)
+                .forEach(model -> stated.put(model.header().subset(), model.header().modelingAuthoritySet()));
+        String authority = authorityOf(stated, target.modellingAuthority(), "the difference models");
         // One request: an open timestamp is the base one, resolved inside the head lookup. A timestamp this tree
         // does not hold yet becomes a new timestamp root hanging off the base chain; a timestamp it already holds
         // grows another version inside itself
@@ -958,7 +981,7 @@ public final class SnapshotCatalog {
      * @param ds           the data source holding the instance files of that timestamp
      * @param boundary     the data source holding the boundary files, or {@code null}
      * @param target       the address the new snapshot gets. A {@code null} modelling authority is the one the
-     *                     files state, a {@code null} timestamp the base timestamp of that authority's tree, a
+     *                     equipment and steady state hypothesis files agree on, a {@code null} timestamp the base timestamp of that authority's tree, a
      *                     {@code null} version the head's plus one
      * @param profiles     the profiles to compare, or {@code null} or empty for {@code EQ} and {@code SSH}. A
      *                     listed profile the files do not carry is refused
@@ -995,7 +1018,6 @@ public final class SnapshotCatalog {
         IngestParser.Result parsed = IngestParser.read(ds, boundary, report, plan.targetState(), compared);
         Map<String, Header> headers = headersOf(parsed);
         Duration parse = Duration.ofNanos(System.nanoTime() - t0);
-        authorityOf(statedAuthorities(headers.values()), authority, "the instance files");
         checkBoundaryUnchanged(headers, root);
         // A listed profile has to be there; the default pair is compared where it is shipped
         Set<CgmesSubset> missing = profiles == null || profiles.isEmpty() ? EnumSet.noneOf(CgmesSubset.class)

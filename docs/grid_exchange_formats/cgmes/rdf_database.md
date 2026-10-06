@@ -478,7 +478,7 @@ A snapshot is addressed by **`(scenario, modellingAuthority, timestamp, version)
 | Key | Java type | What it is | `null` on a read | `null` on a write |
 |---|---|---|---|---|
 | `scenario` | `String`, non-blank | the base grid model — in practice **one day** | **refused**: there is no default scenario and no "latest scenario" anywhere in this API | refused |
-| `modellingAuthority` | `String`, non-blank | the `md:Model.modelingAuthoritySet` of the instance files, verbatim, for instance `http://elia.be/CGMES/2.4.15` | **refused**, naming the authorities the scenario holds: guessing would load another TSO's grid | taken from the headers of what is written (`putFull`, `putAsDiff`, `putDiff`); refused when they disagree among themselves |
+| `modellingAuthority` | `String`, non-blank | the tree the snapshot is stored under, normally the `md:Model.modelingAuthoritySet` of its equipment and steady state hypothesis files, verbatim, for instance `http://elia.be/CGMES/2.4.15` | **refused**, naming the authorities the scenario holds: guessing would load another TSO's grid | taken from the EQ and SSH headers of what is written (`putFull`, `putAsDiff`, `putDiff`; the other profiles only when neither is there); refused, naming the authorities found per profile, when they disagree. An explicit authority is taken whatever the files state |
 | `timestamp` | `java.time.Instant`, second precision | the moment, equal to `md:Model.scenarioTime` of the snapshot's members | the base timestamp of that authority's tree, which is its root's | the same; `putFull` takes the steady state file's scenario time |
 | `version` | `Integer`, at least 1 | the position in the chain of one timestamp | the head of that chain | the head's plus one, 1 for a root or a new timestamp |
 
@@ -504,6 +504,14 @@ none gets the head's plus one (`SnapshotCatalog.nextVersion(ref)` says which). T
 which profiles to load (`RdfDbNetworkLoader.load(db, ref, profiles, …)`), which to compare when a day is ingested
 (`putAsDiff(…, profiles, …)`), which to store at the root (`putFull(…, profiles, …)`), which an update matches the
 network by (`RdfDbUpdateOptions.setProfiles`). Making them a key would give one state two addresses.
+
+**One snapshot is stored under one modelling authority; the files it carries may come from several.** A realistic
+IGM is such a set: its equipment and topology come from the TSO's modelling tool, its state variables from the
+merging agent that ran the power flow (`CGMES_Full.zip` of pypowsybl states `powsybl.org`, `http://elia.be/CGMES`
+and `http://tennet.nl/CGMES`). Name the authority on the write and the files are stored under it whatever they
+state; leave it open and the equipment and steady state hypothesis headers decide, refused with *"… state the
+modelling authorities {EQ=…, SSH=…, SV=…}, and the equipment and steady state hypothesis members do not agree on
+one: pass the modelling authority in the address"* when they disagree.
 
 Several days in one database are **several scenarios**. Inside a scenario every modelling authority owns **one
 tree** with exactly one root; a second root of the same authority is refused. All trees of a scenario live in its
@@ -545,8 +553,8 @@ The rules, all of them enforced by the guard of the write itself rather than by 
 5. the chain is linear — a second child along a `pdb:VersionEdge` is refused with *"the linear scheme allows no
    forks"*;
 6. versions only grow: *"version 20 is not greater than the head version 20 of (…): versions only grow"*;
-7. a snapshot and its members belong to one modelling authority and describe one moment: a member stating another
-   `md:Model.modelingAuthoritySet` or another `md:Model.scenarioTime` is refused;
+7. a snapshot describes one moment: a member stating another `md:Model.scenarioTime` is refused (its members may
+   state other modelling authorities: the snapshot is stored under the one its address names);
 8. nothing crosses a scenario, and nothing but the shared boundary crosses a modelling authority: every
    `pdb:parent`, `pdb:member`, `pdb:state` and `pdb:full` of a snapshot points inside its scenario, and a parent is
    always of the same authority.
