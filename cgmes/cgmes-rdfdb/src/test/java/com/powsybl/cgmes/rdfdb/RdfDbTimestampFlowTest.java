@@ -380,7 +380,8 @@ class RdfDbTimestampFlowTest {
             assertThatThrownBy(() -> db.snapshots(S).putAsDiff(TimestampFixtures.changedBoundary(T1, "bd"), null,
                     ref(S, 1, T1), null, params(), ReportNode.NO_OP))
                     .isInstanceOf(RdfDbConflictException.class)
-                    .hasMessageContaining("boundary model changed");
+                    .hasMessageContaining("carry the boundary {EQUIPMENT_BOUNDARY=urn:uuid:")
+                    .hasMessageContaining("a new boundary is a new scenario");
         }
     }
 

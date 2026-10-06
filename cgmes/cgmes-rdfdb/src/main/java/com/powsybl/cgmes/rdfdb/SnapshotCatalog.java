@@ -703,19 +703,39 @@ public final class SnapshotCatalog {
             return Set.of();
         }
         Map<CgmesSubset, String> stored = boundaryOf(roots.values().iterator().next().state());
+        requireSharedBoundary(boundaryOfHeaders(headers), stored, authority);
+        return Set.copyOf(stored.values());
+    }
+
+    /**
+     * The boundary of a scenario never changes: one rule and one text for a root and for an ingestion.
+     *
+     * <p>A boundary is what gives the objects of a grid model their identity across files; a new one is a new base
+     * grid model, and a new base grid model is a new scenario. A second root with another boundary would be
+     * another day, and an ingestion with another boundary would produce a difference against a state that was
+     * never the parent.</p>
+     *
+     * @param files  the boundary models the files carry, by profile
+     * @param shared the boundary models the scenario shares, by profile (restricted by the caller to what it asks)
+     * @throws RdfDbConflictException if the two differ
+     */
+    private void requireSharedBoundary(Map<CgmesSubset, String> files, Map<CgmesSubset, String> shared,
+                                       String authority) {
+        if (!files.equals(shared)) {
+            throw new RdfDbConflictException("the files of modelling authority '" + authority + "' carry the boundary "
+                    + files + ", but scenario '" + scenario + "' shares the boundary " + shared
+                    + ": a new boundary is a new scenario");
+        }
+    }
+
+    private static Map<CgmesSubset, String> boundaryOfHeaders(Map<String, Header> headers) {
         Map<CgmesSubset, String> files = new EnumMap<>(CgmesSubset.class);
-        headers.forEach((context, header) -> {
-            CgmesSubset subset = GraphInfo.subsetOf(context);
-            if (StoredModel.isBoundaryProfile(subset)) {
-                files.put(subset, header.id);
+        headers.values().forEach(header -> {
+            if (StoredModel.isBoundaryProfile(header.subset)) {
+                files.put(header.subset, header.id);
             }
         });
-        if (!stored.equals(files)) {
-            throw new RdfDbConflictException("the files of modelling authority '" + authority + "' carry the boundary "
-                    + files + ", but scenario '" + scenario + "' shares the boundary " + stored + " among "
-                    + roots.keySet() + ": a new boundary is a new scenario");
-        }
-        return Set.copyOf(stored.values());
+        return files;
     }
 
     private static Map<CgmesSubset, String> boundaryOf(Map<CgmesSubset, String> state) {
@@ -1033,7 +1053,11 @@ public final class SnapshotCatalog {
         IngestParser.Result parsed = IngestParser.read(ds, boundary, report, plan.targetState(), compared);
         Map<String, Header> headers = headersOf(parsed);
         Duration parse = Duration.ofNanos(System.nanoTime() - t0);
-        checkBoundaryUnchanged(headers, root);
+        // A timestamp's files need not carry the boundary; the ones they carry must be the scenario's
+        Map<CgmesSubset, String> carried = boundaryOfHeaders(headers);
+        Map<CgmesSubset, String> shared = boundaryOf(root.state());
+        shared.keySet().retainAll(carried.keySet());
+        requireSharedBoundary(carried, shared, authority);
         // A listed profile has to be there; the default pair is compared where it is shipped
         Set<CgmesSubset> missing = profiles == null || profiles.isEmpty() ? EnumSet.noneOf(CgmesSubset.class)
                 : EnumSet.copyOf(compared);
@@ -1248,26 +1272,6 @@ public final class SnapshotCatalog {
             return text == null ? fallback : Integer.parseInt(text.trim());
         } catch (NumberFormatException e) {
             return fallback;
-        }
-    }
-
-    /**
-     * The boundary of a scenario never changes.
-     *
-     * <p>A boundary is what gives the objects of a grid model their identity across files; a new one is a new base
-     * grid model, and a new base grid model is a new scenario. Ingesting a timestamp whose boundary differs would
-     * produce a difference against a state that was never the parent.</p>
-     */
-    private void checkBoundaryUnchanged(Map<String, Header> headers, SnapshotInfo root) {
-        for (Header header : headers.values()) {
-            if (!StoredModel.isBoundaryProfile(header.subset)) {
-                continue;
-            }
-            String expected = root.state().get(header.subset);
-            if (expected != null && !expected.equals(header.id)) {
-                throw new RdfDbConflictException("boundary model changed (" + header.id + " vs "
-                        + expected + "): a new base (putFull into a new scenario) is required");
-            }
         }
     }
 
