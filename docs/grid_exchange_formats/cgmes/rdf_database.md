@@ -503,7 +503,10 @@ none gets the head's plus one (`SnapshotCatalog.nextVersion(ref)` says which). T
 `SnapshotInfo.profiles()`, the keys of its `pdb:state` — and, on every operation, the caller's **projection**:
 which profiles to load (`RdfDbNetworkLoader.load(db, ref, profiles, …)`), which to compare when a day is ingested
 (`putAsDiff(…, profiles, …)`), which to store at the root (`putFull(…, profiles, …)`), which an update matches the
-network by (`RdfDbUpdateOptions.setProfiles`). Making them a key would give one state two addresses.
+network by (`RdfDbUpdateOptions.setProfiles`; the FULL route of an update still loads every profile of the target).
+Making them a key would give one state two addresses. The defaults of the three writes differ on purpose: `putFull`
+stores every profile the files carry, `putDiff` writes the profiles of its difference set, and `putAsDiff` compares
+the equipment model and the steady state hypothesis (the other profiles are inherited from the parent).
 
 **One snapshot is stored under one modelling authority; the files it carries may come from several.** A realistic
 IGM is such a set: its equipment and topology come from the TSO's modelling tool, its state variables from the
@@ -574,7 +577,9 @@ whose boundary is compared with the winner's. Writers of two scenarios never tou
 Map<String, SnapshotInfo> cgm = db.snapshots("2016-01-01").assembly(instant, null);  // the head of each authority
 ```
 
-An authority with no snapshot at that moment is absent from the answer; the shared boundary is in the `pdb:state`
+An authority with no snapshot at that moment (or at that version) is absent from the map, not refused: compare its
+keys with `modellingAuthorities()` to see which (pypowsybl's `assembly()` shows such an authority as a row with no
+snapshot). The shared boundary is in the `pdb:state`
 of every entry. Loading a CGM as one network stays the caller's: load each entry by its `ref()` and merge. A stored
 assembly is deliberately not written — nothing would read it, and a wrong one stored is worse than none.
 

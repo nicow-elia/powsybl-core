@@ -173,6 +173,9 @@ public final class RdfDbUpdateOptions {
      * these forward; an update to a snapshot identifies where a network without provenance stands by these, and
      * then moves the network along every difference of the path.</p>
      *
+     * <p>The projection identifies, it does not restrict what is loaded: when the update takes the FULL route, the
+     * network is rebuilt from every profile of the target snapshot.</p>
+     *
      * @param profiles the profiles
      * @return this
      */

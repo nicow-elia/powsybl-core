@@ -540,7 +540,8 @@ public final class SnapshotCatalog {
      * Every modelling authority of the scenario at one moment: what a CGM is assembled from.
      *
      * <p>A query, not a stored assembly: one request over the scenario's metadata graph, where the trees of all its
-     * authorities live. An authority with no snapshot at that moment is absent from the answer. The shared boundary
+     * authorities live. An authority with no snapshot at that moment (or at that version) is absent from the
+     * answer, never refused: compare the keys with {@link #modellingAuthorities()} to see which. The shared boundary
      * is in the {@link SnapshotInfo#state()} of every entry ({@code EQ_BD}, {@code TP_BD}), the same in all of them.
      * Loading the result as one network stays the caller's: load each entry by its {@link SnapshotInfo#ref()} and
      * merge.</p>
