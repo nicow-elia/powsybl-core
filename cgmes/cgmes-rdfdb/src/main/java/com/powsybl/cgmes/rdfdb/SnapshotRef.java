@@ -37,9 +37,13 @@ import java.time.temporal.ChronoUnit;
  *   <li>{@code version == null} means the head of that timestamp's version chain on a read, and the head plus one
  *       on a write (1 for a root).</li>
  *   <li>{@code modellingAuthority == null} is accepted by the writes that read instance files
- *       ({@code SnapshotCatalog.putFull}, {@code putAsDiff}) and by {@code putDiff}, which take it from the headers
- *       of what they write. Every read refuses it: guessing the authority would load another TSO's grid.</li>
+ *       ({@code SnapshotCatalog.putFull}, {@code putAsDiff}) and by {@code putDiff}, which take it from the
+ *       equipment and steady state hypothesis headers of what they write. Every read refuses it: guessing the
+ *       authority would load another TSO's grid.</li>
  * </ul>
+ *
+ * <p>"Modelling authority" is spelt the British way on purpose, as the owner of this API writes it; the CGMES term
+ * {@code md:Model.modelingAuthoritySet} is quoted verbatim wherever the CGMES term is meant.</p>
  *
  * <p>The timestamp is a {@link Instant}, truncated to the second: one canonical form, so that two writers in two
  * zones cannot disagree about it. A naive or unknown time zone cannot occur in this API at all &mdash; there is no

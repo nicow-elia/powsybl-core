@@ -110,7 +110,8 @@ public final class SnapshotCatalog {
     private volatile boolean schemaChecked;
     /**
      * The root of each tree, once read: a root is written once and never changed, so the base timestamp an open
-     * address means costs no request after the first. Only roots that exist are kept.
+     * address means costs no request after the first. Only roots that exist are kept. It assumes the scenario is not
+     * cleared through another connection while this catalogue lives.
      */
     private final Map<String, SnapshotInfo> rootByAuthority = new ConcurrentHashMap<>();
     private volatile IngestStatistics lastIngest;
@@ -705,7 +706,7 @@ public final class SnapshotCatalog {
         Set<CgmesSubset> missing = EnumSet.copyOf(profiles);
         missing.removeAll(carried);
         if (!missing.isEmpty()) {
-            throw new RdfDbException("the profiles " + missing + " are to be stored but the files carry none of them;"
+            throw new RdfDbException("the profiles " + missing + " are to be stored but the files do not carry them;"
                     + " they carry " + new TreeSet<>(carried));
         }
         Map<String, Header> projected = new LinkedHashMap<>(headers);
@@ -1089,7 +1090,7 @@ public final class SnapshotCatalog {
         parsed.files().forEach(file -> missing.remove(file.subset()));
         if (!missing.isEmpty()) {
             throw new RdfDbException("the profiles " + missing + " are to be compared, but the files of "
-                    + target + " carry none of them");
+                    + target + " do not carry them");
         }
 
         long t1 = System.nanoTime();
