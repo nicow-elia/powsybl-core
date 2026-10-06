@@ -25,10 +25,10 @@ public final class RdfDbVariantLoadOptions {
     /**
      * How a requested snapshot that carries no explicit variant identifier is named.
      *
-     * <p>The default names a variant after the {@code HH:MM} label of its timestep when the requested labels are
-     * all different &mdash; which is what walking one day looks like &mdash; and after
-     * {@code version + "@" + label} when they are not, so that two versions of the same moment never collide. A
-     * timestep without a label falls back to its canonical instant.</p>
+     * <p>The default names a variant after the ISO instant of its timestamp ({@code 2021-02-09T20:30:00Z}) when the
+     * requested timestamps are all different &mdash; which is what walking one day looks like &mdash; and after
+     * {@code version + "@" + instant} when they are not, so that two versions of the same moment never collide.
+     * Rendering the moment in a local zone is the caller's: pass a rule here.</p>
      *
      * @param naming the rule, or {@code null} for the default
      * @return this

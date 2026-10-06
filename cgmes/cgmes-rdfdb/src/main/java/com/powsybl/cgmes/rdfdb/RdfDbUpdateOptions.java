@@ -37,7 +37,7 @@ public final class RdfDbUpdateOptions {
     private boolean allowFullReload = true;
     private int maxDiffChain = DEFAULT_MAX_DIFF_CHAIN;
     private CgmesDiffImport.Options diffOptions = new CgmesDiffImport.Options();
-    private EnumSet<CgmesSubset> subsets =
+    private EnumSet<CgmesSubset> profiles =
             EnumSet.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS);
     private NetworkFactory networkFactory;
     private String targetVariant;
@@ -167,28 +167,29 @@ public final class RdfDbUpdateOptions {
     }
 
     /**
-     * The profiles an update looks at.
+     * The profile projection of an update: the profiles it looks at.
      *
-     * <p>The equipment model and the steady state hypothesis by default: those are the two a difference can
-     * describe. Topology and state variables are never diffed.</p>
+     * <p>The equipment model and the steady state hypothesis by default. A scenario-addressed update brings exactly
+     * these forward; an update to a snapshot identifies where a network without provenance stands by these, and
+     * then moves the network along every difference of the path.</p>
      *
-     * @param subsets the profiles
+     * @param profiles the profiles
      * @return this
      */
-    public RdfDbUpdateOptions setSubsets(EnumSet<CgmesSubset> subsets) {
-        Objects.requireNonNull(subsets);
-        if (subsets.isEmpty()) {
+    public RdfDbUpdateOptions setProfiles(EnumSet<CgmesSubset> profiles) {
+        Objects.requireNonNull(profiles);
+        if (profiles.isEmpty()) {
             throw new RdfDbException("An update looks at at least one profile");
         }
-        this.subsets = EnumSet.copyOf(subsets);
+        this.profiles = EnumSet.copyOf(profiles);
         return this;
     }
 
     /**
      * @return the profiles an update looks at
      */
-    public EnumSet<CgmesSubset> getSubsets() {
-        return EnumSet.copyOf(subsets);
+    public EnumSet<CgmesSubset> getProfiles() {
+        return EnumSet.copyOf(profiles);
     }
 
     /**
@@ -251,7 +252,7 @@ public final class RdfDbUpdateOptions {
         copy.allowFullReload = allowFullReload;
         copy.maxDiffChain = maxDiffChain;
         copy.diffOptions = diffOptions.copy();
-        copy.subsets = EnumSet.copyOf(subsets);
+        copy.profiles = EnumSet.copyOf(profiles);
         copy.networkFactory = networkFactory;
         copy.targetVariant = targetVariant;
         copy.variantFallback = variantFallback;

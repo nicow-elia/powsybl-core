@@ -16,18 +16,20 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Instant;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.function.ToIntFunction;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import static com.powsybl.cgmes.rdfdb.Backends.svk;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * The replication of {@link ReplicatedSvedala} is what every scale benchmark stands on, so it is checked on a
  * two-fold replica: it converts, it holds exactly twice the plain model, it contains the plain model (copy one is
- * the identity), its identifiers are unique, and a replicated timestep is a replicated difference.
+ * the identity), its identifiers are unique, and a replicated timestamp is a replicated difference.
  *
  * <p>With {@code -Dpowsybl.bench.generate=6,20} the test also generates and caches the named replicas, which is
  * how the campaign fills {@code scratchpad/fixtures} once, and times {@code Network.read} of each.</p>
@@ -38,7 +40,7 @@ class ReplicatedSvedalaTest {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ReplicatedSvedalaTest.class);
     private static final Pattern RDF_ID = Pattern.compile("rdf:ID=\"([^\"]*)\"");
-    private static final String ANCHOR = "2020-12-02T00:00:00Z";
+    private static final Instant ANCHOR = Instant.parse("2020-12-02T00:00:00Z");
 
     @Test
     void aTwoFoldReplicaIsTwiceTheModel() {
@@ -65,8 +67,8 @@ class ReplicatedSvedalaTest {
         }
 
         // Every object of the replicated equipment model is declared once
-        int plainCount = count(TimestepFixtures.read(ReplicatedSvedala.cached(1), SvedalaTimestepFixtures.EQ));
-        String eq = TimestepFixtures.read(replica, SvedalaTimestepFixtures.EQ);
+        int plainCount = count(TimestampFixtures.read(ReplicatedSvedala.cached(1), SvedalaTimestampFixtures.EQ));
+        String eq = TimestampFixtures.read(replica, SvedalaTimestampFixtures.EQ);
         Matcher ids = RDF_ID.matcher(eq);
         Set<String> seen = new HashSet<>();
         int count = 0;
@@ -79,25 +81,25 @@ class ReplicatedSvedalaTest {
     }
 
     @Test
-    void aReplicatedTimestepIsAReplicatedDifference() {
+    void aReplicatedTimestampIsAReplicatedDifference() {
         try (RdfDbConnection db = RdfDbConnection.open(RdfDatabase.inMemory("replicated-svedala"))) {
             String scenario = "replicated";
             SnapshotCatalog catalog = db.snapshots(scenario);
-            catalog.putFull(ReplicatedSvedala.replicate(SvedalaTimestepFixtures.anchor(ANCHOR), 2), null,
-                    SnapshotRef.of(scenario, "1.0"), Backends.params(), ReportNode.NO_OP);
-            String instant = "2020-12-02T00:15:00Z";
-            ReadOnlyDataSource timestep = ReplicatedSvedala.replicate(SvedalaTimestepFixtures.timestep(
-                    SvedalaTimestepFixtures.Shape.RICH, 1, instant).dataSource(), 2);
-            catalog.putAsDiff(timestep, null, SnapshotRef.of("1.0", "00:15", catalog), Backends.params(),
+            catalog.putFull(ReplicatedSvedala.replicate(SvedalaTimestampFixtures.anchor(ANCHOR), 2), null,
+                    svk(scenario, 1, null), null, Backends.params(), ReportNode.NO_OP);
+            Instant instant = Instant.parse("2020-12-02T00:15:00Z");
+            ReadOnlyDataSource timestamp = ReplicatedSvedala.replicate(SvedalaTimestampFixtures.timestamp(
+                    SvedalaTimestampFixtures.Shape.RICH, 1, instant).dataSource(), 2);
+            catalog.putAsDiff(timestamp, null, svk(scenario, 1, instant), null, Backends.params(),
                     ReportNode.NO_OP);
             SnapshotCatalog.IngestStatistics statistics = catalog.lastIngestStatistics();
             int forward = statistics.forwardStatements().getOrDefault(CgmesSubset.STEADY_STATE_HYPOTHESIS, 0);
             int reverse = statistics.reverseStatements().getOrDefault(CgmesSubset.STEADY_STATE_HYPOTHESIS, 0);
-            LOGGER.info("replicated x2 rich timestep: forward {} reverse {} statement(s)", forward, reverse);
+            LOGGER.info("replicated x2 rich timestamp: forward {} reverse {} statement(s)", forward, reverse);
             assertThat(forward).isEqualTo(2 * 311);
             assertThat(reverse).isEqualTo(2 * 311);
 
-            Network loaded = RdfDbNetworkLoader.load(db, new SnapshotRef(scenario, "1.0", instant), null,
+            Network loaded = RdfDbNetworkLoader.load(db, svk(scenario, 1, instant), null,
                     Backends.params(), ReportNode.NO_OP);
             assertThat(loaded.getLoadCount()).isEqualTo(2 * Network.read(ReplicatedSvedala.cached(1),
                     Backends.params()).getLoadCount());

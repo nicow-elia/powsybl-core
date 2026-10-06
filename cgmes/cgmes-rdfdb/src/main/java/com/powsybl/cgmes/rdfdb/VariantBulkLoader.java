@@ -40,7 +40,7 @@ import java.util.Set;
  * The conversion runs once, for the first requested snapshot; every other variant is a clone plus a difference.</p>
  *
  * <h2>What a refusal does</h2>
- * <p>Nothing to the rest. A timestep whose equipment drifted, or whose difference writes an operational limit, is
+ * <p>Nothing to the rest. A timestamp whose equipment drifted, or whose difference writes an operational limit, is
  * answered with a {@link VariantOutcome.Status#REFUSED} outcome and its variant is not created; the other
  * ninety-five variants are there and usable. A caller that wants all or nothing reads
  * {@link VariantLoadResult#refused()} and throws its own exception.</p>
@@ -79,7 +79,7 @@ final class VariantBulkLoader {
 
         SnapshotCatalog catalog = db.snapshots(scenario);
         VersionGraph graph = db.versionGraph(scenario);
-        List<SnapshotRef> refs = requests.stream().map(request -> catalog.check(request.ref())).toList();
+        List<SnapshotRef> refs = requests.stream().map(request -> catalog.readable(request.ref())).toList();
 
         long planStart = System.nanoTime();
         Map<String, VersionGraph.Start> starts = new LinkedHashMap<>();
@@ -349,13 +349,14 @@ final class VariantBulkLoader {
     /**
      * The identifier of each requested variant.
      *
-     * <p>An explicit one wins. Otherwise the {@code HH:MM} label of the timestep when the labels of all requests
-     * are different, and {@code version@label} when they are not &mdash; a day walked timestep by timestep reads
-     * as {@code 08:30}, a study comparing two versions of one moment as {@code 1.1@08:30}.</p>
+     * <p>An explicit one wins. Otherwise the ISO instant of the timestamp when the timestamps of all requests are
+     * different, and {@code version@instant} when they are not &mdash; a day walked timestamp by timestamp reads as
+     * {@code 2021-02-09T08:30:00Z}, a study comparing two versions of one moment as
+     * {@code 2@2021-02-09T08:30:00Z}.</p>
      */
     private static List<String> namesOf(List<VariantRequest> requests, List<SnapshotInfo> targets,
                                         RdfDbVariantLoadOptions options) {
-        List<String> labels = targets.stream().map(VariantBulkLoader::labelOf).toList();
+        List<String> labels = targets.stream().map(info -> info.timestamp().toString()).toList();
         boolean distinct = new LinkedHashSet<>(labels).size() == labels.size();
         List<String> names = new ArrayList<>();
         Set<String> used = new LinkedHashSet<>();
@@ -372,10 +373,5 @@ final class VariantBulkLoader {
             names.add(name);
         }
         return names;
-    }
-
-    private static String labelOf(SnapshotInfo info) {
-        return info.timestepLabel() == null || info.timestepLabel().isEmpty()
-                ? info.timestep() : info.timestepLabel();
     }
 }

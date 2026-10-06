@@ -150,7 +150,7 @@ class RdfDbProvenanceImpl extends AbstractExtension<Network> implements RdfDbPro
                 this.snapshot = snapshotIri;
             } else {
                 // The address travels with the IRI: a caller reading the binding wants the version and the
-                // timestep, not a string it would have to parse itself
+                // timestamp, not a string it would have to parse itself
                 activeState().pointAt(snapshotIri, Instant.now());
             }
         } finally {

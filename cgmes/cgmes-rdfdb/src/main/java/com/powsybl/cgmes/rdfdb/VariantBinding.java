@@ -57,16 +57,23 @@ public record VariantBinding(String variantId, String scenario, SnapshotRef ref,
     }
 
     /**
-     * @return the timestep of the snapshot, or {@code null} when the variant is not at a snapshot
+     * @return the modelling authority of the snapshot, or {@code null} when the variant is not at a snapshot
      */
-    public String timestep() {
-        return ref == null ? null : ref.timestep();
+    public String modellingAuthority() {
+        return ref == null ? null : ref.modellingAuthority();
     }
 
     /**
-     * @return the version label of the snapshot, or {@code null} when the variant is not at a snapshot
+     * @return the timestamp of the snapshot, or {@code null} when the variant is not at a snapshot
      */
-    public String version() {
+    public Instant timestamp() {
+        return ref == null ? null : ref.timestamp();
+    }
+
+    /**
+     * @return the version of the snapshot, or {@code null} when the variant is not at a snapshot
+     */
+    public Integer version() {
         return ref == null ? null : ref.version();
     }
 

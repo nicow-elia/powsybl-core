@@ -25,11 +25,11 @@ import java.util.Objects;
  */
 public final class RdfDbLoadOptions {
 
-    /** The subsets an update reads when nothing else is said: the two that carry a steady state. */
-    public static final EnumSet<CgmesSubset> DEFAULT_UPDATE_SUBSETS =
+    /** The profiles an update reads when nothing else is said: the two that carry a steady state. */
+    public static final EnumSet<CgmesSubset> DEFAULT_UPDATE_PROFILES =
             EnumSet.of(CgmesSubset.STEADY_STATE_HYPOTHESIS, CgmesSubset.STATE_VARIABLES);
 
-    private EnumSet<CgmesSubset> subsets;
+    private EnumSet<CgmesSubset> profiles;
     private boolean applyImportPostProcessors = true;
     private List<String> postProcessors = new ArrayList<>();
     private ComputationManager computationManager;
@@ -41,30 +41,30 @@ public final class RdfDbLoadOptions {
     }
 
     /**
-     * Options for an update, reading the steady-state subsets.
+     * Options for an update, reading the steady-state profiles.
      *
      * @return the options
      */
     public static RdfDbLoadOptions forUpdate() {
-        return new RdfDbLoadOptions().setSubsets(EnumSet.copyOf(DEFAULT_UPDATE_SUBSETS));
+        return new RdfDbLoadOptions().setProfiles(EnumSet.copyOf(DEFAULT_UPDATE_PROFILES));
     }
 
     /**
-     * Restrict the load to the graphs of the given subsets.
+     * Restrict the load to the graphs of the given profiles: the profile projection of a scenario-addressed load.
      *
-     * @param newSubsets the subsets to read, or {@code null} for every graph of the scenario
+     * @param newProfiles the profiles to read, or {@code null} for every graph of the scenario
      * @return these options
      */
-    public RdfDbLoadOptions setSubsets(EnumSet<CgmesSubset> newSubsets) {
-        this.subsets = newSubsets == null ? null : EnumSet.copyOf(newSubsets);
+    public RdfDbLoadOptions setProfiles(EnumSet<CgmesSubset> newProfiles) {
+        this.profiles = newProfiles == null ? null : EnumSet.copyOf(newProfiles);
         return this;
     }
 
     /**
-     * @return the subsets to read, or {@code null} for every graph of the scenario
+     * @return the profiles to read, or {@code null} for every graph of the scenario
      */
-    public EnumSet<CgmesSubset> getSubsets() {
-        return subsets == null ? null : EnumSet.copyOf(subsets);
+    public EnumSet<CgmesSubset> getProfiles() {
+        return profiles == null ? null : EnumSet.copyOf(profiles);
     }
 
     /**

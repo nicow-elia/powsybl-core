@@ -41,7 +41,7 @@ import java.util.Properties;
  * <h2>Where a new variant comes from</h2>
  * <p>Creating a variant means cloning one, and which one decides how much work is left: cloning the variant that
  * already holds {@code 1.0@08:30} and applying one difference is cheaper than cloning the primary and walking a
- * day. The candidates are the primary and the variants bound to the <em>same timestep</em> as the target, and all
+ * day. The candidates are the primary and the variants bound to the <em>same timestamp</em> as the target, and all
  * of their chains come out of one request together with the target's, so choosing the nearest one costs nothing
  * beyond the query the update needs anyway.</p>
  *
@@ -111,10 +111,19 @@ final class VariantUpdater {
 
         long planStart = System.nanoTime();
         SnapshotCatalog catalog = db.snapshots(scenario);
-        SnapshotRef resolved = catalog.check(target);
+        SnapshotRef resolved = catalog.readable(target);
         VersionGraph graph = db.versionGraph(scenario);
 
-        List<Candidate> candidates = candidatesFor(network, provenance, variantId, exists, resolved);
+        List<Candidate> all = candidatesFor(network, provenance, variantId, exists, resolved);
+        List<Candidate> candidates = all.stream()
+                .filter(candidate -> sameAuthority(candidate.snapshotIri(), resolved)).toList();
+        if (candidates.isEmpty() && !all.isEmpty()) {
+            // The same string arithmetic as across scenarios: the snapshot IRI carries its modelling authority
+            return refused(call, variantId, target, null, List.of("the network's variants stand for modelling"
+                    + " authority '" + RdfDbNames.refOf(all.get(0).snapshotIri()).modellingAuthority() + "' and"
+                    + " the target is '" + resolved.modellingAuthority() + "': diffs never cross modelling"
+                    + " authorities"));
+        }
         Map<String, VersionGraph.Start> starts = new LinkedHashMap<>();
         starts.put(TARGET_SIDE, new VersionGraph.Start(null, resolved));
         for (int i = 0; i < candidates.size(); i++) {
@@ -178,7 +187,7 @@ final class VariantUpdater {
      *
      * <p>An existing variant is its own and only candidate: its state <em>is</em> the snapshot it is bound to, and
      * taking it anywhere else would throw that state away. A new one is cloned from the nearest of the primary and
-     * the variants at the same timestep, which are the ones a difference of one step away from the target is
+     * the variants at the same timestamp, which are the ones a difference of one step away from the target is
      * likely to sit on. The primary comes first, so that a tie is decided in favour of the pristine clone
      * source.</p>
      */
@@ -196,16 +205,21 @@ final class VariantUpdater {
                         new Candidate(RdfDbProvenance.PRIMARY_VARIANT, binding.snapshotIri())));
         provenance.variantBindings().values().stream()
                 .filter(binding -> binding.snapshotIri() != null)
-                // A target whose timestep the caller left open (the base timestep of the scenario) is not
+                // A target whose timestamp the caller left open (the base timestamp of the tree) is not
                 // resolved yet at this point, and resolving it would cost a request; every bound variant is then
                 // a candidate, which is what the cap below keeps bounded anyway
-                .filter(binding -> target.timestep() == null
-                        || Objects.equals(binding.timestep(), target.timestep()))
+                .filter(binding -> target.timestamp() == null
+                        || Objects.equals(binding.timestamp(), target.timestamp()))
                 .filter(binding -> network.getVariantManager().getVariantIds().contains(binding.variantId()))
                 .sorted(Comparator.comparing(VariantBinding::boundAt).reversed())
                 .limit(MAX_CANDIDATES - 1L)
                 .forEach(binding -> candidates.add(new Candidate(binding.variantId(), binding.snapshotIri())));
         return candidates;
+    }
+
+    private static boolean sameAuthority(String snapshotIri, SnapshotRef target) {
+        SnapshotRef ref = RdfDbNames.refOf(snapshotIri);
+        return ref != null && ref.modellingAuthority().equals(target.modellingAuthority());
     }
 
     /** The variant is already at the target, or a clone of a variant that is. */
@@ -277,8 +291,8 @@ final class VariantUpdater {
 
         UpdateStatistics statistics = new UpdateStatistics(planning, fetched.fetch(), applied.compose(),
                 applied.apply(), plan.chainLength(), fetched.statements());
-        RdfDbReports.updateRouteReport(rn, scenario, UpdateResult.Route.DIFF_APPLIED, plan.chainLength(),
-                List.of());
+        RdfDbReports.updateRouteReport(rn, resolved.toString(), UpdateResult.Route.DIFF_APPLIED,
+                plan.chainLength(), List.of());
         LOGGER.info("Brought variant '{}' of network {} to snapshot {} by applying {} difference(s) from '{}': {}",
                 variantId, network.getId(), resolved, plan.chainLength(), chosen.sourceVariant(),
                 statistics.summary());
@@ -299,7 +313,7 @@ final class VariantUpdater {
      * Record what the variant stands for now.
      *
      * <p>The address is derived from the IRI of the snapshot that was really reached, never from the request: a
-     * caller may ask for "the newest version of the base timestep" and the binding has to say which one that
+     * caller may ask for "the newest version of the base timestamp" and the binding has to say which one that
      * turned out to be.</p>
      */
     private static void rebind(RdfDbProvenanceImpl provenance, String variantId, String targetIri) {
@@ -326,7 +340,7 @@ final class VariantUpdater {
         } else if (provenance instanceof RdfDbProvenanceImpl impl) {
             impl.setLastRefused(List.of(VariantOutcome.refused(variantId, target, targetIri, reasons)));
         }
-        RdfDbReports.updateRouteReport(call.rn(), target.scenario(), UpdateResult.Route.VARIANT_REFUSED, 0,
+        RdfDbReports.updateRouteReport(call.rn(), target.toString(), UpdateResult.Route.VARIANT_REFUSED, 0,
                 reasons);
         LOGGER.info("Refused to bring variant '{}' of network {} to snapshot {}: {}", variantId, network.getId(),
                 target, reasons);
@@ -349,7 +363,7 @@ final class VariantUpdater {
         if (existing != null) {
             return (RdfDbProvenanceImpl) existing;
         }
-        Map<CgmesSubset, String> identity = NetworkIdentity.modelIds(network, options.getSubsets());
+        Map<CgmesSubset, String> identity = NetworkIdentity.modelIds(network, options.getProfiles());
         RdfDbProvenanceImpl created = new RdfDbProvenanceImpl(db.database(), scenario, List.of(), Instant.now(),
                 identity);
         network.addExtension(RdfDbProvenance.class, created);

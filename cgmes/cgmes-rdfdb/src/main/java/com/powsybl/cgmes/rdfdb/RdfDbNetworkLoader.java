@@ -155,7 +155,8 @@ public final class RdfDbNetworkLoader {
         // path lists. The catalogue read above already knows, so this costs no request
         if (snapshot.isVersioned()) {
             refusePartialLoad(scenario, options, "is versioned", "a snapshot of it");
-            LoadResult versioned = loadWithStatistics(db, SnapshotRef.latest(scenario), factory, params, rn);
+            LoadResult versioned = loadWithStatistics(db,
+                    SnapshotRef.latest(scenario, db.snapshots(scenario).onlyAuthority()), factory, params, rn);
             applyPostProcessors(versioned.network(), options, rn);
             return versioned;
         }
@@ -191,7 +192,7 @@ public final class RdfDbNetworkLoader {
 
     private static List<GraphInfo> graphsToRead(RdfDbConnection db, String scenario, RdfDbLoadOptions options) {
         List<GraphInfo> all = db.graphs(scenario);
-        EnumSet<CgmesSubset> subsets = options.getSubsets();
+        EnumSet<CgmesSubset> subsets = options.getProfiles();
         List<GraphInfo> graphs = subsets == null ? all
                 : all.stream().filter(g -> subsets.contains(g.subset())).toList();
         if (graphs.isEmpty()) {
@@ -346,7 +347,7 @@ public final class RdfDbNetworkLoader {
 
     /** A difference states properties of its profile: a partial load would build a state that never existed. */
     private static void refusePartialLoad(String scenario, RdfDbLoadOptions options, String what, String instead) {
-        if (options.getSubsets() != null) {
+        if (options.getProfiles() != null) {
             throw new RdfDbException("Scenario '" + scenario + "' " + what + ", and a partial load of a versioned"
                     + " scenario is not supported: a difference states properties of the profile it belongs to,"
                     + " and leaving a profile out would build a network from a state that never existed. Load the"
@@ -400,7 +401,8 @@ public final class RdfDbNetworkLoader {
         // which is what a caller addressing individual stored models asked for. The catalogue read above knows
         // whether the scenario is versioned, so the decision costs no request
         if (target.isHead() && snapshot != null && snapshot.isVersioned()) {
-            return update(network, db, SnapshotRef.latest(scenario), effective, params, rn);
+            return update(network, db, SnapshotRef.latest(scenario, db.snapshots(scenario).onlyAuthority()), effective,
+                    params, rn);
         }
         // Everything below addresses individual stored models rather than snapshots, and a variant stands for a
         // snapshot. Silently doing it on the whole network would write into every bound variant at once
@@ -425,13 +427,13 @@ public final class RdfDbNetworkLoader {
                                                      CatalogSnapshot snapshot, String scenario, DiffTarget target,
                                                      RdfDbUpdateOptions options) {
         Map<CgmesSubset, String> identity = provenance != null && !provenance.modelIds().isEmpty()
-                ? provenance.modelIds() : NetworkIdentity.modelIds(network, options.getSubsets());
+                ? provenance.modelIds() : NetworkIdentity.modelIds(network, options.getProfiles());
         Map<CgmesSubset, String> currentIds = new EnumMap<>(CgmesSubset.class);
         currentIds.putAll(identity);
-        currentIds.keySet().retainAll(options.getSubsets());
+        currentIds.keySet().retainAll(options.getProfiles());
         if (currentIds.isEmpty()) {
             throw new RdfDbException("The network carries no CGMES model identity for the profiles "
-                    + options.getSubsets() + ", so there is nothing to bring forward from");
+                    + options.getProfiles() + ", so there is nothing to bring forward from");
         }
         Map<CgmesSubset, String> targetIds = targetIds(snapshot, target, currentIds.keySet());
         if (targetIds.isEmpty()) {
@@ -629,8 +631,9 @@ public final class RdfDbNetworkLoader {
      * Build the network of one snapshot.
      *
      * <p>The mandated entry point of the versioning layer. The address is always complete: the scenario says which
-     * base grid model, the timestep which moment of it, the version which study state. A {@code null} version
-     * means the newest one of that timestep, a {@code null} timestep the base timestep of the scenario.</p>
+     * base grid model, the modelling authority whose grid, the timestamp which moment of it, the version which study
+     * state. A {@code null} version means the newest one of that timestamp, a {@code null} timestamp the base
+     * timestamp of the authority's tree.</p>
      *
      * @param db             the open connection
      * @param ref            the address of the snapshot
@@ -641,26 +644,28 @@ public final class RdfDbNetworkLoader {
      */
     public static Network load(RdfDbConnection db, SnapshotRef ref, NetworkFactory networkFactory,
                                Properties params, ReportNode reportNode) {
-        return loadWithStatistics(db, ref, networkFactory, params, reportNode).network();
+        return loadWithStatistics(db, ref, Set.of(), networkFactory, params, reportNode).network();
     }
 
     /**
-     * Build the network of one snapshot, addressed by plain strings.
+     * Build the network of one snapshot from some of its profiles.
+     *
+     * <p>The profiles are a projection, not a part of the address: the snapshot is the same, and the network holds
+     * the profiles named here, each at the state the snapshot has for it. The equipment profile is what a network
+     * is built from, so a projection without it fails in the conversion.</p>
      *
      * @param db             the open connection
-     * @param scenario       the scenario, required
-     * @param version        the version label, or {@code null} for the newest one
-     * @param timestep       the timestep as an ISO instant, an offset date-time or a {@code "8:30"} label of the
-     *                       scenario's base day; {@code null} for the base timestep
+     * @param ref            the address of the snapshot
+     * @param profiles       the profiles to read, or {@code null} or empty for every profile of the snapshot
      * @param networkFactory the factory the network is created with
      * @param params         the CGMES import parameters
      * @param reportNode     where the load reports
      * @return the network, at that snapshot
+     * @throws RdfDbException if the snapshot does not hold one of the profiles
      */
-    public static Network load(RdfDbConnection db, String scenario, String version, String timestep,
+    public static Network load(RdfDbConnection db, SnapshotRef ref, Set<CgmesSubset> profiles,
                                NetworkFactory networkFactory, Properties params, ReportNode reportNode) {
-        Objects.requireNonNull(db);
-        return load(db, db.snapshots(scenario).resolve(version, timestep), networkFactory, params, reportNode);
+        return loadWithStatistics(db, ref, profiles, networkFactory, params, reportNode).network();
     }
 
     /**
@@ -675,12 +680,29 @@ public final class RdfDbNetworkLoader {
      */
     public static LoadResult loadWithStatistics(RdfDbConnection db, SnapshotRef ref, NetworkFactory networkFactory,
                                                 Properties params, ReportNode reportNode) {
+        return loadWithStatistics(db, ref, Set.of(), networkFactory, params, reportNode);
+    }
+
+    /**
+     * Build the network of some profiles of one snapshot, and say where the time went.
+     *
+     * @param db             the open connection
+     * @param ref            the address of the snapshot
+     * @param profiles       the profiles to read, or {@code null} or empty for every profile of the snapshot
+     * @param networkFactory the factory the network is created with
+     * @param params         the CGMES import parameters
+     * @param reportNode     where the load reports
+     * @return the network and the timings
+     */
+    public static LoadResult loadWithStatistics(RdfDbConnection db, SnapshotRef ref, Set<CgmesSubset> profiles,
+                                                NetworkFactory networkFactory, Properties params,
+                                                ReportNode reportNode) {
         Objects.requireNonNull(db);
         Objects.requireNonNull(ref);
         NetworkFactory factory = networkFactory == null ? NetworkFactory.findDefault() : networkFactory;
         ReportNode rn = reportNode == null ? ReportNode.NO_OP : reportNode;
         long t0 = System.nanoTime();
-        LoadResult materialised = materialize(db, ref, factory, params, rn);
+        LoadResult materialised = materialize(db, ref, profiles, factory, params, rn);
         Duration readCatalog = Duration.ofNanos(System.nanoTime() - t0)
                 .minus(materialised.statistics().total());
         LoadStatistics statistics = materialised.statistics()
@@ -690,20 +712,18 @@ public final class RdfDbNetworkLoader {
         return new LoadResult(materialised.network(), statistics);
     }
 
-    private static LoadResult materialize(RdfDbConnection db, SnapshotRef ref,
-                                                              NetworkFactory factory, Properties params,
-                                                              ReportNode rn) {
+    private static LoadResult materialize(RdfDbConnection db, SnapshotRef ref, Set<CgmesSubset> profiles,
+                                          NetworkFactory factory, Properties params, ReportNode rn) {
         SnapshotCatalog catalog = db.snapshots(ref.scenario());
         SnapshotInfo info = catalog.find(ref).orElseThrow(() -> new RdfDbException("scenario '" + ref.scenario()
                 + "' of " + db.database() + " holds no snapshot " + ref + "; it holds "
                 + catalog.snapshots().stream().map(SnapshotInfo::toString).toList()));
-        return materialize(db, info, factory, params, rn);
+        return materialize(db, info, profiles, factory, params, rn);
     }
 
-    private static LoadResult materialize(RdfDbConnection db, SnapshotInfo info,
-                                                              NetworkFactory factory, Properties params,
-                                                              ReportNode rn) {
-        MaterializationPlan plan = db.versionGraph(info.scenario()).materialization(info.iri());
+    private static LoadResult materialize(RdfDbConnection db, SnapshotInfo info, Set<CgmesSubset> profiles,
+                                          NetworkFactory factory, Properties params, ReportNode rn) {
+        MaterializationPlan plan = db.versionGraph(info.scenario()).materialization(info.iri()).project(profiles);
         Map<String, StoredModel> stateModels =
                 db.catalog(info.scenario()).models(plan.targetState().values());
         return RdfDbMaterializer.materialize(db, info.scenario(), info, plan, stateModels, factory, params, rn);
@@ -758,7 +778,7 @@ public final class RdfDbNetworkLoader {
 
         return switch (plan.kind()) {
             case NOOP -> {
-                yield terminal(rn, scenario, UpdateResult.Route.NOOP, network, List.of(), planning,
+                yield terminal(rn, target.toString(), UpdateResult.Route.NOOP, network, List.of(), planning,
                         Duration.ZERO);
             }
             case DIFF -> applySnapshotDifferences(network, db, target, plan, effective, params, rn, planning);
@@ -767,34 +787,15 @@ public final class RdfDbNetworkLoader {
     }
 
     /**
-     * Bring a network to a snapshot, addressed by plain strings.
-     *
-     * @param network    the network to bring up to date
-     * @param db         the open connection
-     * @param scenario   the scenario, required
-     * @param version    the version label, or {@code null} for the newest one
-     * @param timestep   the timestep text, or {@code null} for the base timestep
-     * @param params     the CGMES import parameters
-     * @param reportNode where the update reports
-     * @return what was done
-     */
-    public static UpdateResult update(Network network, RdfDbConnection db, String scenario, String version,
-                                      String timestep, Properties params, ReportNode reportNode) {
-        Objects.requireNonNull(db);
-        return update(network, db, db.snapshots(scenario).resolve(version, timestep), new RdfDbUpdateOptions(),
-                params, reportNode);
-    }
-
-    /**
      * Load many snapshots of one scenario as the variants of a single network.
      *
      * <p>A whole day in one network: the first requested snapshot is converted from the data and becomes the
      * network, every requested snapshot &mdash; including the first &mdash; gets a named variant, and the rest of
      * them are clones plus the differences between them. One chain query, one statement fetch and one conversion,
-     * whatever the number of timesteps.</p>
+     * whatever the number of timestamps.</p>
      *
      * <p>A snapshot that cannot be reached inside a variant does not fail the load: its variant is not created and
-     * its {@link VariantOutcome} says why, so a day with one drifted timestep still gives the other ninety-five.
+     * its {@link VariantOutcome} says why, so a day with one drifted timestamp still gives the other ninety-five.
      * A snapshot the scenario does not hold at all is an error, raised before anything is loaded.</p>
      *
      * <p>The working variant of the calling thread is the primary one when the call returns.</p>
@@ -821,66 +822,6 @@ public final class RdfDbNetworkLoader {
     }
 
     /**
-     * Load many timesteps of one version as the variants of a single network, addressed by text.
-     *
-     * <p>The form a user interface calls: the timesteps may be {@code "8:30"} labels, which are resolved against
-     * the base day of this scenario, and the variants are named after them.</p>
-     *
-     * @param db             the open connection
-     * @param scenario       the scenario, required
-     * @param version        the version label every timestep is taken at, or {@code null} for the newest one of
-     *                       each
-     * @param timestepTexts  the timesteps, as instants, offset date-times or {@code "8:30"} labels
-     * @param options        the naming rule and how each variant is brought to its snapshot
-     * @param networkFactory the factory the network is created with
-     * @param params         the CGMES import parameters
-     * @param reportNode     where the load reports
-     * @return the network, one outcome per timestep, and where the time went
-     */
-    public static VariantLoadResult loadVariants(RdfDbConnection db, String scenario, String version,
-                                                 List<String> timestepTexts, RdfDbVariantLoadOptions options,
-                                                 NetworkFactory networkFactory, Properties params,
-                                                 ReportNode reportNode) {
-        Objects.requireNonNull(db);
-        Objects.requireNonNull(timestepTexts);
-        SnapshotCatalog catalog = db.snapshots(scenario);
-        List<VariantRequest> requests = timestepTexts.stream()
-                .map(text -> VariantRequest.of(catalog.resolve(version, text)))
-                .toList();
-        return loadVariants(db, scenario, requests, options, networkFactory, params, reportNode);
-    }
-
-    /**
-     * Create or update one variant of a network so that it stands for a snapshot, addressed by plain strings.
-     *
-     * <p>The opt-in form of {@link #update(Network, RdfDbConnection, SnapshotRef, RdfDbUpdateOptions, Properties,
-     * ReportNode)}: the state of the named variant is brought to the snapshot, every other variant of the network
-     * is left exactly as it is, and anything that could not be done without writing state shared by all variants
-     * is refused with {@link UpdateResult.Route#VARIANT_REFUSED} rather than applied.</p>
-     *
-     * <p>A variant that does not exist is created, by cloning the variant nearest to the target in difference
-     * terms; a variant that exists is moved from wherever it stands. The working variant of the calling thread is
-     * unchanged when the call returns.</p>
-     *
-     * @param network       the network holding the variant
-     * @param db            the open connection
-     * @param scenario      the scenario, required
-     * @param version       the version label, or {@code null} for the newest one of that timestep
-     * @param timestep      the timestep text, or {@code null} for the base timestep
-     * @param targetVariant the variant to create or update, {@code null} for the working one
-     * @param params        the CGMES import parameters
-     * @param reportNode    where the update reports
-     * @return what was done, with {@link UpdateResult#variantId()} naming the variant
-     */
-    public static UpdateResult update(Network network, RdfDbConnection db, String scenario, String version,
-                                      String timestep, String targetVariant, Properties params,
-                                      ReportNode reportNode) {
-        Objects.requireNonNull(db);
-        return update(network, db, db.snapshots(scenario).resolve(version, timestep),
-                new RdfDbUpdateOptions().setTargetVariant(targetVariant), params, reportNode);
-    }
-
-    /**
      * Refuse an entry point that cannot be expressed as a variant operation.
      *
      * <p>A variant of a network stands for a <em>snapshot</em>. The pre-snapshot entry points address individual
@@ -893,7 +834,8 @@ public final class RdfDbNetworkLoader {
         if (variant != null) {
             throw new RdfDbException("network " + network.getId() + " is in variant mode, so " + what
                     + " cannot be applied to it: variant mode addresses snapshots. Use"
-                    + " RdfDbNetworkLoader.update(network, db, scenario, version, timestep, variant, ...)");
+                    + " RdfDbNetworkLoader.update(network, db, ref, new RdfDbUpdateOptions().setTargetVariant(variant),"
+                    + " ...)");
         }
     }
 
@@ -1012,7 +954,7 @@ public final class RdfDbNetworkLoader {
     static AppliedDiffs composeAndApply(Network network, RdfDbConnection db, String scenario, UpdatePlan plan,
                                         FetchedDiffs fetched, RdfDbUpdateOptions options, Conversion.Config config,
                                         ReportNode rn) {
-        // A path that walks up one branch and down another - which is what a step from one timestep to the next
+        // A path that walks up one branch and down another - which is what a step from one timestamp to the next
         // is - is composed with the upward differences already turned round, and then applied forwards like any
         // other. Only a path that is entirely upward is reverted as a whole
         boolean mixed = plan.isMixedDirection();
@@ -1071,7 +1013,7 @@ public final class RdfDbNetworkLoader {
                 ? List.of("the chain since the last full snapshot is longer than " + options.getCheckpointAfter()
                         + " differences; consider Checkpoint.create")
                 : List.of();
-        RdfDbReports.updateRouteReport(rn, scenario, UpdateResult.Route.DIFF_APPLIED, plan.chainLength(), reasons);
+        RdfDbReports.updateRouteReport(rn, target.toString(), UpdateResult.Route.DIFF_APPLIED, plan.chainLength(), reasons);
         LOGGER.info("Updated network {} to snapshot {} by applying {} difference(s): {}", network.getId(),
                 plan.to(), plan.chainLength(), statistics.summary());
         return new UpdateResult(UpdateResult.Route.DIFF_APPLIED, network, applied.appliedModelIds(), reasons,
@@ -1218,15 +1160,15 @@ public final class RdfDbNetworkLoader {
                                                   ReportNode rn, Duration planning) {
         String scenario = target.scenario();
         if (!options.isAllowFullReload()) {
-            return terminal(rn, scenario, UpdateResult.Route.FULL_REQUIRED, network, plan.reasons(), planning,
+            return terminal(rn, target.toString(), UpdateResult.Route.FULL_REQUIRED, network, plan.reasons(), planning,
                     Duration.ZERO);
         }
         long applyStart = System.nanoTime();
         LoadResult replacement =
-                materialize(db, target, options.getNetworkFactory(), params, rn);
+                materialize(db, target, Set.of(), options.getNetworkFactory(), params, rn);
         Duration apply = Duration.ofNanos(System.nanoTime() - applyStart);
-        return terminal(rn, scenario, UpdateResult.Route.FULL_RELOAD, replacement.network(), plan.reasons(), planning,
-                apply);
+        return terminal(rn, target.toString(), UpdateResult.Route.FULL_RELOAD, replacement.network(), plan.reasons(),
+                planning, apply);
     }
 
     private static void recordSnapshotIdentity(Network network, RdfDbConnection db, String scenario,

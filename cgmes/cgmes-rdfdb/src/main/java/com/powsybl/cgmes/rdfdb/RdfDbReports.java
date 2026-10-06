@@ -40,7 +40,8 @@ public final class RdfDbReports {
      * Report the route an update took, with the reasons it did not take a shorter one.
      *
      * @param reportNode where to report
-     * @param scenario   the scenario the network was brought to
+     * @param scenario   the scenario the network was brought to, or the address of the snapshot on the snapshot
+     *                   route
      * @param route      the route taken
      * @param diffCount  how many differences were applied
      * @param reasons    why the difference route was impossible, empty when it was taken
@@ -112,11 +113,11 @@ public final class RdfDbReports {
     }
 
     /**
-     * Say that an instance file of a timestep was read but left alone.
+     * Say that an instance file of a timestamp was read but left alone.
      *
-     * <p>State variables and topology change wholesale from one timestep to the next, so a difference of them
+     * <p>State variables and topology change wholesale from one timestamp to the next, so a difference of them
      * would be as large as the data itself; this release inherits the parent's. The caller is told, because the
-     * network it loads at that timestep will carry the base's state variables, not the file's.</p>
+     * network it loads at that timestamp will carry the base's state variables, not the file's.</p>
      *
      * @param reportNode the node to report to
      * @param subset     the profile that was ignored

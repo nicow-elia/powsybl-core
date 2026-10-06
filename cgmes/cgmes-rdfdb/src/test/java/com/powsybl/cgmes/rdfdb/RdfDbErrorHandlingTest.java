@@ -87,7 +87,7 @@ class RdfDbErrorHandlingTest {
         try (RdfDbConnection db = RdfDbConnection.open(RdfDatabase.inMemory("empty-subsets"))) {
             db.loadCgmes("s", CgmesConformity1Catalog.miniBusBranch().dataSource(), null, p, ReportNode.NO_OP);
             RdfDbLoadOptions options = new RdfDbLoadOptions()
-                    .setSubsets(EnumSet.of(com.powsybl.cgmes.model.CgmesSubset.DYNAMIC));
+                    .setProfiles(EnumSet.of(com.powsybl.cgmes.model.CgmesSubset.DYNAMIC));
             RdfDbException e = assertThrows(RdfDbException.class,
                     () -> RdfDbNetworkLoader.load(db, "s", options, NetworkFactory.findDefault(), p, ReportNode.NO_OP));
             assertThat(e.getMessage()).contains("DYNAMIC");

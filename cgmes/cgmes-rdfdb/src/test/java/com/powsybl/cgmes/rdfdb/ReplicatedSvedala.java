@@ -20,6 +20,7 @@ import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -30,7 +31,7 @@ import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import static com.powsybl.cgmes.rdfdb.TimestepFixtures.read;
+import static com.powsybl.cgmes.rdfdb.TimestampFixtures.read;
 
 /**
  * Svedala, copied {@code n} times into one model set: an IGM-sized grid built from the largest CGMES 3 model the
@@ -41,7 +42,7 @@ import static com.powsybl.cgmes.rdfdb.TimestepFixtures.read;
  * {@code IdentifiedObject.mRID} the bare uuid, and every model header {@code urn:uuid:<id>}. A copy is therefore
  * the body of the file with every uuid token renamed &mdash; one precompiled pattern and a per-copy memo &mdash;
  * which takes seconds for 288 MB, where a copy through a parser, a store and a writer would take minutes and would
- * benchmark the writer. {@link SvedalaTimestepFixtures} edits the same files textually for the same reason.</p>
+ * benchmark the writer. {@link SvedalaTimestampFixtures} edits the same files textually for the same reason.</p>
  *
  * <p><b>The rules.</b> Each file keeps <em>one</em> header, whose {@code urn:uuid:} identifiers (its own and its
  * {@code DependentOn}/{@code Supersedes} links) are renamed by {@link #modelId}, the same rule for every file, so
@@ -56,17 +57,17 @@ import static com.powsybl.cgmes.rdfdb.TimestepFixtures.read;
  * <p><b>Cache.</b> A replicated grid is written once to {@code <fixtures>/svedala-x<n>/} (the directory is the
  * system property {@code powsybl.bench.fixtures}, by default the {@code scratchpad/fixtures} folder of the
  * workspace, never {@code /tmp} and never a repository) and reused while the byte sizes recorded in
- * {@code svedala-x<n>.manifest} next to it still match. Timesteps of a replicated day are replicated in memory
- * per timestep, outside every timer.</p>
+ * {@code svedala-x<n>.manifest} next to it still match. Timestamps of a replicated day are replicated in memory
+ * per timestamp, outside every timer.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 final class ReplicatedSvedala {
 
     /** The five instance files of Svedala. */
-    static final List<String> FILES = List.of(SvedalaTimestepFixtures.EQ, SvedalaTimestepFixtures.SSH,
-            SvedalaTimestepFixtures.INHERITED.get(0), SvedalaTimestepFixtures.INHERITED.get(1),
-            SvedalaTimestepFixtures.INHERITED.get(2));
+    static final List<String> FILES = List.of(SvedalaTimestampFixtures.EQ, SvedalaTimestampFixtures.SSH,
+            SvedalaTimestampFixtures.INHERITED.get(0), SvedalaTimestampFixtures.INHERITED.get(1),
+            SvedalaTimestampFixtures.INHERITED.get(2));
 
     private static final Pattern UUID_TOKEN =
             Pattern.compile("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
@@ -94,7 +95,7 @@ final class ReplicatedSvedala {
     /**
      * Replicate every file of a data source in memory.
      *
-     * @param in the files, for instance a timestep of {@link SvedalaTimestepFixtures}
+     * @param in the files, for instance a timestamp of {@link SvedalaTimestampFixtures}
      * @param n  how many copies; {@code 1} returns {@code in} itself
      * @return the replica
      */
@@ -260,19 +261,19 @@ final class ReplicatedSvedala {
      * @param instant the canonical scenario time, for instance {@code 2020-12-02T00:00:00Z}
      * @return the five files, in memory
      */
-    static ReadOnlyDataSource anchor(int n, String instant) {
+    static ReadOnlyDataSource anchor(int n, Instant instant) {
         if (n == 1) {
-            return SvedalaTimestepFixtures.anchor(instant);
+            return SvedalaTimestampFixtures.anchor(instant);
         }
         ReadOnlyDataSource replica = cached(n);
         MemDataSource out = new MemDataSource();
         for (String name : FILES) {
             String text = read(replica, name);
-            if (name.equals(SvedalaTimestepFixtures.SSH)) {
+            if (name.equals(SvedalaTimestampFixtures.SSH)) {
                 int headEnd = text.indexOf(HEADER_END);
                 text = text.substring(0, headEnd).replaceAll(
                         "(<md:Model.scenarioTime>)[^<]*(</md:Model.scenarioTime>)",
-                        "$1" + Matcher.quoteReplacement(instant) + "$2") + text.substring(headEnd);
+                        "$1" + Matcher.quoteReplacement(instant.toString()) + "$2") + text.substring(headEnd);
             }
             out.putData(name, text.getBytes(StandardCharsets.UTF_8));
         }

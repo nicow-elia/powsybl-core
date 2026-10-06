@@ -77,11 +77,11 @@ public final class RdfDbConnection implements AutoCloseable {
     private final Map<String, VersionGraph> versionGraphs = new ConcurrentHashMap<>();
 
     /**
-     * The decoded parent states {@link SnapshotCatalog#putAsDiff} compares timesteps against, across all
+     * The decoded parent states {@link SnapshotCatalog#putAsDiff} compares timestamps against, across all
      * scenarios of this connection, most recently used last.
      *
-     * <p>Every timestep of a day is diffed against the same parent state, so its equipment and steady state graphs
-     * used to be materialised and decoded once per timestep &mdash; a hundred and seventy thousand statements
+     * <p>Every timestamp of a day is diffed against the same parent state, so its equipment and steady state graphs
+     * used to be materialised and decoded once per timestamp &mdash; a hundred and seventy thousand statements
      * copied into a fresh store and turned into statements again, ninety-five times, to answer the same question.
      * The decoded index is kept here instead.</p>
      *
@@ -89,7 +89,7 @@ public final class RdfDbConnection implements AutoCloseable {
      * ({@link #parentIndexKey}): the stored model whose state the index holds, the size the catalogue records for
      * it, and the two things the decoding depends on. A stored model is written once and never changed &mdash; a
      * new state of a profile is a new identifier &mdash; so an entry does not go stale; a version written on the
-     * base chain between two timesteps is a new identifier, misses, and is materialised. The triple count is a
+     * base chain between two timestamps is a new identifier, misses, and is materialised. The triple count is a
      * cheap second guard for a scenario dropped and re-created with re-used identifiers by another client.</p>
      *
      * <p><strong>Bound.</strong> Four entries in access order <em>for the whole connection</em>, not per
@@ -244,7 +244,7 @@ public final class RdfDbConnection implements AutoCloseable {
     }
 
     /**
-     * The snapshots of one scenario: what versions and timesteps it holds, and how a new one is written.
+     * The snapshots of one scenario: what versions and timestamps it holds, and how a new one is written.
      *
      * <p>One catalogue per scenario, like {@link #catalog(String)} and for the same reason: a version label means
      * nothing without the scenario it belongs to, and nothing in this layer resolves one across scenarios.</p>
@@ -376,7 +376,7 @@ public final class RdfDbConnection implements AutoCloseable {
         // upload would put a second, unversioned set next to them that no snapshot can ever reach
         if (snapshots(scenario).isVersioned()) {
             throw new RdfDbException("scenario '" + scenario + "' is versioned: use SnapshotCatalog.putFull to"
-                    + " write its root, or SnapshotCatalog.putAsDiff to add a timestep");
+                    + " write its root, or SnapshotCatalog.putAsDiff to add a timestamp");
         }
         CgmesImport importer = new CgmesImport(PlatformConfig.defaultConfig());
         TripleStore store = scenarioStore(scenario, importer.tripleStoreOptions(importParams));

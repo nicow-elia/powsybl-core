@@ -17,6 +17,7 @@ import java.io.UncheckedIOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -28,46 +29,46 @@ import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import static com.powsybl.cgmes.rdfdb.TimestepFixtures.put;
-import static com.powsybl.cgmes.rdfdb.TimestepFixtures.read;
-import static com.powsybl.cgmes.rdfdb.TimestepFixtures.renameFirstLine;
-import static com.powsybl.cgmes.rdfdb.TimestepFixtures.rewriteHeader;
+import static com.powsybl.cgmes.rdfdb.TimestampFixtures.put;
+import static com.powsybl.cgmes.rdfdb.TimestampFixtures.read;
+import static com.powsybl.cgmes.rdfdb.TimestampFixtures.renameFirstLine;
+import static com.powsybl.cgmes.rdfdb.TimestampFixtures.rewriteHeader;
 
 /**
  * A day of quarter-hourly CGMES exports of the <em>largest</em> conformity model, made by editing Svedala.
  *
- * <p>{@link TimestepFixtures} does the same for the MicroGrid base case, which is 1.9 MB and holds a handful of
- * objects. The question this fixture exists for &mdash; what it costs to diff ninety-five timesteps of a real
+ * <p>{@link TimestampFixtures} does the same for the MicroGrid base case, which is 1.9 MB and holds a handful of
+ * objects. The question this fixture exists for &mdash; what it costs to diff ninety-five timestamps of a real
  * model against an anchor and write them &mdash; cannot be answered on a model that small, so the same idea is
  * applied to the biggest CGMES set the repertoire carries: Svedala (CGMES 3, 14 MB over five instance files,
  * 8 397 equipment objects, file names with spaces).</p>
  *
- * <p>The edits are textual, for the same reason {@link TimestepFixtures} gives: re-exporting the model through the
+ * <p>The edits are textual, for the same reason {@link TimestampFixtures} gives: re-exporting the model through the
  * CGMES exporter would differ from the base in a hundred incidental ways, and a benchmark of the difference
  * calculator would become a benchmark of the exporter. Here the text editing is done on <em>parsed blocks</em>
- * rather than with a plain regular expression, because a structural timestep has to drop an object together with
+ * rather than with a plain regular expression, because a structural timestamp has to drop an object together with
  * everything that points at it, and that is a graph walk.</p>
  *
- * <h2>The three shapes of a timestep</h2>
+ * <h2>The three shapes of a timestamp</h2>
  * <ul>
  *   <li>{@link Shape#THIN} &mdash; five {@code EnergyConsumer.p} values move. The fixed cost of an ingestion.</li>
  *   <li>{@link Shape#RICH} &mdash; every continuous set point of the steady state hypothesis is scaled by the
- *       timestep's factor: all {@code EnergyConsumer.p}/{@code .q}, all {@code RotatingMachine.p}/{@code .q} and
+ *       timestamp's factor: all {@code EnergyConsumer.p}/{@code .q}, all {@code RotatingMachine.p}/{@code .q} and
  *       all {@code RegulatingControl.targetValue}. That is 322 values, which is <em>everything Svedala's SSH has
  *       to offer</em> short of flipping switches; see the report for why that is not "thousands".</li>
- *   <li>{@link Shape#STRUCTURAL} &mdash; the European exchange case: the equipment model of the timestep
+ *   <li>{@link Shape#STRUCTURAL} &mdash; the European exchange case: the equipment model of the timestamp
  *       <em>omits</em> a share of the objects the anchor holds (de-energised or in maintenance) and sometimes
  *       carries one the anchor does not. Set points move as in {@code THIN} on top.</li>
  * </ul>
  *
- * <p>A timestep of the first two shapes ships the steady state file alone, which is what a quarter-hourly
- * schedule is; a structural timestep ships equipment and steady state, because that is what it changes. The other
+ * <p>A timestamp of the first two shapes ships the steady state file alone, which is what a quarter-hourly
+ * schedule is; a structural timestamp ships equipment and steady state, because that is what it changes. The other
  * profiles are inherited from the anchor either way &mdash; {@code putAsDiff} compares EQ and SSH and nothing
  * else &mdash; and {@link #fullFileSet} exists to measure what shipping them anyway would cost.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
-final class SvedalaTimestepFixtures {
+final class SvedalaTimestampFixtures {
 
     /** The steady state hypothesis of the fixture. */
     static final String SSH = "20201202T1843Z_1D_Svedala Area_SSH_001.xml";
@@ -75,35 +76,35 @@ final class SvedalaTimestepFixtures {
     /** The equipment model of the fixture. */
     static final String EQ = "20201202T1843Z_1D_Svedala Area_EQ_001.xml";
 
-    /** The profiles a timestep never touches and always inherits. */
+    /** The profiles a timestamp never touches and always inherits. */
     static final List<String> INHERITED = List.of(
             "20201202T1843Z_1D_Svedala Area_DL_001.xml",
             "20201202T1843Z_1D_Svedala Area_SV_001.xml",
             "20201202T1843Z_1D_Svedala Area_TP_001.xml");
 
-    /** How much of the model one timestep moves. */
+    /** How much of the model one timestamp moves. */
     enum Shape {
         /** Five load set points: the fixed cost of an ingestion. */
         THIN,
-        /** Every continuous set point of the steady state hypothesis, scaled by the timestep's factor. */
+        /** Every continuous set point of the steady state hypothesis, scaled by the timestamp's factor. */
         RICH,
         /** Objects omitted from the equipment model, objects added to it, and five load set points. */
         STRUCTURAL
     }
 
-    /** The properties a {@link Shape#RICH} timestep scales, in the order they are rewritten. */
+    /** The properties a {@link Shape#RICH} timestamp scales, in the order they are rewritten. */
     private static final List<String> SCALED = List.of(
             "EnergyConsumer.p", "EnergyConsumer.q",
             "RotatingMachine.p", "RotatingMachine.q",
             "RegulatingControl.targetValue");
 
-    /** How many load set points the thin part of every timestep moves. */
+    /** How many load set points the thin part of every timestamp moves. */
     private static final int THIN_LOADS = 5;
 
-    /** How many equipment objects a structural timestep omits, as a share of the 90 {@code ACLineSegment}s. */
+    /** How many equipment objects a structural timestamp omits, as a share of the 90 {@code ACLineSegment}s. */
     private static final int OMITTED_LINES = 2;
 
-    /** One timestep in every so many also carries a line the anchor does not have. */
+    /** One timestamp in every so many also carries a line the anchor does not have. */
     private static final int ADD_EVERY = 8;
 
     private static final Pattern ID = Pattern.compile("rdf:(?:ID|about)=\"#?_?([^\"]*)\"");
@@ -114,20 +115,20 @@ final class SvedalaTimestepFixtures {
     private static Document sshDocument;
     private static List<String> lineIds;
 
-    private SvedalaTimestepFixtures() {
+    private SvedalaTimestampFixtures() {
     }
 
-    // ------------------------------------------------------------------ what a timestep is
+    // ------------------------------------------------------------------ what a timestamp is
 
     /**
-     * The files of one timestep, and what makes them structurally different from the anchor.
+     * The files of one timestamp, and what makes them structurally different from the anchor.
      *
      * @param dataSource      the files
-     * @param omittedObjects  how many equipment objects of the anchor the timestep does not carry
+     * @param omittedObjects  how many equipment objects of the anchor the timestamp does not carry
      * @param addedObjects    how many objects it carries that the anchor does not
      * @param omittedLines    the {@code ACLineSegment} identifiers that were dropped, with their dependants
      */
-    record TimestepFiles(ReadOnlyDataSource dataSource, int omittedObjects, int addedObjects,
+    record TimestampFiles(ReadOnlyDataSource dataSource, int omittedObjects, int addedObjects,
                          List<String> omittedLines) {
     }
 
@@ -135,13 +136,13 @@ final class SvedalaTimestepFixtures {
      * The anchor of the day: the unmodified model, claiming the given moment.
      *
      * <p>Only the scenario time of the steady state file is rewritten, because that is what the catalogue reads
-     * the base timestep and the label offset off. Writing it as midnight UTC is what makes the timesteps of the
+     * the base timestamp and the label offset off. Writing it as midnight UTC is what makes the timestamps of the
      * day the labels {@code "00:15"} … {@code "23:45"}.</p>
      *
-     * @param instant the canonical scenario time, for instance {@code 2020-12-02T00:00:00Z}
+     * @param instant the scenario time, for instance {@code 2020-12-02T00:00:00Z}
      * @return a data source holding all five instance files
      */
-    static ReadOnlyDataSource anchor(String instant) {
+    static ReadOnlyDataSource anchor(Instant instant) {
         MemDataSource source = new MemDataSource();
         put(source, SSH, rewriteScenarioTime(file(SSH), instant));
         put(source, EQ, file(EQ));
@@ -150,19 +151,19 @@ final class SvedalaTimestepFixtures {
     }
 
     /**
-     * One timestep of the day.
+     * One timestamp of the day.
      *
-     * @param shape   what the timestep moves
+     * @param shape   what the timestamp moves
      * @param index   the quarter hour, {@code 1} for 00:15 and {@code 95} for 23:45
-     * @param instant the canonical scenario time the files claim
+     * @param instant the scenario time the files claim
      * @return the files and what is structurally different about them
      */
-    static TimestepFiles timestep(Shape shape, int index, String instant) {
+    static TimestampFiles timestamp(Shape shape, int index, Instant instant) {
         String suffix = shape.name().toLowerCase(java.util.Locale.ROOT) + "-" + index;
         if (shape != Shape.STRUCTURAL) {
             MemDataSource source = new MemDataSource();
             put(source, SSH, steadyState(shape, index, instant, suffix, Set.of(), List.of()));
-            return new TimestepFiles(source, 0, 0, List.of());
+            return new TimestampFiles(source, 0, 0, List.of());
         }
         List<String> dropped = omittedLines(index);
         Set<String> removed = removalClosure(dropped);
@@ -170,23 +171,23 @@ final class SvedalaTimestepFixtures {
         MemDataSource source = new MemDataSource();
         put(source, EQ, equipment(instant, suffix, removed, added));
         put(source, SSH, steadyState(shape, index, instant, suffix, removed, added));
-        return new TimestepFiles(source, removed.size(), added.size(), dropped);
+        return new TimestampFiles(source, removed.size(), added.size(), dropped);
     }
 
     /**
-     * The same timestep, with all five profiles shipped rather than the ones that change.
+     * The same timestamp, with all five profiles shipped rather than the ones that change.
      *
      * <p>What it is for: {@code putAsDiff} compares the equipment model and the steady state hypothesis and
      * inherits the rest, but it still has to <em>parse</em> whatever the data source carries. This is how much
      * shipping the whole export costs over shipping what changed.</p>
      *
-     * @param shape   what the timestep moves
+     * @param shape   what the timestamp moves
      * @param index   the quarter hour
-     * @param instant the canonical scenario time
+     * @param instant the scenario time
      * @return the files
      */
-    static ReadOnlyDataSource fullFileSet(Shape shape, int index, String instant) {
-        TimestepFiles files1 = timestep(shape, index, instant);
+    static ReadOnlyDataSource fullFileSet(Shape shape, int index, Instant instant) {
+        TimestampFiles files1 = timestamp(shape, index, instant);
         MemDataSource source = new MemDataSource();
         put(source, SSH, read(files1.dataSource(), SSH));
         put(source, EQ, contains(files1.dataSource(), EQ) ? read(files1.dataSource(), EQ) : file(EQ));
@@ -195,17 +196,17 @@ final class SvedalaTimestepFixtures {
     }
 
     /**
-     * A timestep whose equipment model drifted: one line renamed, nothing else.
+     * A timestamp whose equipment model drifted: one line renamed, nothing else.
      *
-     * <p>"EQ drift" in the sense of {@link TimestepFixtures#eqDrift}: a name is the cheapest change that no
+     * <p>"EQ drift" in the sense of {@link TimestampFixtures#eqDrift}: a name is the cheapest change that no
      * in-place update can apply, so it is what makes the ingested difference take the slow route without changing
      * the shape of the model at all.</p>
      *
      * @param index   the quarter hour
-     * @param instant the canonical scenario time
+     * @param instant the scenario time
      * @return the files
      */
-    static ReadOnlyDataSource eqDrift(int index, String instant) {
+    static ReadOnlyDataSource eqDrift(int index, Instant instant) {
         String suffix = "drift-" + index;
         MemDataSource source = new MemDataSource();
         put(source, EQ, renameFirstLine(rewriteHeader(file(EQ), "urn:uuid:svedala-eq-" + suffix, instant)));
@@ -235,7 +236,7 @@ final class SvedalaTimestepFixtures {
     }
 
     /**
-     * @return how many set points a {@link Shape#RICH} timestep rewrites
+     * @return how many set points a {@link Shape#RICH} timestamp rewrites
      */
     static int richSetPointCount() {
         String text = file(SSH);
@@ -258,7 +259,7 @@ final class SvedalaTimestepFixtures {
 
     // ------------------------------------------------------------------ the steady state file
 
-    private static String steadyState(Shape shape, int index, String instant, String suffix,
+    private static String steadyState(Shape shape, int index, Instant instant, String suffix,
                                       Set<String> removed, List<Copy> added) {
         Document document = ssh();
         StringBuilder out = new StringBuilder(2 << 20);
@@ -285,8 +286,8 @@ final class SvedalaTimestepFixtures {
                 text = scaleAll(text, property, factor);
             }
         }
-        // Whatever the shape, a handful of load set points move by an offset that no other timestep uses: it is
-        // what guarantees that every timestep really differs from the anchor, rather than relying on a factor
+        // Whatever the shape, a handful of load set points move by an offset that no other timestamp uses: it is
+        // what guarantees that every timestamp really differs from the anchor, rather than relying on a factor
         return offsetFirst(text, "EnergyConsumer.p", THIN_LOADS, 7.0 + index);
     }
 
@@ -335,7 +336,7 @@ final class SvedalaTimestepFixtures {
 
     // ------------------------------------------------------------------ the equipment file
 
-    private static String equipment(String instant, String suffix, Set<String> removed, List<Copy> added) {
+    private static String equipment(Instant instant, String suffix, Set<String> removed, List<Copy> added) {
         Document document = eq();
         StringBuilder out = new StringBuilder(6 << 20);
         document.head.forEach(line -> out.append(line).append('\n'));
@@ -353,12 +354,12 @@ final class SvedalaTimestepFixtures {
     }
 
     /**
-     * The {@code ACLineSegment}s a timestep omits: a rolling window over the ninety the model holds.
+     * The {@code ACLineSegment}s a timestamp omits: a rolling window over the ninety the model holds.
      *
      * <p>A window rather than a random draw, so that every line is out for a few quarter hours and back
      * afterwards &mdash; which is what a maintenance schedule looks like from the outside, and which means the
-     * day as a whole both removes and re-adds objects. Every single timestep is nonetheless a difference against
-     * the <em>anchor</em>, because a timestep root pins to the base chain, so a removal is a removal in every one
+     * day as a whole both removes and re-adds objects. Every single timestamp is nonetheless a difference against
+     * the <em>anchor</em>, because a timestamp root pins to the base chain, so a removal is a removal in every one
      * of them.</p>
      */
     private static List<String> omittedLines(int index) {
@@ -397,15 +398,15 @@ final class SvedalaTimestepFixtures {
         return removed;
     }
 
-    /** One object the timestep carries and the anchor does not: a copy under fresh identifiers. */
+    /** One object the timestamp carries and the anchor does not: a copy under fresh identifiers. */
     private record Copy(String originalId, String text, Map<String, String> mapping) {
     }
 
     /**
-     * A line the anchor does not have, in one timestep out of {@link #ADD_EVERY}.
+     * A line the anchor does not have, in one timestamp out of {@link #ADD_EVERY}.
      *
      * <p>A copy of an existing line and of everything that hangs off it, under identifiers derived from the
-     * timestep, so the result is a valid model rather than a dangling reference: the copy keeps the container,
+     * timestamp, so the result is a valid model rather than a dangling reference: the copy keeps the container,
      * the base voltage and the connectivity nodes of its original, which all still exist.</p>
      */
     private static List<Copy> additions(int index, Set<String> removed) {
@@ -442,9 +443,9 @@ final class SvedalaTimestepFixtures {
 
     // ------------------------------------------------------------------ headers
 
-    private static String rewriteScenarioTime(String text, String instant) {
+    private static String rewriteScenarioTime(String text, Instant instant) {
         return text.replaceAll("(<md:Model.scenarioTime>)[^<]*(</md:Model.scenarioTime>)",
-                "$1" + Matcher.quoteReplacement(instant) + "$2");
+                "$1" + Matcher.quoteReplacement(instant.toString()) + "$2");
     }
 
     // ------------------------------------------------------------------ the block model

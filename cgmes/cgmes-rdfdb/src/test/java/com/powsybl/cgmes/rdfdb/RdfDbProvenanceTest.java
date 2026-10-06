@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 /**
  * A network that came out of a database remembers where from, and does not carry that into a file.
  *
- * <p>The later work packages &mdash; writing differences back, following a chain of timesteps &mdash; need the
+ * <p>The later work packages &mdash; writing differences back, following a chain of timestamps &mdash; need the
  * database and the scenario a network was built from, so it is recorded on the network. It must not be
  * serialised: a XIIDM file that claimed a network still belongs to some server would be wrong as soon as the file
  * is moved, which is why the extension has no serialiser and is silently skipped by the exporter.</p>
