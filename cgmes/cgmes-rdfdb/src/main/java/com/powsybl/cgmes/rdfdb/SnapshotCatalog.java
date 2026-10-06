@@ -29,13 +29,15 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
-import java.time.OffsetDateTime;
+import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
-import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -44,7 +46,9 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -58,21 +62,31 @@ import java.util.stream.Stream;
  * eighty-one catalog queries of the CGMES conversion, a forked catalog to maintain and mutable data. Named graphs
  * leave the queries untouched, make every graph cacheable by its IRI, and map one to one onto CGMES itself:
  * {@code md:Model.Supersedes} is the chain of one profile, {@code md:Model.DependentOn} the dependency between
- * them, {@code md:Model.scenarioTime} the timestep. What the snapshot node adds on top is the one thing CGMES has
- * no term for: which models of <em>different</em> profiles belong together.</p>
+ * them, {@code md:Model.scenarioTime} the timestamp, {@code md:Model.modelingAuthoritySet} the tree. What the
+ * snapshot node adds on top is the one thing CGMES has no term for: which models of <em>different</em> profiles
+ * belong together.</p>
  *
  * <h2>The keys</h2>
- * <p>{@code (scenario, timestep, version)}. The scenario is the outermost and is required everywhere: it is one
- * base grid model, one day, and a database is expected to hold several. A scenario has exactly <strong>one
- * root</strong> snapshot; another day is another scenario, never a second root. Below it the version chain is
- * linear: a snapshot has at most one child along a {@code pdb:VersionEdge}, and an attempt to add a second is
- * refused rather than forking. Order is what the chain says, never what comparing two version strings says.</p>
+ * <p>{@code (scenario, modellingAuthority, timestamp, version)}, unique. The scenario is the outermost and is
+ * required everywhere: it is one base grid model, one day, and a database is expected to hold several. Inside a
+ * scenario every modelling authority owns <strong>one tree</strong> with exactly one root; another day is another
+ * scenario, never a second root of the same authority. All trees of a scenario live in its one metadata graph and
+ * share its boundary, so "every authority at this moment" &mdash; a CGM &mdash; is one query ({@link #assembly}).
+ * Below a root the version chain of a timestamp is linear and its versions are integers that only grow: a new
+ * version is greater than the head it is written on, gaps allowed. The profiles a snapshot covers are not a key;
+ * they are what it holds ({@link SnapshotInfo#profiles()}) and what a caller projects on.</p>
  *
  * <h2>Nothing crosses a scenario</h2>
  * <p>One catalogue is bound to one scenario and every query it sends names that scenario's metadata graph. A
  * {@link SnapshotRef} naming another scenario is refused before any query is sent, and no {@code pdb:parent},
  * {@code pdb:state}, {@code pdb:member} or {@code pdb:full} link ever points out of the scenario it was written
- * in &mdash; {@link #verify()} checks exactly that.</p>
+ * in &mdash; {@link #verify()} checks exactly that, and that no link crosses a modelling authority except the
+ * shared boundary.</p>
+ *
+ * <h2>One schema</h2>
+ * <p>The metadata graph carries {@code pdb:schema 3}. A scenario written by the earlier
+ * {@code (scenario, timestep, version)} schema is refused with a message, not migrated: clear it and ingest it
+ * again.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
@@ -80,24 +94,31 @@ public final class SnapshotCatalog {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(SnapshotCatalog.class);
 
-    private static final CgmesSubset SSH = CgmesSubset.STEADY_STATE_HYPOTHESIS;
-    private static final CgmesSubset EQ = CgmesSubset.EQUIPMENT;
+    /** What {@link #putAsDiff} compares when the caller names no profile: the two that carry a schedule. */
+    private static final Set<CgmesSubset> DEFAULT_COMPARED =
+            Set.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS);
 
     private final RdfDbConnection connection;
     private final String scenario;
     private final String metaGraph;
-    private final String catalogNode;
-    private volatile CatalogNode cachedCatalogNode;
+    private final String schemaNode;
+    /** Whether the metadata graph was found to be of this release's schema; it is never written by another. */
+    private volatile boolean schemaChecked;
+    /**
+     * The root of each tree, once read: a root is written once and never changed, so the base timestamp an open
+     * address means costs no request after the first. Only roots that exist are kept.
+     */
+    private final Map<String, SnapshotInfo> rootByAuthority = new ConcurrentHashMap<>();
     private volatile IngestStatistics lastIngest;
 
-    /** How often a whole timestep was answered out of the parent index cache: test-only telemetry. */
+    /** How often a whole timestamp was answered out of the parent index cache: test-only telemetry. */
     private final AtomicLong parentIndexHits = new AtomicLong();
 
     SnapshotCatalog(RdfDbConnection connection, String scenario) {
         this.connection = Objects.requireNonNull(connection);
         this.scenario = RdfDbNames.checkScenario(scenario);
         this.metaGraph = RdfDbNames.metaGraph(scenario);
-        this.catalogNode = RdfDbNames.catalogNode(scenario);
+        this.schemaNode = RdfDbNames.schemaNode(scenario);
     }
 
     /**
@@ -138,14 +159,70 @@ public final class SnapshotCatalog {
         return ref;
     }
 
+    /**
+     * Refuse an address a read cannot resolve: one of another scenario, or one without a modelling authority.
+     *
+     * <p>A read never guesses the authority, because the tree it would pick is another TSO's grid. Only the error
+     * path asks the database, to name the authorities the caller can choose from.</p>
+     *
+     * @param ref the reference to check
+     * @return the reference
+     */
+    SnapshotRef readable(SnapshotRef ref) {
+        check(ref);
+        if (ref.modellingAuthority() == null) {
+            throw new RdfDbException("the address " + ref + " names no modelling authority, and a read needs one:"
+                    + " scenario '" + scenario + "' holds " + modellingAuthorities());
+        }
+        return ref;
+    }
+
+    /**
+     * Refuse a metadata graph of another addressing schema.
+     *
+     * <p>One request the first time a catalogue reads, none afterwards: a graph this release has accepted is only
+     * ever written by this release. Called by every listing, so no read decodes a node of an older schema into a
+     * wrong address.</p>
+     *
+     * @throws RdfDbException if the graph holds snapshots but not {@code pdb:schema 3}, or a node of the earlier
+     *                        {@code (scenario, timestep, version)} schema
+     */
+    void checkSchema() {
+        if (schemaChecked) {
+            return;
+        }
+        List<Map<String, Value>> rows = select("SELECT DISTINCT ?k ?v WHERE {" + graphClause() + "{"
+                + " { " + SparqlText.iri(schemaNode) + " pdb:schema ?v BIND(\"schema\" AS ?k) }"
+                + " UNION { ?x a " + SparqlText.iri(SnapshotRows.LEGACY_CATALOG) + " BIND(\"catalog\" AS ?k) }"
+                + " UNION { ?x " + SparqlText.iri(SnapshotRows.LEGACY_TIMESTEP) + " ?t BIND(\"timestep\" AS ?k) }"
+                + " UNION { ?x a pdb:Snapshot BIND(\"snapshot\" AS ?k) } } }");
+        Map<String, Value> found = new LinkedHashMap<>();
+        rows.forEach(row -> found.put(SnapshotRows.text(row, "k"), row.get("v")));
+        if (found.containsKey("catalog")) {
+            throw SnapshotRows.legacySchema(scenario, "a pdb:Catalog node");
+        }
+        if (found.containsKey("timestep")) {
+            throw SnapshotRows.legacySchema(scenario, "snapshot nodes keyed by pdb:timestep");
+        }
+        Value schema = found.get("schema");
+        if (schema != null && SnapshotRows.intOf(schema) != RdfDbVocabulary.SCHEMA_VERSION) {
+            throw new RdfDbException("scenario '" + scenario + "' carries pdb:schema " + schema.stringValue()
+                    + ", and this release reads only stores of schema " + RdfDbVocabulary.SCHEMA_VERSION
+                    + ": read it with the release that wrote it, or clear the scenario and re-ingest it");
+        }
+        if (schema == null && found.containsKey("snapshot")) {
+            throw SnapshotRows.legacySchema(scenario, "snapshots without a pdb:schema marker");
+        }
+        schemaChecked = true;
+    }
+
     // ------------------------------------------------------------------ reads
 
     /**
      * Whether the scenario holds any snapshot at all.
      *
-     * <p>A scenario that does not is a scenario of the earlier, unversioned shape: its instance file graphs and
-     * its difference chain are still readable, and the first versioned write migrates it, see
-     * {@link #migrateImplicitRoot()}.</p>
+     * <p>A scenario that does not is a scenario of the unversioned flow: its instance file graphs and its
+     * difference chain are read by {@code RdfDbNetworkLoader.load(db, scenario, ...)}.</p>
      *
      * @return whether the scenario is versioned
      */
@@ -154,17 +231,17 @@ public final class SnapshotCatalog {
     }
 
     /**
-     * Every snapshot of the scenario, oldest first.
+     * Every snapshot of the scenario, by modelling authority, oldest first.
      *
      * <p>One request. The metadata graph of a scenario is small by construction, and grouping the rows here is
      * what {@link SnapshotRows} is for. That single request also carries the {@code pdb:fastPredicatesOnly} of the
      * member models, which is what {@link SnapshotInfo#fast()} is derived from.</p>
      *
-     * @return the snapshots, ordered by timestep and then by depth
+     * @return the snapshots, ordered by modelling authority, timestamp and depth
      */
     public List<SnapshotInfo> snapshots() {
-        List<SnapshotInfo> all = new ArrayList<>(snapshotsWhere("", "", "").values());
-        all.sort(SnapshotRows.byTimestepAndDepth());
+        List<SnapshotInfo> all = new ArrayList<>(snapshotsWhere("", "").values());
+        all.sort(SnapshotRows.byTimestampAndDepth());
         return List.copyOf(all);
     }
 
@@ -180,129 +257,160 @@ public final class SnapshotCatalog {
         if (!scenario.equals(RdfDbNames.scenarioOf(snapshotIri))) {
             return Optional.empty();
         }
-        return Optional.ofNullable(snapshotsWhere("BIND(" + SparqlText.iri(snapshotIri) + " AS ?s) ", "", "")
+        return Optional.ofNullable(snapshotsWhere("BIND(" + SparqlText.iri(snapshotIri) + " AS ?s) ", "")
                 .get(snapshotIri));
     }
 
     /**
      * Resolve an address to the snapshot it names.
      *
-     * @param ref the address; a {@code null} version means the head of the chain, a {@code null} timestep the base
-     *            timestep of this scenario
+     * <p>One request: an open timestamp is resolved to the root's of that modelling authority inside it.</p>
+     *
+     * @param ref the address; a {@code null} version means the head of the chain, a {@code null} timestamp the base
+     *            timestamp of the modelling authority's tree
      * @return the snapshot, or empty when the scenario holds none at that address
-     * @throws RdfDbException if the address names another scenario
+     * @throws RdfDbException if the address names another scenario or no modelling authority
      */
     public Optional<SnapshotInfo> find(SnapshotRef ref) {
-        check(ref);
-        String timestep = ref.timestep() == null ? baseTimestepOrNull() : ref.timestep();
-        if (timestep == null) {
-            return Optional.empty();
-        }
-        String pattern = ref.isLatest()
-                ? " FILTER NOT EXISTS {" + graphClause() + "{ ?c pdb:parent ?s ; pdb:edge pdb:VersionEdge } } "
-                : " ";
-        String version = ref.isLatest() ? "" : " ; pdb:version " + SparqlText.str(ref.version());
-        Map<String, SnapshotInfo> found = snapshotsWhere("", " ; pdb:timestep " + SparqlText.str(timestep) + version,
-                pattern);
+        readable(ref);
+        Map<String, SnapshotInfo> found = snapshotsWhere(addressPattern("?s", ref), "");
         if (found.size() > 1) {
-            throw new RdfDbException("the metadata graph of scenario '" + scenario + "' is inconsistent: timestep "
-                    + timestep + " has " + found.size() + " heads " + found.keySet() + ", and the version chain of"
-                    + " a timestep is linear. No write of this release can produce that state");
+            throw new RdfDbException("the metadata graph of scenario '" + scenario + "' is inconsistent: " + ref
+                    + " names " + found.size() + " snapshots " + found.keySet() + ", and the version chain of a"
+                    + " timestamp is linear. No write of this release can produce that state");
         }
         return found.values().stream().findFirst();
     }
 
     /**
-     * The newest version of a timestep.
+     * The graph pattern that binds a variable to the snapshot an address names, inside the metadata graph.
      *
-     * @param timestep the canonical timestep, or {@code null} for the base timestep of this scenario
-     * @return the head snapshot, or empty
+     * <p>Shared by {@link #find} and the plan query of {@link VersionGraph}, so that an address means the same in
+     * both. An open timestamp joins the root of the authority's tree, which is what "the base timestamp" is; an
+     * open version excludes every snapshot that has a version successor, which on a linear chain is the head.</p>
+     *
+     * @param var the variable, with its {@code ?}; the pattern also uses {@code var} plus {@code Base},
+     *            {@code Root} and {@code Child}
+     * @param ref the address, with a modelling authority
+     * @return the pattern, ending with a space
      */
-    public Optional<SnapshotInfo> head(String timestep) {
-        return find(SnapshotRef.latestAt(scenario, timestep));
+    static String addressPattern(String var, SnapshotRef ref) {
+        String authority = SparqlText.str(ref.modellingAuthority());
+        StringBuilder pattern = new StringBuilder(var).append(" a pdb:Snapshot ; pdb:modellingAuthority ")
+                .append(authority).append(" ; pdb:timestamp ")
+                .append(ref.timestamp() == null ? var + "Base" : SparqlText.dateTime(ref.timestamp()));
+        if (ref.version() != null) {
+            pattern.append(" ; pdb:version ").append(SparqlText.integer(ref.version()));
+        }
+        pattern.append(" . ");
+        if (ref.timestamp() == null) {
+            pattern.append(var).append("Root pdb:depth ").append(SparqlText.integer(0))
+                    .append(" ; pdb:modellingAuthority ").append(authority)
+                    .append(" ; pdb:timestamp ").append(var).append("Base . ");
+        }
+        if (ref.version() == null) {
+            pattern.append("FILTER NOT EXISTS { ").append(var).append("Child pdb:parent ").append(var)
+                    .append(" ; pdb:edge pdb:VersionEdge } ");
+        }
+        return pattern.toString();
     }
 
     /**
-     * The root snapshot of the scenario.
+     * The newest version of a timestamp of a modelling authority.
      *
-     * @return the root, or empty when the scenario is not versioned
+     * @param modellingAuthority the modelling authority set
+     * @param timestamp          the moment, or {@code null} for the base timestamp of its tree
+     * @return the head snapshot, or empty
      */
-    public Optional<SnapshotInfo> root() {
-        return snapshotsWhere("", " ; pdb:depth " + SparqlText.integer(0), "").values().stream().findFirst();
+    public Optional<SnapshotInfo> head(String modellingAuthority, Instant timestamp) {
+        return find(SnapshotRef.latestAt(scenario, modellingAuthority, timestamp));
+    }
+
+    /**
+     * The root snapshot of a modelling authority's tree.
+     *
+     * @param modellingAuthority the modelling authority set
+     * @return the root, or empty when the scenario holds no tree of that authority
+     */
+    public Optional<SnapshotInfo> root(String modellingAuthority) {
+        Objects.requireNonNull(modellingAuthority);
+        SnapshotInfo cached = rootByAuthority.get(modellingAuthority);
+        if (cached != null) {
+            return Optional.of(cached);
+        }
+        Optional<SnapshotInfo> root = snapshotsWhere("?s pdb:depth " + SparqlText.integer(0)
+                + " ; pdb:modellingAuthority " + SparqlText.str(modellingAuthority) + " . ", "").values().stream()
+                .findFirst();
+        root.ifPresent(info -> rootByAuthority.put(modellingAuthority, info));
+        return root;
+    }
+
+    /**
+     * The roots of every tree of the scenario, in one request.
+     *
+     * @return the root per modelling authority, sorted by authority
+     */
+    private Map<String, SnapshotInfo> roots() {
+        Map<String, SnapshotInfo> roots = new TreeMap<>();
+        snapshotsWhere("?s pdb:depth " + SparqlText.integer(0) + " . ", "").values()
+                .forEach(root -> roots.put(root.modellingAuthority(), root));
+        rootByAuthority.putAll(roots);
+        return roots;
+    }
+
+    /**
+     * The modelling authorities the scenario holds a tree of.
+     *
+     * @return the modelling authority sets, sorted
+     */
+    public List<String> modellingAuthorities() {
+        return List.copyOf(roots().keySet());
+    }
+
+    /**
+     * The one modelling authority of the scenario, for the entry points that are addressed by scenario alone.
+     *
+     * @return the authority
+     * @throws RdfDbException if the scenario holds none or several
+     */
+    String onlyAuthority() {
+        List<String> all = modellingAuthorities();
+        if (all.size() != 1) {
+            throw new RdfDbException("scenario '" + scenario + "' holds " + (all.isEmpty() ? "no snapshot tree"
+                    : "the trees of the modelling authorities " + all) + ", and an entry point addressed by the"
+                    + " scenario alone reads a scenario of exactly one: address a snapshot with a SnapshotRef");
+        }
+        return all.get(0);
     }
 
     /**
      * The snapshots matching a pattern, with their members' fast flags, in one request.
      *
-     * @param bind        a {@code BIND} of {@code ?s}, or empty
-     * @param restriction more properties {@code ?s} must have, starting with {@code " ; "}, or empty
+     * @param pattern     graph patterns binding or restricting {@code ?s}, each ending with a space, or empty
      * @param outerFilter a filter after the snapshot pattern, or empty
      * @return the snapshots, keyed by IRI
      */
-    private Map<String, SnapshotInfo> snapshotsWhere(String bind, String restriction, String outerFilter) {
+    private Map<String, SnapshotInfo> snapshotsWhere(String pattern, String outerFilter) {
+        checkSchema();
         return SnapshotRows.group(scenario, select("SELECT ?s ?p ?o ?sub ?mkind ?mfast WHERE {" + graphClause()
-                + "{ " + bind + "?s a pdb:Snapshot" + restriction + " ; ?p ?o OPTIONAL { ?o pdb:subset ?sub }"
+                + "{ " + pattern + "?s a pdb:Snapshot ; ?p ?o OPTIONAL { ?o pdb:subset ?sub }"
                 + SnapshotRows.MEMBER_FAST_CLAUSE + "}" + outerFilter + " }"), "s");
     }
 
     /**
-     * The timestep of the root of this scenario, which is the day it describes.
+     * The timestamp of the root of a modelling authority's tree, which is the moment its base describes.
      *
-     * @return the canonical timestep
-     * @throws RdfDbException if the scenario holds no snapshot
+     * @param modellingAuthority the modelling authority set
+     * @return the base timestamp
+     * @throws RdfDbException if the scenario holds no tree of that authority
      */
-    public String baseTimestep() {
-        String base = baseTimestepOrNull();
-        if (base == null) {
-            throw new RdfDbException("scenario '" + scenario + "' has no root snapshot: putFull first");
-        }
-        return base;
+    public Instant baseTimestamp(String modellingAuthority) {
+        return root(modellingAuthority).map(SnapshotInfo::timestamp).orElseThrow(() -> noRoot(modellingAuthority));
     }
 
-    /**
-     * @return the zone offset the labels of this scenario are written in, {@code Z} when unknown
-     */
-    public String baseOffset() {
-        CatalogNode node = catalogNode();
-        return node == null || node.offset == null ? "Z" : node.offset;
-    }
-
-    private String baseTimestepOrNull() {
-        CatalogNode node = catalogNode();
-        return node == null ? null : node.timestep;
-    }
-
-    private CatalogNode catalogNode() {
-        CatalogNode cached = cachedCatalogNode;
-        if (cached != null) {
-            return cached;
-        }
-        List<Map<String, Value>> rows = select("SELECT ?p ?o WHERE {" + graphClause() + "{ "
-                + SparqlText.iri(catalogNode) + " ?p ?o } }");
-        String timestep = null;
-        String offset = null;
-        for (Map<String, Value> row : rows) {
-            Value p = row.get("p");
-            Value o = row.get("o");
-            if (p == null || o == null) {
-                continue;
-            }
-            if (RdfDbVocabulary.BASE_TIMESTEP.equals(p.stringValue())) {
-                timestep = o.stringValue();
-            } else if (RdfDbVocabulary.BASE_OFFSET.equals(p.stringValue())) {
-                offset = o.stringValue();
-            }
-        }
-        if (timestep == null) {
-            return null;
-        }
-        CatalogNode node = new CatalogNode(timestep, offset);
-        cachedCatalogNode = node;
-        return node;
-    }
-
-    /** The per-scenario catalogue node, cached: it is written once by {@code putFull} and never changed. */
-    private record CatalogNode(String timestep, String offset) {
+    private RdfDbException noRoot(String modellingAuthority) {
+        return new RdfDbException("scenario '" + scenario + "' has no root snapshot of modelling authority '"
+                + modellingAuthority + "': putFull first");
     }
 
     /**
@@ -336,7 +444,8 @@ public final class SnapshotCatalog {
      * @return the snapshot, or empty
      */
     Optional<SnapshotInfo> byState(Map<CgmesSubset, String> ids) {
-        List<String> stateIds = Stream.of(EQ, SSH).map(ids::get).filter(Objects::nonNull).toList();
+        List<String> stateIds = Stream.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS)
+                .map(ids::get).filter(Objects::nonNull).toList();
         if (stateIds.isEmpty()) {
             return Optional.empty();
         }
@@ -355,100 +464,94 @@ public final class SnapshotCatalog {
     }
 
     /**
-     * Resolve a version and a timestep text into an address of this scenario.
+     * One timestamp of a modelling authority's tree: its root, its head and how many versions it holds.
      *
-     * <p>The timestep text may be an ISO instant, an offset date-time, a {@code "8:30"} label of this scenario's
-     * base day, or {@code null} for the base timestep. A label is <strong>always</strong> resolved against this
-     * scenario's own base day and offset, so the same label means two different moments in two scenarios that
-     * describe two days.</p>
-     *
-     * @param version      the version label, or {@code null} for the newest one
-     * @param timestepText the timestep text, or {@code null}
-     * @return the address
+     * @param scenario           the scenario
+     * @param modellingAuthority the modelling authority set
+     * @param timestamp          the moment
+     * @param root               the IRI of the timestamp's root snapshot
+     * @param head               the IRI of the newest version of the timestamp
+     * @param versionCount       how many snapshots the timestamp holds
+     * @param pinnedBase         the IRI of the base-chain snapshot the root hangs off, {@code null} for the base
+     *                           timestamp
      */
-    public SnapshotRef resolve(String version, String timestepText) {
-        if (timestepText == null || timestepText.isBlank()) {
-            return SnapshotRef.of(scenario, version);
-        }
-        if (Timesteps.isLabel(timestepText)) {
-            return new SnapshotRef(scenario, version,
-                    Timesteps.resolveLabel(timestepText, baseTimestep(), baseOffset()));
-        }
-        return SnapshotRef.of(scenario, version, timestepText);
+    public record TimestampInfo(String scenario, String modellingAuthority, Instant timestamp, String root,
+                                String head, int versionCount, String pinnedBase) {
     }
 
     /**
-     * One timestep of this scenario: its root, its head and how many versions it holds.
+     * The timestamps of a modelling authority's tree, oldest first.
      *
-     * @param scenario   the scenario
-     * @param timestep   the canonical timestep
-     * @param label      the {@code HH:MM} label
-     * @param root       the IRI of the timestep's root snapshot
-     * @param head       the IRI of the newest version of the timestep
-     * @param versionCount how many snapshots the timestep holds
-     * @param pinnedBase the IRI of the base-chain snapshot the root hangs off, {@code null} for the base timestep
+     * @param modellingAuthority the modelling authority set
+     * @return one row per timestamp
      */
-    public record TimestepInfo(String scenario, String timestep, String label, String root, String head,
-                               int versionCount, String pinnedBase) {
-    }
-
-    /**
-     * The timesteps of this scenario, oldest first.
-     *
-     * @return one row per timestep
-     */
-    public List<TimestepInfo> timesteps() {
+    public List<TimestampInfo> timestamps(String modellingAuthority) {
+        Objects.requireNonNull(modellingAuthority);
         Map<String, List<SnapshotInfo>> byRoot = new LinkedHashMap<>();
-        snapshots().forEach(info -> byRoot.computeIfAbsent(info.timestepRoot(), k -> new ArrayList<>()).add(info));
-        List<TimestepInfo> rows = new ArrayList<>();
+        snapshots().stream().filter(info -> info.modellingAuthority().equals(modellingAuthority))
+                .forEach(info -> byRoot.computeIfAbsent(info.timestampRoot(), k -> new ArrayList<>()).add(info));
+        List<TimestampInfo> rows = new ArrayList<>();
         byRoot.forEach((rootIri, versions) -> {
             SnapshotInfo rootInfo = versions.stream().filter(info -> info.iri().equals(rootIri)).findFirst()
                     .orElse(versions.get(0));
             SnapshotInfo headInfo = versions.stream().max(Comparator.comparingInt(SnapshotInfo::depth))
                     .orElse(rootInfo);
-            rows.add(new TimestepInfo(scenario, rootInfo.timestep(), rootInfo.timestepLabel(), rootIri, headInfo.iri(),
+            rows.add(new TimestampInfo(scenario, modellingAuthority, rootInfo.timestamp(), rootIri, headInfo.iri(),
                     versions.size(), rootInfo.parent()));
         });
-        rows.sort(Comparator.comparing(TimestepInfo::timestep));
+        rows.sort(Comparator.comparing(TimestampInfo::timestamp));
         return List.copyOf(rows);
     }
 
     /**
-     * The versions of one timestep, oldest first.
+     * The versions of one timestamp of a modelling authority, oldest first.
      *
-     * @param timestepText the timestep text, or {@code null} for the base timestep
-     * @return the snapshots of that timestep
+     * @param modellingAuthority the modelling authority set
+     * @param timestamp          the moment, or {@code null} for the base timestamp of its tree
+     * @return the snapshots of that timestamp
      */
-    public List<SnapshotInfo> versions(String timestepText) {
-        String timestep = resolve(null, timestepText).timestep();
-        String canonical = timestep == null ? baseTimestep() : timestep;
-        return snapshots().stream().filter(info -> info.timestep().equals(canonical)).toList();
+    public List<SnapshotInfo> versions(String modellingAuthority, Instant timestamp) {
+        Instant moment = timestamp == null ? baseTimestamp(modellingAuthority)
+                : timestamp.truncatedTo(ChronoUnit.SECONDS);
+        return snapshots().stream().filter(info -> info.modellingAuthority().equals(modellingAuthority)
+                && info.timestamp().equals(moment)).toList();
     }
 
     /**
-     * The label a new version on top of a timestep would get.
+     * The version a new snapshot at an address gets when the caller names none: the head's plus one, 1 when the
+     * timestamp has no snapshot yet.
      *
-     * <p>The head's label with its last numeric component incremented: {@code "1.1"} becomes {@code "1.2"},
-     * {@code "v7"} becomes {@code "v8"}, and a label with no number at all gets {@code ".1"} appended. It is a
-     * convenience, not a rule: any label the pattern of {@link SnapshotRef} accepts is a valid version.</p>
-     *
-     * @param timestep the canonical timestep, or {@code null} for the base timestep
-     * @return the suggested label
+     * @param ref the address; its version is ignored
+     * @return the next version
      */
-    public String nextVersionLabel(String timestep) {
-        return head(timestep).map(info -> increment(info.version())).orElse("1.0");
+    public int nextVersion(SnapshotRef ref) {
+        readable(ref);
+        return find(SnapshotRef.latestAt(scenario, ref.modellingAuthority(), ref.timestamp()))
+                .map(head -> head.version() + 1).orElse(1);
     }
 
-    static String increment(String label) {
-        int end = label.length();
-        while (end > 0 && Character.isDigit(label.charAt(end - 1))) {
-            end--;
-        }
-        if (end == label.length()) {
-            return label + ".1";
-        }
-        long value = Long.parseLong(label.substring(end));
-        return label.substring(0, end) + (value + 1);
+    /**
+     * Every modelling authority of the scenario at one moment: what a CGM is assembled from.
+     *
+     * <p>A query, not a stored assembly: one request over the scenario's metadata graph, where the trees of all its
+     * authorities live. An authority with no snapshot at that moment is absent from the answer. The shared boundary
+     * is in the {@link SnapshotInfo#state()} of every entry ({@code EQ_BD}, {@code TP_BD}), the same in all of them.
+     * Loading the result as one network stays the caller's: load each entry by its {@link SnapshotInfo#ref()} and
+     * merge.</p>
+     *
+     * @param timestamp the moment
+     * @param version   the version every authority is taken at, or {@code null} for the head of each
+     * @return the snapshot per modelling authority, sorted by authority
+     */
+    public Map<String, SnapshotInfo> assembly(Instant timestamp, Integer version) {
+        Objects.requireNonNull(timestamp);
+        SnapshotRef moment = SnapshotRef.of(scenario, null, timestamp, version);
+        String restriction = "?s pdb:timestamp " + SparqlText.dateTime(moment.timestamp())
+                + (version == null ? "" : " ; pdb:version " + SparqlText.integer(version)) + " . ";
+        Map<String, SnapshotInfo> byAuthority = new TreeMap<>();
+        snapshotsWhere(restriction, "").values().forEach(info -> byAuthority.merge(info.modellingAuthority(), info,
+                (a, b) -> a.depth() >= b.depth() ? a : b));
+        return byAuthority;
     }
 
     private List<Map<String, Value>> select(String body) {
@@ -458,37 +561,42 @@ public final class SnapshotCatalog {
     // ------------------------------------------------------------------ writes
 
     /**
-     * Upload CGMES instance files as the root snapshot of this scenario.
+     * Upload CGMES instance files as the root snapshot of one modelling authority's tree.
      *
      * <p>The files are parsed once into a scratch store, their graphs are copied into immutable graphs of this
      * scenario, and one guarded request then writes a model node per file plus the snapshot that ties them
-     * together. The guard is what makes "one root per scenario" a property of the database rather than of the
-     * caller: a second root, or a second upload of the same model, is refused.</p>
+     * together. The guard is what makes "one root per modelling authority" a property of the database rather than
+     * of the caller: a second root of the same authority, or a second upload of the same model, is refused.</p>
+     *
+     * <p>The boundary is shared by the scenario. The first root uploads it and marks its models
+     * {@code pdb:boundary}; every later root &mdash; another modelling authority of the same day &mdash; must carry
+     * the very same boundary models, whose stored graphs it then links into its own state rather than uploading them
+     * again. A root with another boundary is refused: a new boundary is a new scenario.</p>
      *
      * @param ds           the data source holding the instance files
      * @param boundary     the data source holding the boundary files, or {@code null} when {@code ds} carries them
-     * @param ref          the address of the root; its version is required, its timestep may be left open and is
-     *                     then taken from {@code md:Model.scenarioTime} of the steady state file
+     * @param ref          the address of the root. Its modelling authority may be {@code null} and is then the
+     *                     {@code md:Model.modelingAuthoritySet} the files state; its timestamp may be {@code null}
+     *                     and is then the {@code md:Model.scenarioTime} of the steady state file; its version may be
+     *                     {@code null} and is then 1
+     * @param profiles     the profiles to store, or {@code null} or empty for every profile the files carry. The
+     *                     boundary is always stored: it belongs to the scenario, not to the projection
      * @param importParams the CGMES import parameters, for the identifier options of the parser
      * @param rn           where the parse reports
      * @return the root snapshot
-     * @throws RdfDbConflictException if the scenario already has a root, or already holds one of the models
+     * @throws RdfDbConflictException if the modelling authority already has a root, if the boundary is not the one
+     *                                the scenario shares, or if the scenario already holds one of the models
      */
     public SnapshotInfo putFull(ReadOnlyDataSource ds, ReadOnlyDataSource boundary, SnapshotRef ref,
-                                Properties importParams, ReportNode rn) {
+                                Set<CgmesSubset> profiles, Properties importParams, ReportNode rn) {
         check(ref);
         Objects.requireNonNull(ds);
-        if (ref.version() == null) {
-            throw new RdfDbException("putFull needs an explicit version: \"latest\" means nothing before the first"
-                    + " snapshot of scenario '" + scenario + "' exists");
-        }
-        // One request, before the parse: a scenario that already has a root will refuse this write whatever the
+        // One request, before the parse: an authority that already has a root will refuse this write whatever the
         // files say, and parsing a fourteen-megabyte data source first to find that out is wasted work
-        root().ifPresent(existing -> {
-            throw new RdfDbConflictException("scenario '" + scenario + "' timestep " + existing.timestep()
-                    + " already has a root snapshot (version " + existing.version() + "); use putDiff or"
-                    + " Checkpoint. Another day is another scenario");
-        });
+        Map<String, SnapshotInfo> roots = roots();
+        if (ref.modellingAuthority() != null) {
+            refuseSecondRoot(roots, ref.modellingAuthority());
+        }
         ReportNode report = rn == null ? ReportNode.NO_OP : rn;
         CgmesImport importer = TripleStoreNetworkLoader.importer();
         TripleStoreOptions options = importer.tripleStoreOptions(importParams);
@@ -497,34 +605,107 @@ public final class SnapshotCatalog {
         try {
             CgmesTripleStoreLoader.Result parsed =
                     CgmesTripleStoreLoader.load(ds, boundary, scratch, 1, report);
-            Map<String, Header> headers = readHeaders(repository, parsed.contextNames());
-            String timestep = timestepOf(ref, headers);
-            String offset = offsetOf(scenarioTimeText(headers));
+            Map<String, Header> headers = project(readHeaders(repository, parsed.contextNames()), profiles);
+            String authority = authorityOf(statedAuthorities(headers.values()), ref.modellingAuthority(),
+                    "the instance files");
+            refuseSecondRoot(roots, authority);
+            Instant timestamp = ref.timestamp() != null ? ref.timestamp() : scenarioTimeOf(headers);
+            int version = ref.version() == null ? 1 : ref.version();
+            Set<String> shared = sharedBoundary(headers, roots, authority);
+            Map<String, Header> own = new LinkedHashMap<>(headers);
+            own.values().removeIf(header -> shared.contains(header.id));
             Map<String, String> localToRemote = new LinkedHashMap<>();
-            headers.forEach((context, header) ->
-                    localToRemote.put(context, RdfDbNames.fullGraph(scenario, header.id)));
-            refuseKnownModels(headers.values().stream().map(h -> h.id).toList());
+            own.forEach((context, header) -> localToRemote.put(context, RdfDbNames.fullGraph(scenario, header.id)));
+            refuseKnownModels(own.values().stream().map(h -> h.id).toList());
 
             List<String> uploaded = new GraphUploader(connection, scenario).upload(repository, localToRemote);
-            String snapshotIri = RdfDbNames.snapshot(scenario, timestep, ref.version());
-            String label = Timesteps.label(timestep, offset);
-            sparql().update(rootWrite(headers, localToRemote, parsed, snapshotIri, ref.version(), timestep, label,
-                    offset, counts(repository, headers.keySet())));
-            cachedCatalogNode = null;
+            String snapshotIri = RdfDbNames.snapshot(scenario, authority, timestamp, version);
+            Map<CgmesSubset, String> state = new EnumMap<>(CgmesSubset.class);
+            headers.forEach((context, header) -> state.put(GraphInfo.subsetOf(context), header.id));
+            sparql().update(rootWrite(own, localToRemote, parsed, state,
+                    RdfDbDifferenceSink.SnapshotWrite.root(snapshotIri, authority, version, timestamp, state),
+                    counts(repository, own.keySet())));
             // A new root is a new set of states, and the decoded parents of the old ones are of no use to anyone
             connection.forgetParentIndexes(scenario);
             SnapshotInfo written = info(snapshotIri).orElse(null);
             if (written == null) {
                 connection.catalog(scenario).dropGraphs(uploaded);
-                throw new RdfDbConflictException("the root snapshot " + ref + " was not written: another writer"
-                        + " created the root of scenario '" + scenario + "' first");
+                throw new RdfDbConflictException("the root snapshot " + snapshotIri + " was not written: another"
+                        + " writer created the root of modelling authority '" + authority + "' of scenario '"
+                        + scenario + "', or its boundary, first");
             }
-            LOGGER.info("Stored the root snapshot {} of scenario '{}' with {} model(s)", written, scenario,
-                    headers.size());
+            LOGGER.info("Stored the root snapshot {} of scenario '{}' with {} model(s), {} of them the shared"
+                    + " boundary", written, scenario, headers.size(), shared.size());
             return written;
         } finally {
             scratch.close();
         }
+    }
+
+    private void refuseSecondRoot(Map<String, SnapshotInfo> roots, String authority) {
+        SnapshotInfo existing = roots.get(authority);
+        if (existing != null) {
+            throw new RdfDbConflictException("modelling authority '" + authority + "' of scenario '" + scenario
+                    + "' already has a root snapshot " + existing + "; use putDiff, putAsDiff or Checkpoint. Another"
+                    + " day is another scenario");
+        }
+    }
+
+    /** The headers of the projected profiles, the boundary always included. */
+    private static Map<String, Header> project(Map<String, Header> headers, Set<CgmesSubset> profiles) {
+        if (profiles == null || profiles.isEmpty()) {
+            return headers;
+        }
+        Set<CgmesSubset> carried = headers.keySet().stream().map(GraphInfo::subsetOf).collect(Collectors.toSet());
+        Set<CgmesSubset> missing = EnumSet.copyOf(profiles);
+        missing.removeAll(carried);
+        if (!missing.isEmpty()) {
+            throw new RdfDbException("the profiles " + missing + " are to be stored but the files carry none of them;"
+                    + " they carry " + new TreeSet<>(carried));
+        }
+        Map<String, Header> projected = new LinkedHashMap<>(headers);
+        projected.keySet().removeIf(context -> {
+            CgmesSubset subset = GraphInfo.subsetOf(context);
+            return !profiles.contains(subset) && !StoredModel.isBoundaryProfile(subset);
+        });
+        return projected;
+    }
+
+    /**
+     * The boundary models a new root links instead of uploading: the ones the scenario's other roots share.
+     *
+     * @return the identifiers of the shared boundary models, empty for the first root of the scenario
+     * @throws RdfDbConflictException if the files carry another boundary than the one the scenario shares
+     */
+    private Set<String> sharedBoundary(Map<String, Header> headers, Map<String, SnapshotInfo> roots,
+                                       String authority) {
+        if (roots.isEmpty()) {
+            return Set.of();
+        }
+        Map<CgmesSubset, String> stored = boundaryOf(roots.values().iterator().next().state());
+        Map<CgmesSubset, String> files = new EnumMap<>(CgmesSubset.class);
+        headers.forEach((context, header) -> {
+            CgmesSubset subset = GraphInfo.subsetOf(context);
+            if (StoredModel.isBoundaryProfile(subset)) {
+                files.put(subset, header.id);
+            }
+        });
+        if (!stored.equals(files)) {
+            throw new RdfDbConflictException("the files of modelling authority '" + authority + "' carry the boundary "
+                    + files + ", but scenario '" + scenario + "' shares the boundary " + stored + " among "
+                    + roots.keySet() + ": a new boundary is a new scenario");
+        }
+        return Set.copyOf(stored.values());
+    }
+
+    private static Map<CgmesSubset, String> boundaryOf(Map<CgmesSubset, String> state) {
+        Map<CgmesSubset, String> boundary = new EnumMap<>(CgmesSubset.class);
+        state.forEach((subset, id) -> {
+            if (StoredModel.isBoundaryProfile(subset)) {
+                boundary.put(subset, id);
+            }
+        });
+        return boundary;
     }
 
     private void refuseKnownModels(List<String> ids) {
@@ -536,12 +717,52 @@ public final class SnapshotCatalog {
     }
 
     /**
-     * Write a difference set as a new version on top of the head of its timestep.
+     * The modelling authority a write belongs to: the one its address names, checked against what the models
+     * state, or the one the models state when the address names none.
+     *
+     * <p>Checked like the scenario time: a member that states an authority states the snapshot's. The boundary of
+     * a root is not asked, it is the scenario's and states the authority of whoever maintains it.</p>
+     *
+     * @param stated what the members state, each at most once
+     * @param given  the authority of the address, or {@code null}
+     * @param what   what the members are, for the message
+     * @return the authority
+     */
+    private String authorityOf(Set<String> stated, String given, String what) {
+        if (given == null) {
+            if (stated.size() == 1) {
+                return stated.iterator().next();
+            }
+            throw new RdfDbException(stated.isEmpty()
+                    ? what + " of scenario '" + scenario + "' state no md:Model.modelingAuthoritySet: pass the"
+                        + " modelling authority in the address"
+                    : what + " of scenario '" + scenario + "' state the modelling authorities " + stated
+                        + ", and one snapshot belongs to one");
+        }
+        if (!stated.isEmpty() && !stated.equals(Set.of(given))) {
+            throw new RdfDbException(what + " state the modelling authority " + stated + " but are written into the"
+                    + " tree of '" + given + "' of scenario '" + scenario + "': a snapshot and its members belong to"
+                    + " one modelling authority");
+        }
+        return given;
+    }
+
+    /** The {@code md:Model.modelingAuthoritySet} the non-boundary files state. */
+    private static Set<String> statedAuthorities(Collection<Header> headers) {
+        return headers.stream()
+                .filter(header -> !StoredModel.isBoundaryProfile(header.subset))
+                .map(header -> header.term(RdfDbVocabulary.MODEL_MODELING_AUTHORITY_SET))
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(TreeSet::new));
+    }
+
+    /**
+     * Write a difference set as a new version on top of the head of its timestamp.
      *
      * @param set    the difference models, one per profile at most
      * @param target the address the new snapshot gets
      * @return the new snapshot
-     * @throws RdfDbConflictException if the address is taken, the chain would fork, or a difference does not
+     * @throws RdfDbConflictException if the version does not grow, the chain would fork, or a difference does not
      *                                supersede the state of its profile at the parent
      */
     public SnapshotInfo putDiff(DifferenceModelSet set, SnapshotRef target) {
@@ -549,35 +770,52 @@ public final class SnapshotCatalog {
     }
 
     /**
-     * Write a difference set as a new version on top of the head of its timestep.
+     * Write a difference set as a new version on top of the head of its timestamp.
+     *
+     * <p>The profiles the new snapshot touches are the profiles of the set; every other profile is inherited from
+     * the parent.</p>
      *
      * @param set        the difference models
-     * @param target     the address the new snapshot gets
+     * @param target     the address the new snapshot gets. A {@code null} modelling authority is the one the
+     *                   difference headers state; a {@code null} timestamp is the base timestamp of that
+     *                   authority's tree; a {@code null} version is the head's plus one (1 for a new timestamp).
+     *                   An explicit version must be greater than the head's; gaps are allowed
      * @param reportNode where the write reports
      * @return the new snapshot
      */
     public SnapshotInfo putDiff(DifferenceModelSet set, SnapshotRef target, ReportNode reportNode) {
         Objects.requireNonNull(set);
         check(target);
-        if (target.version() == null) {
-            throw new RdfDbException("putDiff needs an explicit version; SnapshotCatalog.nextVersionLabel"
-                    + " suggests one");
-        }
+        checkSchema();
         List<DifferenceModel> models = set.models().values().stream().filter(m -> !m.isEmpty()).toList();
         if (models.isEmpty()) {
             throw new RdfDbException("no difference to store as " + target + " of scenario '" + scenario + "'");
         }
-        String timestep = target.timestep() == null ? baseTimestep() : target.timestep();
-        checkScenarioTimes(models, timestep);
-        // A timestep this scenario does not hold yet becomes a new timestep root hanging off the base chain; a
-        // timestep it already holds grows another version inside itself
-        Optional<SnapshotInfo> existingHead = head(timestep);
-        boolean newTimestep = existingHead.isEmpty();
-        SnapshotInfo parent = newTimestep ? pin(models, timestep) : existingHead.get();
-        if (!newTimestep) {
-            checkNotASecondRoot(models, parent, timestep);
+        String authority = authorityOf(models.stream().map(model -> model.header().modelingAuthoritySet())
+                .filter(Objects::nonNull).collect(Collectors.toCollection(TreeSet::new)),
+                target.modellingAuthority(), "the difference models");
+        // One request: an open timestamp is the base one, resolved inside the head lookup. A timestamp this tree
+        // does not hold yet becomes a new timestamp root hanging off the base chain; a timestamp it already holds
+        // grows another version inside itself
+        Optional<SnapshotInfo> existingHead = head(authority, target.timestamp());
+        if (existingHead.isEmpty() && target.timestamp() == null) {
+            throw noRoot(authority);
         }
-        checkVersionIsNew(timestep, target.version());
+        Instant timestamp = existingHead.map(SnapshotInfo::timestamp).orElse(target.timestamp());
+        checkScenarioTimes(models, timestamp);
+        boolean newTimestamp = existingHead.isEmpty();
+        SnapshotInfo parent = newTimestamp ? pin(models, authority, timestamp) : existingHead.get();
+        int version;
+        if (newTimestamp) {
+            version = target.version() == null ? 1 : target.version();
+        } else {
+            if (target.timestamp() != null) {
+                checkNotASecondRoot(models, parent, authority, timestamp);
+            }
+            version = target.version() == null ? parent.version() + 1 : target.version();
+            checkVersionGrows(parent, version);
+        }
+        SnapshotRef address = SnapshotRef.of(scenario, authority, timestamp, version);
         checkSupersedes(models, parent);
 
         Map<CgmesSubset, String> state = new EnumMap<>(parent.state());
@@ -589,54 +827,55 @@ public final class SnapshotCatalog {
         }
         // The fast-route capability of the new snapshot is not computed here and not written: the sink records it
         // per difference model as pdb:fastPredicatesOnly, and SnapshotInfo.fast() is the conjunction of those
-        String snapshotIri = RdfDbNames.snapshot(scenario, timestep, target.version());
-        RdfDbDifferenceSink.SnapshotWrite write = new RdfDbDifferenceSink.SnapshotWrite(snapshotIri,
-                target.version(), timestep, Timesteps.label(timestep, baseOffset()), parent.iri(),
-                newTimestep ? RdfDbVocabulary.TIMESTEP_EDGE : RdfDbVocabulary.VERSION_EDGE,
-                parent.depth() + 1, state, newTimestep ? snapshotIri : parent.timestepRoot(), parentStates);
+        String snapshotIri = RdfDbNames.snapshot(scenario, authority, timestamp, version);
+        RdfDbDifferenceSink.SnapshotWrite write = new RdfDbDifferenceSink.SnapshotWrite(snapshotIri, authority,
+                version, timestamp, parent.iri(),
+                newTimestamp ? RdfDbVocabulary.TIMESTAMP_EDGE : RdfDbVocabulary.VERSION_EDGE,
+                parent.depth() + 1, state, newTimestamp ? snapshotIri : parent.timestampRoot(), parentStates);
 
         RdfDbDifferenceSink sink = new RdfDbDifferenceSink(connection, scenario, reportNode);
         sink.writeInto(write);
         try {
             sink.accept(new DifferenceModelSet(models));
         } catch (RdfDbConflictException e) {
-            throw new RdfDbConflictException(diagnose(timestep, target, parent, e.getMessage()), e);
+            throw new RdfDbConflictException(diagnose(address, parent, e.getMessage()), e);
         }
         SnapshotInfo written = info(snapshotIri).orElseThrow(() -> new RdfDbConflictException(
-                diagnose(timestep, target, parent, "the snapshot node was not written")));
+                diagnose(address, parent, "the snapshot node was not written")));
         LOGGER.info("Stored the snapshot {} of scenario '{}' with {} difference(s)", written, scenario,
                 models.size());
         return written;
     }
 
     /**
-     * The base-chain snapshot a new timestep root hangs off.
+     * The base-chain snapshot a new timestamp root hangs off.
      *
-     * <p>A timestep is "the base plus these differences", and which base is not a guess: it is the snapshot whose
-     * state the differences say they supersede. It has to be on the <em>base</em> chain, so a client sitting at
-     * 08:30 cannot write 08:45 as a child of it &mdash; that would make 08:45 reachable only through 08:30 and
-     * turn the day into a line rather than a fan.</p>
+     * <p>A timestamp is "the base plus these differences", and which base is not a guess: it is the snapshot of the
+     * same modelling authority whose state the differences say they supersede. It has to be on the <em>base</em>
+     * chain, so a client sitting at 08:30 cannot write 08:45 as a child of it &mdash; that would make 08:45
+     * reachable only through 08:30 and turn the day into a line rather than a fan.</p>
      */
-    private SnapshotInfo pin(List<DifferenceModel> models, String timestep) {
-        String base = baseTimestep();
+    private SnapshotInfo pin(List<DifferenceModel> models, String authority, Instant timestamp) {
+        Instant base = baseTimestamp(authority);
         List<String> superseded = models.stream()
                 .filter(model -> model.header().supersedes().size() == 1)
                 .map(model -> model.header().supersedes().get(0))
                 .toList();
         if (superseded.isEmpty()) {
-            throw new RdfDbConflictException("the difference models of the new timestep " + timestep
+            throw new RdfDbConflictException("the difference models of the new timestamp " + timestamp
                     + " of scenario '" + scenario + "' do not each supersede exactly one stored model, so the base"
                     + " version they were made against cannot be identified");
         }
-        List<Map<String, Value>> rows = deepestByState(superseded, " ; pdb:timestep " + SparqlText.str(base), 2);
+        List<Map<String, Value>> rows = deepestByState(superseded, " ; pdb:modellingAuthority "
+                + SparqlText.str(authority) + " ; pdb:timestamp " + SparqlText.dateTime(base), 2);
         if (rows.isEmpty()) {
-            throw new RdfDbConflictException("timestep roots derive from the base timestep of scenario '"
-                    + scenario + "' (" + base + "), and no snapshot of it states what these difference models"
-                    + " supersede; update the network to the base head first");
+            throw new RdfDbConflictException("timestamp roots derive from the base timestamp of modelling authority '"
+                    + authority + "' of scenario '" + scenario + "' (" + base + "), and no snapshot of it states"
+                    + " what these difference models supersede; update the network to the base head first");
         }
         if (rows.size() > 1) {
-            LOGGER.warn("Several base snapshots of scenario '{}' state what the new timestep {} supersedes;"
-                    + " the deepest is taken", scenario, timestep);
+            LOGGER.warn("Several base snapshots of '{}' in scenario '{}' state what the new timestamp {} supersedes;"
+                    + " the deepest is taken", authority, scenario, timestamp);
         }
         return info(rows.get(0).get("s").stringValue()).orElseThrow(() -> new RdfDbException(
                 "scenario '" + scenario + "' lost the snapshot it was pinned to"));
@@ -646,23 +885,23 @@ public final class SnapshotCatalog {
      * A member of a snapshot describes the moment the snapshot does.
      *
      * <p>Only checked where the header says so: a difference recorded on a network need not repeat a scenario time
-     * that did not change, and the snapshot's timestep is then what it belongs to.</p>
+     * that did not change, and the snapshot's timestamp is then what it belongs to.</p>
      */
-    private void checkScenarioTimes(List<DifferenceModel> models, String timestep) {
+    private void checkScenarioTimes(List<DifferenceModel> models, Instant timestamp) {
         for (DifferenceModel model : models) {
             ZonedDateTime scenarioTime = model.header().scenarioTime();
-            if (scenarioTime != null && !Timesteps.canonical(scenarioTime).equals(timestep)) {
+            if (scenarioTime != null && !scenarioTime.toInstant().truncatedTo(ChronoUnit.SECONDS).equals(timestamp)) {
                 throw new RdfDbException("the difference model " + model.header().id() + " states the scenario"
-                        + " time " + Timesteps.canonical(scenarioTime) + " but is written at timestep " + timestep
+                        + " time " + scenarioTime.toInstant() + " but is written at timestamp " + timestamp
                         + " of scenario '" + scenario + "': a snapshot and its members describe the same moment");
             }
         }
     }
 
-    // ------------------------------------------------------------------ ingesting a timestep from files
+    // ------------------------------------------------------------------ ingesting a timestamp from files
 
     /**
-     * What ingesting one timestep from files cost and produced.
+     * What ingesting one timestamp from files cost and produced.
      *
      * @param parse             reading the instance files: the compared profiles in full, the rest's headers
      * @param materializeParent building the parent state as triples
@@ -687,7 +926,7 @@ public final class SnapshotCatalog {
     }
 
     /**
-     * Write the CGMES export of one timestep as a difference against the state it derives from.
+     * Write the CGMES export of one timestamp as a difference against the state it derives from.
      *
      * <p>This is how a day reaches the database. A TSO does not record its schedule on a network: it exports
      * ninety-six sets of instance files, and what the database should hold is the base plus what each of them
@@ -699,7 +938,7 @@ public final class SnapshotCatalog {
      * <p>Only what is compared is read in full. The profiles the ingestion inherits are read as far as their
      * {@code md:FullModel} and no further, and so is a compared profile whose model identifier is the one the
      * database already stores &mdash; that file <em>is</em> the state it would be compared against. The parent
-     * state of a day is the same state for every timestep of it, so it is materialised and decoded once and kept
+     * state of a day is the same state for every timestamp of it, so it is materialised and decoded once and kept
      * (see {@link RdfDbConnection#parentIndex}).</p>
      *
      * <p>Two consequences of reading less, stated so that nobody relies on the opposite. A profile that is
@@ -710,15 +949,19 @@ public final class SnapshotCatalog {
      * so a re-used identifier with changed content is not detected. CGMES requires a fresh identifier per
      * export.</p>
      *
-     * <p>This release compares the <strong>equipment model and the steady state hypothesis</strong>. State
-     * variables and topology change wholesale between timesteps, so a difference of them would be as large as the
-     * data; their files are ignored with a report line and the snapshot inherits the parent's, which is also what
-     * makes the result a state that existed. Storing them whole per timestep is the next step, and the schema
-     * already allows it ({@code pdb:full} on a diff snapshot).</p>
+     * <p>The profiles compared are the caller's projection, the <strong>equipment model and the steady state
+     * hypothesis</strong> when it names none. State variables and topology change wholesale between timestamps, so
+     * a difference of them would be as large as the data; the files of a profile that is not compared are ignored
+     * with a report line and the snapshot inherits the parent's state of it, which is also what makes the result a
+     * state that existed. The boundary is never compared: a new boundary is a new scenario.</p>
      *
-     * @param ds           the data source holding the instance files of that timestep
+     * @param ds           the data source holding the instance files of that timestamp
      * @param boundary     the data source holding the boundary files, or {@code null}
-     * @param target       the address the new snapshot gets
+     * @param target       the address the new snapshot gets. A {@code null} modelling authority is the one the
+     *                     files state, a {@code null} timestamp the base timestamp of that authority's tree, a
+     *                     {@code null} version the head's plus one
+     * @param profiles     the profiles to compare, or {@code null} or empty for {@code EQ} and {@code SSH}. A
+     *                     listed profile the files do not carry is refused
      * @param importParams the CGMES import parameters
      * @param rn           where the ingestion reports
      * @return the new snapshot
@@ -726,14 +969,20 @@ public final class SnapshotCatalog {
      * @throws RdfDbException         if the scenario has no root, or if nothing changed
      */
     public SnapshotInfo putAsDiff(ReadOnlyDataSource ds, ReadOnlyDataSource boundary, SnapshotRef target,
-                                  Properties importParams, ReportNode rn) {
+                                  Set<CgmesSubset> profiles, Properties importParams, ReportNode rn) {
         check(target);
         Objects.requireNonNull(ds);
         ReportNode report = rn == null ? ReportNode.NO_OP : rn;
-        SnapshotInfo root = root().orElseThrow(() -> new RdfDbException("scenario '" + scenario
-                + "' has no root snapshot: putFull first"));
-        String timestep = target.timestep() == null ? baseTimestep() : target.timestep();
-        SnapshotInfo parent = head(timestep).orElseGet(() -> head(baseTimestep()).orElse(root));
+        Set<CgmesSubset> compared = comparedProfiles(profiles);
+        // The authority decides which tree the files are compared against, so an open one is read off the headers
+        // first: a header-only pass, which stops at every md:FullModel
+        String authority = target.modellingAuthority() != null ? target.modellingAuthority()
+                : authorityOf(statedAuthorities(headersOf(IngestParser.read(ds, boundary, ReportNode.NO_OP, Map.of(),
+                        Set.of())).values()), null, "the instance files");
+        SnapshotInfo root = root(authority).orElseThrow(() -> noRoot(authority));
+        Instant timestamp = target.timestamp() == null ? root.timestamp() : target.timestamp();
+        SnapshotInfo parent = head(authority, timestamp)
+                .orElseGet(() -> head(authority, root.timestamp()).orElse(root));
 
         // Before the files: which state each profile is compared against decides which of them has to be read in
         // full at all, and asking costs two requests against a parse of a whole export
@@ -743,17 +992,19 @@ public final class SnapshotCatalog {
         Duration planning = Duration.ofNanos(System.nanoTime() - tp);
 
         long t0 = System.nanoTime();
-        IngestParser.Result parsed = IngestParser.read(ds, boundary, report, plan.targetState());
-        Map<String, Header> headers = new LinkedHashMap<>();
-        parsed.files().forEach(file -> {
-            if (file.headerId() == null) {
-                throw new RdfDbException("the instance file " + file.context() + " carries no md:FullModel header,"
-                        + " so it cannot be a member of a snapshot of scenario '" + scenario + "'");
-            }
-            headers.put(file.context(), new Header(file.headerId(), file.terms()));
-        });
+        IngestParser.Result parsed = IngestParser.read(ds, boundary, report, plan.targetState(), compared);
+        Map<String, Header> headers = headersOf(parsed);
         Duration parse = Duration.ofNanos(System.nanoTime() - t0);
+        authorityOf(statedAuthorities(headers.values()), authority, "the instance files");
         checkBoundaryUnchanged(headers, root);
+        // A listed profile has to be there; the default pair is compared where it is shipped
+        Set<CgmesSubset> missing = profiles == null || profiles.isEmpty() ? EnumSet.noneOf(CgmesSubset.class)
+                : EnumSet.copyOf(compared);
+        parsed.files().forEach(file -> missing.remove(file.subset()));
+        if (!missing.isEmpty()) {
+            throw new RdfDbException("the profiles " + missing + " are to be compared, but the files of "
+                    + target + " carry none of them");
+        }
 
         long t1 = System.nanoTime();
         String cimNamespace = parsed.cimNamespace();
@@ -769,7 +1020,7 @@ public final class SnapshotCatalog {
         long t2 = System.nanoTime();
         for (IngestParser.ParsedFile file : parsed.files()) {
             CgmesSubset subset = file.subset();
-            if (subset != EQ && subset != SSH) {
+            if (!compared.contains(subset)) {
                 ignored.add(subset);
                 continue;
             }
@@ -780,7 +1031,7 @@ public final class SnapshotCatalog {
                 continue;
             }
             DifferenceModel model = diffOf(parentSide, nextSide, plan.targetState().get(subset), subset,
-                    headers.get(file.context()), cimNamespace, timestep);
+                    headers.get(file.context()), cimNamespace, timestamp);
             if (model.isEmpty()) {
                 continue;
             }
@@ -797,7 +1048,8 @@ public final class SnapshotCatalog {
                     + "': the files of " + target + " describe the state the database already holds");
         }
         long t3 = System.nanoTime();
-        SnapshotInfo written = putDiff(new DifferenceModelSet(models), target, report);
+        SnapshotInfo written = putDiff(new DifferenceModelSet(models),
+                SnapshotRef.of(scenario, authority, timestamp, target.version()), report);
         Map<CgmesSubset, Boolean> fast = new EnumMap<>(CgmesSubset.class);
         models.forEach(model -> fast.put(model.header().subset(), RdfDbDifferenceSink.isFast(model)));
         lastIngest = new IngestStatistics(parse, materialize, diffTime,
@@ -807,10 +1059,35 @@ public final class SnapshotCatalog {
         return written;
     }
 
+    /** The profiles an ingestion compares: the projection, or {@code EQ} and {@code SSH}; never the boundary. */
+    private static Set<CgmesSubset> comparedProfiles(Set<CgmesSubset> profiles) {
+        if (profiles == null || profiles.isEmpty()) {
+            return DEFAULT_COMPARED;
+        }
+        profiles.stream().filter(StoredModel::isBoundaryProfile).findFirst().ifPresent(subset -> {
+            throw new RdfDbException("the boundary profile " + subset.getIdentifier() + " cannot be compared: the"
+                    + " boundary of a scenario never changes, a new boundary is a new scenario");
+        });
+        return Set.copyOf(profiles);
+    }
+
+    /** The header of every parsed file, by context. */
+    private Map<String, Header> headersOf(IngestParser.Result parsed) {
+        Map<String, Header> headers = new LinkedHashMap<>();
+        parsed.files().forEach(file -> {
+            if (file.headerId() == null) {
+                throw new RdfDbException("the instance file " + file.context() + " carries no md:FullModel header,"
+                        + " so it cannot be a member of a snapshot of scenario '" + scenario + "'");
+            }
+            headers.put(file.context(), new Header(file.headerId(), file.subset(), file.terms()));
+        });
+        return headers;
+    }
+
     /**
-     * Which parent profile each comparable profile of the timestep needs, and under which cache key.
+     * Which parent profile each comparable profile of the timestamp needs, and under which cache key.
      *
-     * <p>A profile is comparable when the timestep ships it, the parent's materialisation plan starts from a full
+     * <p>A profile is comparable when the timestamp ships it, the parent's materialisation plan starts from a full
      * model of it and the parent names a state of it. A profile that fails any of those is left out here rather
      * than discovered to be uncomparable halfway through the diff, which is what lets the whole materialisation
      * be skipped when every key is already known.</p>
@@ -821,7 +1098,8 @@ public final class SnapshotCatalog {
         Map<CgmesSubset, String> keys = new EnumMap<>(CgmesSubset.class);
         for (IngestParser.ParsedFile file : parsed.files()) {
             CgmesSubset subset = file.subset();
-            if (file.index() == null || subset != EQ && subset != SSH) {
+            if (file.index() == null) {
+                // Not compared, or the state the database already holds
                 continue;
             }
             String stateId = plan.targetState().get(subset);
@@ -847,7 +1125,7 @@ public final class SnapshotCatalog {
      *
      * <p>The point of the cache: when every profile is already indexed, the parent is <em>not</em> materialised at
      * all &mdash; no store, no graph transfer, no difference application, no decoding &mdash; which is the whole
-     * of {@code materializeParent} for every timestep of a day after the first. When anything is missing the
+     * of {@code materializeParent} for every timestamp of a day after the first. When anything is missing the
      * materialisation happens exactly as it always did and only the missing profiles are read out of it, so the
      * statements and their order are the ones the comparison has always seen.</p>
      */
@@ -895,7 +1173,7 @@ public final class SnapshotCatalog {
         return indexes;
     }
 
-    /** @return how often {@link #putAsDiff} answered a whole timestep out of the parent index cache */
+    /** @return how often {@link #putAsDiff} answered a whole timestamp out of the parent index cache */
     long parentIndexCacheHits() {
         return parentIndexHits.get();
     }
@@ -909,12 +1187,12 @@ public final class SnapshotCatalog {
      * @param subset        the profile
      * @param header        the {@code md:FullModel} of the file, which becomes the header of the difference
      * @param cimNamespace  the CIM namespace both sides are written in
-     * @param timestep      the moment the snapshot describes
+     * @param timestamp     the moment the snapshot describes
      * @return the difference
      */
     private DifferenceModel diffOf(StatementDiff.Index parentSide, StatementDiff.Index nextSide,
                                    String parentStateId, CgmesSubset subset, Header header, String cimNamespace,
-                                   String timestep) {
+                                   Instant timestamp) {
         DifferenceModelHeader diffHeader = DifferenceModelHeader.builder(header.id, subset, cimNamespace)
                 .version(intOf(header.term(RdfDbVocabulary.MODEL_VERSION), 1))
                 .description(header.term(RdfDbVocabulary.MODEL_DESCRIPTION))
@@ -922,7 +1200,7 @@ public final class SnapshotCatalog {
                 .profiles(header.texts(RdfDbVocabulary.MODEL_PROFILE))
                 .dependentOn(header.texts(RdfDbVocabulary.MODEL_DEPENDENT_ON))
                 .supersedes(List.of(parentStateId))
-                .scenarioTime(ZonedDateTime.parse(timestep))
+                .scenarioTime(timestamp.atZone(ZoneOffset.UTC))
                 .created(ZonedDateTime.now())
                 .build();
         return TripleDiffCalculator.diff(parentSide, nextSide, diffHeader);
@@ -940,37 +1218,34 @@ public final class SnapshotCatalog {
      * The boundary of a scenario never changes.
      *
      * <p>A boundary is what gives the objects of a grid model their identity across files; a new one is a new base
-     * grid model, and a new base grid model is a new scenario. Ingesting a timestep whose boundary differs would
+     * grid model, and a new base grid model is a new scenario. Ingesting a timestamp whose boundary differs would
      * produce a difference against a state that was never the parent.</p>
      */
     private void checkBoundaryUnchanged(Map<String, Header> headers, SnapshotInfo root) {
-        for (Map.Entry<String, Header> entry : headers.entrySet()) {
-            CgmesSubset subset = GraphInfo.subsetOf(entry.getKey());
-            if (subset != CgmesSubset.EQUIPMENT_BOUNDARY && subset != CgmesSubset.TOPOLOGY_BOUNDARY) {
+        for (Header header : headers.values()) {
+            if (!StoredModel.isBoundaryProfile(header.subset)) {
                 continue;
             }
-            String expected = root.state().get(subset);
-            if (expected != null && !expected.equals(entry.getValue().id)) {
-                throw new RdfDbConflictException("boundary model changed (" + entry.getValue().id + " vs "
+            String expected = root.state().get(header.subset);
+            if (expected != null && !expected.equals(header.id)) {
+                throw new RdfDbConflictException("boundary model changed (" + header.id + " vs "
                         + expected + "): a new base (putFull into a new scenario) is required");
             }
         }
     }
 
     /**
-     * A writer that believes it is creating a timestep the scenario already holds.
+     * A writer that believes it is creating a timestamp the tree already holds.
      *
      * <p>It is told what actually happened rather than being handed the generic "supersedes the wrong model"
-     * message: what its differences supersede is the state of the <em>base</em> chain, which is what a timestep
+     * message: what its differences supersede is the state of the <em>base</em> chain, which is what a timestamp
      * root supersedes, so it is not a stale version writer but the loser of a race for the root.</p>
      */
-    private void checkNotASecondRoot(List<DifferenceModel> models, SnapshotInfo head, String timestep) {
-        if (timestep.equals(baseTimestep())) {
-            // The base timestep has no root of its own to race for: its root is the scenario's
-            return;
-        }
-        SnapshotInfo root = root().orElse(null);
-        if (root == null || root.iri().equals(head.iri())) {
+    private void checkNotASecondRoot(List<DifferenceModel> models, SnapshotInfo head, String authority,
+                                     Instant timestamp) {
+        SnapshotInfo root = root(authority).orElse(null);
+        if (root == null || root.iri().equals(head.iri()) || timestamp.equals(root.timestamp())) {
+            // The base timestamp has no root of its own to race for: its root is the tree's
             return;
         }
         boolean againstTheBase = models.stream().allMatch(model -> {
@@ -979,17 +1254,19 @@ public final class SnapshotCatalog {
                     && supersedes.get(0).equals(root.state().get(model.header().subset()));
         });
         if (againstTheBase) {
-            throw new RdfDbConflictException("scenario '" + scenario + "' timestep " + timestep + " already has a"
-                    + " root (version " + head.version() + "); a new version of it must supersede its head, so"
-                    + " update the network to (" + scenario + ", " + timestep + ", " + head.version() + ") and"
-                    + " re-record");
+            throw new RdfDbConflictException("timestamp " + timestamp + " of modelling authority '" + authority
+                    + "' of scenario '" + scenario + "' already has a root (version " + head.version() + "); a new"
+                    + " version of it must supersede its head, so update the network to " + head.ref()
+                    + " and re-record");
         }
     }
 
-    private void checkVersionIsNew(String timestep, String version) {
-        if (find(SnapshotRef.of(scenario, version, timestep)).isPresent()) {
-            throw new RdfDbConflictException("version " + version + " already exists at (" + scenario + ", "
-                    + timestep + ")");
+    /** A new version is greater than the head it is written on; gaps are allowed. */
+    private void checkVersionGrows(SnapshotInfo head, int version) {
+        if (version <= head.version()) {
+            throw new RdfDbConflictException("version " + version + " is not greater than the head version "
+                    + head.version() + " of (" + scenario + ", " + head.modellingAuthority() + ", "
+                    + head.timestamp() + "): versions only grow; pass none to get " + (head.version() + 1));
         }
     }
 
@@ -1009,100 +1286,24 @@ public final class SnapshotCatalog {
                     }
                 }
                 throw new RdfDbConflictException("difference model of subset " + subset.getIdentifier()
-                        + " supersedes " + found + " but the head (" + scenario + ", " + parent.timestep() + ", "
-                        + parent.version() + ") is at " + expected + ": update the network to the head and"
-                        + " re-record" + elsewhere);
+                        + " supersedes " + found + " but the head " + parent.ref() + " is at " + expected
+                        + ": update the network to the head and re-record" + elsewhere);
             }
         }
     }
 
     /** Re-read the chain and say which rule the silent guard refused on. */
-    private String diagnose(String timestep, SnapshotRef target, SnapshotInfo parent, String detail) {
-        Optional<SnapshotInfo> nowHead = head(timestep);
+    private String diagnose(SnapshotRef address, SnapshotInfo parent, String detail) {
+        Optional<SnapshotInfo> nowHead = head(address.modellingAuthority(), address.timestamp());
         if (nowHead.isPresent() && !nowHead.get().iri().equals(parent.iri())) {
-            return "snapshot (" + scenario + ", " + timestep + ", " + parent.version() + ") already has successor ("
-                    + scenario + ", " + timestep + ", " + nowHead.get().version() + ") - the linear scheme allows"
-                    + " no forks; update to the head first";
+            return "snapshot " + parent.ref() + " already has successor " + nowHead.get().ref()
+                    + " - the linear scheme allows no forks; update to the head first";
         }
-        if (find(SnapshotRef.of(scenario, target.version(), timestep)).isPresent()) {
-            return "version " + target.version() + " already exists at (" + scenario + ", " + timestep + ")";
+        if (nowHead.isPresent() && nowHead.get().version() >= address.version()) {
+            return "version " + address.version() + " is not greater than the head version "
+                    + nowHead.get().version() + " of " + nowHead.get().ref();
         }
-        return "the snapshot " + target + " was not written: " + detail;
-    }
-
-    /**
-     * Turn an unversioned scenario into a versioned one by declaring what it already holds to be its root.
-     *
-     * <p>A scenario written before this release has instance file graphs and, possibly, a difference chain on
-     * them. Its instance files <em>are</em> a consistent state, so they become a root snapshot of version
-     * {@code "0"} at the steady state file's scenario time, and every difference that was already stored stays
-     * exactly where it is &mdash; the chain of a profile is untouched by this. It is called by the first versioned
-     * write of a scenario and is idempotent.</p>
-     *
-     * @return the root snapshot, or empty when the scenario holds no full model at all
-     */
-    public Optional<SnapshotInfo> migrateImplicitRoot() {
-        Optional<SnapshotInfo> existing = root();
-        if (existing.isPresent()) {
-            return existing;
-        }
-        CatalogSnapshot models = connection.catalog(scenario).snapshot();
-        List<StoredModel> full = models.models().stream()
-                .filter(model -> model.kind() == StoredModel.Kind.FULL).toList();
-        if (full.isEmpty()) {
-            return Optional.empty();
-        }
-        // The raw literal rather than StoredModel.scenarioTime: a CGMES header may write a local date-time, which
-        // is not a ZonedDateTime and which the catalogue therefore reads as absent
-        String scenarioTime = rawScenarioTime()
-                .orElseThrow(() -> new RdfDbException("scenario '" + scenario + "' holds no"
-                        + " md:Model.scenarioTime: it cannot be migrated to a versioned scenario, pass a"
-                        + " timestep explicitly"));
-        String timestep = Timesteps.canonical(scenarioTime);
-        String offset = offsetOf(scenarioTime);
-        String snapshotIri = RdfDbNames.snapshot(scenario, timestep, "0");
-        Map<CgmesSubset, String> state = new EnumMap<>(CgmesSubset.class);
-        full.forEach(model -> state.put(model.subset(), model.id()));
-
-        StringBuilder update = new StringBuilder(RdfDbVocabulary.PREFIXES).append("INSERT { GRAPH ")
-                .append(SparqlText.iri(metaGraph)).append(" { ");
-        appendCatalogNode(update, timestep, offset);
-        RdfDbDifferenceSink.SnapshotWrite.root(snapshotIri, "0", timestep, Timesteps.label(timestep, offset), state)
-                .appendTo(update, scenario, state.values(), ZonedDateTime.now());
-        update.append(' ');
-        full.forEach(model -> update.append(SparqlText.iri(model.id())).append(' ')
-                .append(SparqlText.iri(RdfDbVocabulary.SNAPSHOT)).append(' ')
-                .append(SparqlText.iri(snapshotIri)).append(" . "));
-        update.append("} } WHERE { FILTER NOT EXISTS { GRAPH ").append(SparqlText.iri(metaGraph))
-                .append(" { ?x a pdb:Snapshot } } }");
-        sparql().update(update.toString());
-        cachedCatalogNode = null;
-        LOGGER.info("Migrated scenario '{}' to a versioned scenario: its instance files are version \"0\" at {}",
-                scenario, timestep);
-        return info(snapshotIri);
-    }
-
-    /** The {@code md:Model.scenarioTime} of the steady state full model of an unversioned scenario, as written. */
-    private Optional<String> rawScenarioTime() {
-        List<Map<String, Value>> rows = select("SELECT ?sub ?ts WHERE {" + graphClause()
-                + "{ ?m pdb:kind pdb:Full ; pdb:subset ?sub ; md:Model.scenarioTime ?ts } }");
-        return rows.stream()
-                .sorted(Comparator.comparingInt(row -> SSH.getIdentifier().equals(row.get("sub").stringValue())
-                        ? 0 : 1))
-                .map(row -> row.get("ts").stringValue())
-                .findFirst();
-    }
-
-    /** The zone offset a scenario time is written in, {@code Z} when there is none or it has no offset. */
-    private static String offsetOf(String scenarioTime) {
-        if (scenarioTime == null) {
-            return ZoneOffset.UTC.getId();
-        }
-        try {
-            return OffsetDateTime.parse(scenarioTime.trim()).getOffset().getId();
-        } catch (DateTimeParseException e) {
-            return ZoneOffset.UTC.getId();
-        }
+        return "the snapshot " + address + " was not written: " + detail;
     }
 
     // ------------------------------------------------------------------ dropping and checking
@@ -1122,12 +1323,13 @@ public final class SnapshotCatalog {
             graphs.add(metaGraph);
         }
         connection.catalog(scenario).dropGraphs(graphs);
-        cachedCatalogNode = null;
+        schemaChecked = false;
+        rootByAuthority.clear();
         connection.forgetParentIndexes(scenario);
     }
 
     /**
-     * Check the invariants of the snapshot tree of this scenario.
+     * Check the invariants of the snapshot trees of this scenario.
      *
      * <p>Depth, state and the edge kinds are derived when a snapshot is written, so this is not how correctness is
      * achieved &mdash; it is how it is asserted. Tests call it after every scenario they build, and a caller that
@@ -1142,24 +1344,29 @@ public final class SnapshotCatalog {
         }
         Map<String, SnapshotInfo> byIri = new LinkedHashMap<>();
         all.forEach(info -> byIri.put(info.iri(), info));
-        List<SnapshotInfo> roots = all.stream().filter(SnapshotInfo::isRoot).toList();
-        if (roots.size() != 1) {
-            throw new RdfDbException("scenario '" + scenario + "' has " + roots.size() + " root snapshots "
-                    + roots.stream().map(SnapshotInfo::iri).toList() + ": a scenario is one base grid model");
-        }
-        Set<String> versionChildren = new LinkedHashSet<>();
-        Set<String> timestepRoots = new LinkedHashSet<>();
-        all.stream().filter(info -> info.iri().equals(info.timestepRoot()))
+        Map<String, SnapshotInfo> roots = new TreeMap<>();
+        all.stream().filter(SnapshotInfo::isRoot).forEach(root -> {
+            if (roots.put(root.modellingAuthority(), root) != null) {
+                throw new RdfDbException("modelling authority '" + root.modellingAuthority() + "' of scenario '"
+                        + scenario + "' has more than one root snapshot: a tree has one base grid model");
+            }
+        });
+        Set<SnapshotRef> timestampRoots = new LinkedHashSet<>();
+        all.stream().filter(info -> info.iri().equals(info.timestampRoot()))
                 .forEach(info -> {
-                    if (!timestepRoots.add(info.timestep())) {
-                        throw new RdfDbException("scenario '" + scenario + "' has more than one root at timestep "
-                                + info.timestep());
+                    if (!timestampRoots.add(SnapshotRef.latestAt(scenario, info.modellingAuthority(),
+                            info.timestamp()))) {
+                        throw new RdfDbException("modelling authority '" + info.modellingAuthority() + "' of scenario '"
+                                + scenario + "' has more than one root at timestamp " + info.timestamp());
                     }
                 });
+        verifySharedBoundary(roots);
         String prefix = RdfDbNames.scenarioPrefix(scenario);
+        Set<String> versionChildren = new LinkedHashSet<>();
         for (SnapshotInfo info : all) {
-            if (!info.iri().startsWith(prefix)) {
-                throw new RdfDbException("snapshot " + info.iri() + " is not under " + prefix);
+            if (!info.iri().equals(RdfDbNames.snapshot(scenario, info.modellingAuthority(), info.timestamp(),
+                    info.version())) || !info.iri().startsWith(prefix)) {
+                throw new RdfDbException("snapshot " + info.iri() + " is not named by its address " + info.ref());
             }
             if (info.isRoot()) {
                 verifyRoot(info);
@@ -1170,6 +1377,10 @@ public final class SnapshotCatalog {
                 throw new RdfDbException("snapshot " + info + " of scenario '" + scenario + "' names the parent "
                         + info.parent() + ", which this scenario does not hold");
             }
+            if (!parent.modellingAuthority().equals(info.modellingAuthority())) {
+                throw new RdfDbException("snapshot " + info + " of scenario '" + scenario + "' derives from " + parent
+                        + " of another modelling authority");
+            }
             if (info.depth() != parent.depth() + 1) {
                 throw new RdfDbException("snapshot " + info + " has depth " + info.depth() + " but its parent "
                         + parent + " has depth " + parent.depth());
@@ -1178,33 +1389,51 @@ public final class SnapshotCatalog {
                 throw new RdfDbException("snapshot " + parent + " of scenario '" + scenario + "' has more than one"
                         + " version successor: the chain forked");
             }
-            verifyTimestepRoot(info, parent, byIri, roots.get(0));
+            if (info.edge() == SnapshotInfo.EdgeKind.VERSION && info.version() <= parent.version()) {
+                throw new RdfDbException("snapshot " + info + " of scenario '" + scenario + "' has a version not"
+                        + " greater than its parent " + parent + "'s");
+            }
+            verifyTimestampRoot(info, parent, byIri, roots.get(info.modellingAuthority()));
             verifyState(info, parent);
         }
     }
 
-    /**
-     * A timestep root derives from the base chain; every other snapshot belongs to its parent's timestep.
-     */
-    private void verifyTimestepRoot(SnapshotInfo info, SnapshotInfo parent, Map<String, SnapshotInfo> byIri,
-                                    SnapshotInfo root) {
-        if (info.edge() == SnapshotInfo.EdgeKind.TIMESTEP) {
-            if (!info.iri().equals(info.timestepRoot())) {
-                throw new RdfDbException("the timestep root " + info + " of scenario '" + scenario + "' names "
-                        + info.timestepRoot() + " as its own root");
+    /** Every tree of the scenario states the same boundary models. */
+    private void verifySharedBoundary(Map<String, SnapshotInfo> roots) {
+        Map<CgmesSubset, String> first = null;
+        for (SnapshotInfo root : roots.values()) {
+            Map<CgmesSubset, String> boundary = boundaryOf(root.state());
+            if (first != null && !first.equals(boundary)) {
+                throw new RdfDbException("the roots of scenario '" + scenario + "' do not share one boundary: "
+                        + root + " states " + boundary + ", another root " + first);
             }
-            if (!parent.timestep().equals(root.timestep())) {
-                throw new RdfDbException("the timestep root " + info + " of scenario '" + scenario + "' hangs off "
-                        + parent + ", which is not on the base chain (" + root.timestep() + ")");
+            first = boundary;
+        }
+    }
+
+    /**
+     * A timestamp root derives from the base chain of its own tree; every other snapshot belongs to its parent's
+     * timestamp.
+     */
+    private void verifyTimestampRoot(SnapshotInfo info, SnapshotInfo parent, Map<String, SnapshotInfo> byIri,
+                                     SnapshotInfo root) {
+        if (info.edge() == SnapshotInfo.EdgeKind.TIMESTAMP) {
+            if (!info.iri().equals(info.timestampRoot())) {
+                throw new RdfDbException("the timestamp root " + info + " of scenario '" + scenario + "' names "
+                        + info.timestampRoot() + " as its own root");
+            }
+            if (root == null || !parent.timestamp().equals(root.timestamp())) {
+                throw new RdfDbException("the timestamp root " + info + " of scenario '" + scenario + "' hangs off "
+                        + parent + ", which is not on the base chain of its tree");
             }
             return;
         }
-        if (!info.timestepRoot().equals(parent.timestepRoot())) {
-            throw new RdfDbException("snapshot " + info + " of scenario '" + scenario + "' names the timestep root "
-                    + info.timestepRoot() + " but its parent " + parent + " names " + parent.timestepRoot());
+        if (!info.timestampRoot().equals(parent.timestampRoot())) {
+            throw new RdfDbException("snapshot " + info + " of scenario '" + scenario + "' names the timestamp root "
+                    + info.timestampRoot() + " but its parent " + parent + " names " + parent.timestampRoot());
         }
-        if (byIri.get(info.timestepRoot()) == null) {
-            throw new RdfDbException("snapshot " + info + " of scenario '" + scenario + "' names a timestep root"
+        if (byIri.get(info.timestampRoot()) == null) {
+            throw new RdfDbException("snapshot " + info + " of scenario '" + scenario + "' names a timestamp root"
                     + " this scenario does not hold");
         }
     }
@@ -1236,42 +1465,32 @@ public final class SnapshotCatalog {
 
     // ------------------------------------------------------------------ SPARQL fragments
 
-    private String rootWrite(Map<String, Header> headers, Map<String, String> graphs,
-                             CgmesTripleStoreLoader.Result parsed, String snapshotIri, String version,
-                             String timestep, String label, String offset, Map<String, Long> counts) {
+    private String rootWrite(Map<String, Header> own, Map<String, String> graphs,
+                             CgmesTripleStoreLoader.Result parsed, Map<CgmesSubset, String> state,
+                             RdfDbDifferenceSink.SnapshotWrite root, Map<String, Long> counts) {
         String subjectBase = ModelCatalog.subjectBaseOf(parsed.baseName());
         ZonedDateTime now = ZonedDateTime.now();
-        Map<CgmesSubset, String> state = new EnumMap<>(CgmesSubset.class);
-        headers.forEach((context, header) -> state.put(GraphInfo.subsetOf(context), header.id));
-
+        String meta = SparqlText.iri(metaGraph);
         StringBuilder update = new StringBuilder(RdfDbVocabulary.PREFIXES).append("INSERT { GRAPH ")
-                .append(SparqlText.iri(metaGraph)).append(" { ");
-        headers.forEach((context, header) -> appendFullModelNode(update, header,
-                new FullGraph(GraphInfo.subsetOf(context), graphs.get(context), counts.getOrDefault(context, -1L),
-                        subjectBase, parsed.cimNamespace()), snapshotIri, now));
-        appendCatalogNode(update, timestep, offset);
-        RdfDbDifferenceSink.SnapshotWrite.root(snapshotIri, version, timestep, label, state)
-                .appendTo(update, scenario, state.values(), now);
-        update.append(' ');
-        update.append("} } WHERE { FILTER NOT EXISTS { GRAPH ").append(SparqlText.iri(metaGraph))
-                .append(" { ?x a pdb:Snapshot } } FILTER NOT EXISTS { GRAPH ").append(SparqlText.iri(metaGraph))
-                .append(" { ").append(SparqlText.iri(snapshotIri)).append(" ?p ?o } }");
-        headers.values().forEach(header -> update.append(" FILTER NOT EXISTS { GRAPH ")
-                .append(SparqlText.iri(metaGraph)).append(" { ").append(SparqlText.iri(header.id))
+                .append(meta).append(" { ");
+        own.forEach((context, header) -> appendFullModelNode(update, header,
+                new FullGraph(header.subset, graphs.get(context), counts.getOrDefault(context, -1L),
+                        subjectBase, parsed.cimNamespace()), root.iri(), now));
+        // The schema marker goes with every root: written twice it is the same triple
+        update.append(SparqlText.iri(schemaNode)).append(' ').append(SparqlText.iri(RdfDbVocabulary.SCHEMA))
+                .append(' ').append(SparqlText.integer(RdfDbVocabulary.SCHEMA_VERSION)).append(" ; ")
+                .append(SparqlText.iri(RdfDbVocabulary.SCENARIO)).append(' ').append(SparqlText.str(scenario))
+                .append(" . ");
+        root.appendTo(update, scenario, state.values(), now);
+        update.append(" } } WHERE { FILTER NOT EXISTS { GRAPH ").append(meta)
+                .append(" { ?x a pdb:Snapshot ; pdb:depth ").append(SparqlText.integer(0))
+                .append(" ; pdb:modellingAuthority ").append(SparqlText.str(root.modellingAuthority()))
+                .append(" } } FILTER NOT EXISTS { GRAPH ").append(meta)
+                .append(" { ").append(SparqlText.iri(root.iri())).append(" ?p ?o } }");
+        own.values().forEach(header -> update.append(" FILTER NOT EXISTS { GRAPH ")
+                .append(meta).append(" { ").append(SparqlText.iri(header.id))
                 .append(" ?p1 ?o1 } }"));
         return update.append(" }").toString();
-    }
-
-    private void appendCatalogNode(StringBuilder update, String timestep, String offset) {
-        update.append(SparqlText.iri(catalogNode)).append(' ')
-                .append(SparqlText.iri(RdfDbVocabulary.RDF_TYPE)).append(' ')
-                .append(SparqlText.iri(RdfDbVocabulary.CATALOG_CLASS)).append(" ; ")
-                .append(SparqlText.iri(RdfDbVocabulary.SCENARIO)).append(' ')
-                .append(SparqlText.str(scenario)).append(" ; ")
-                .append(SparqlText.iri(RdfDbVocabulary.BASE_TIMESTEP)).append(' ')
-                .append(SparqlText.str(timestep)).append(" ; ")
-                .append(SparqlText.iri(RdfDbVocabulary.BASE_OFFSET)).append(' ')
-                .append(SparqlText.str(offset)).append(" . ");
     }
 
     /** Where one parsed instance file of a root went, and what its statements look like. */
@@ -1306,6 +1525,10 @@ public final class SnapshotCatalog {
                 .append(SparqlText.str(graph.cimNamespace())).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.CREATED)).append(' ')
                 .append(SparqlText.dateTime(now));
+        if (StoredModel.isBoundaryProfile(graph.subset())) {
+            update.append(" ; ").append(SparqlText.iri(RdfDbVocabulary.BOUNDARY)).append(' ')
+                    .append(SparqlText.bool(true));
+        }
         header.terms.forEach((predicate, values) -> values.forEach(value -> update.append(" ; ")
                 .append(SparqlText.iri(predicate)).append(' ')
                 .append(value instanceof IRI iri ? SparqlText.iri(iri.stringValue())
@@ -1315,8 +1538,8 @@ public final class SnapshotCatalog {
 
     // ------------------------------------------------------------------ scratch store helpers
 
-    /** The {@code md:FullModel} header of one parsed instance file. */
-    private record Header(String id, Map<String, List<Value>> terms) {
+    /** The {@code md:FullModel} header of one parsed instance file, and the profile the file carries. */
+    private record Header(String id, CgmesSubset subset, Map<String, List<Value>> terms) {
 
         String term(String predicate) {
             List<Value> values = terms.get(predicate);
@@ -1356,7 +1579,7 @@ public final class SnapshotCatalog {
                     terms.put(predicate, values);
                 }
             });
-            headers.put(context, new Header(id, terms));
+            headers.put(context, new Header(id, GraphInfo.subsetOf(context), terms));
         }
         return headers;
     }
@@ -1369,22 +1592,15 @@ public final class SnapshotCatalog {
         return counts;
     }
 
-    private String timestepOf(SnapshotRef ref, Map<String, Header> headers) {
-        if (ref.timestep() != null) {
-            return ref.timestep();
-        }
-        String text = scenarioTimeText(headers);
-        if (text == null) {
-            throw new RdfDbException("no scenarioTime: pass a timestep");
-        }
-        return Timesteps.canonical(text);
-    }
-
-    private static String scenarioTimeText(Map<String, Header> headers) {
-        return headers.entrySet().stream()
-                .sorted(Comparator.comparingInt(e -> GraphInfo.subsetOf(e.getKey()) == SSH ? 0 : 1))
-                .map(e -> e.getValue().term(RdfDbVocabulary.MODEL_SCENARIO_TIME))
+    /** The scenario time of the steady state file, or of the first file that states one. */
+    private Instant scenarioTimeOf(Map<String, Header> headers) {
+        return headers.values().stream()
+                .sorted(Comparator.comparingInt(h -> h.subset == CgmesSubset.STEADY_STATE_HYPOTHESIS ? 0 : 1))
+                .map(h -> h.term(RdfDbVocabulary.MODEL_SCENARIO_TIME))
                 .filter(Objects::nonNull)
-                .findFirst().orElse(null);
+                .findFirst()
+                .map(SnapshotRef::scenarioTime)
+                .orElseThrow(() -> new RdfDbException("the instance files state no md:Model.scenarioTime: pass a"
+                        + " timestamp in the address of the root of scenario '" + scenario + "'"));
     }
 }

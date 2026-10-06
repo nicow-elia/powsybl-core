@@ -12,6 +12,7 @@ import org.eclipse.rdf4j.model.Value;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -130,6 +131,41 @@ class RdfDbSparqlSemanticsTest {
     }
 
     /**
+     * The typed literals of the key: an {@code xsd:dateTime} timestamp and an {@code xsd:integer} version are
+     * matched as triple-pattern constants and in {@code FILTER} equality, and the version guard of a write
+     * compares integers numerically ({@code 10 >= 9}, which as strings would be false).
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("backends")
+    void theTypedLiteralsOfTheKeyMatchOnBothBackends(String backend) {
+        try (RdfDbConnection db = open(backend)) {
+            db.clear(SCENARIO);
+            SparqlAccess sparql = db.sparql(SCENARIO);
+            Instant t = Instant.parse("2014-06-01T10:30:00Z");
+            sparql.update("INSERT DATA { GRAPH <" + M + "> { <" + EX + "s> <" + RdfDbVocabulary.TIMESTAMP + "> "
+                    + SparqlText.dateTime(t) + " ; <" + RdfDbVocabulary.VERSION + "> " + SparqlText.integer(10)
+                    + " } }");
+
+            assertThat(sparql.select("SELECT ?s WHERE { GRAPH <" + M + "> { ?s <" + RdfDbVocabulary.TIMESTAMP
+                    + "> " + SparqlText.dateTime(t) + " ; <" + RdfDbVocabulary.VERSION + "> "
+                    + SparqlText.integer(10) + " } }")).hasSize(1);
+            assertThat(sparql.select("SELECT ?s WHERE { GRAPH <" + M + "> { ?s <" + RdfDbVocabulary.TIMESTAMP
+                    + "> ?t FILTER(?t = \"2014-06-01T10:30:00Z\"^^<" + RdfDbVocabulary.XSD_NS + "dateTime>) } }"))
+                    .hasSize(1);
+            assertThat(sparql.select("SELECT ?s WHERE { GRAPH <" + M + "> { ?s <" + RdfDbVocabulary.VERSION
+                    + "> ?v FILTER(?v >= " + SparqlText.integer(9) + ") } }")).hasSize(1);
+            assertThat(sparql.select("SELECT ?s WHERE { GRAPH <" + M + "> { ?s <" + RdfDbVocabulary.VERSION
+                    + "> ?v FILTER(?v >= " + SparqlText.integer(11) + ") } }")).isEmpty();
+            // What a reader gets back is the instant it wrote, whatever lexical form the backend returns
+            Value read = sparql.select("SELECT ?t WHERE { GRAPH <" + M + "> { ?s <" + RdfDbVocabulary.TIMESTAMP
+                    + "> ?t } }").get(0).get("t");
+            assertThat(SnapshotRows.instantOf(read)).isEqualTo(t);
+
+            db.clear(SCENARIO);
+        }
+    }
+
+    /**
      * Probe (a) of the variant work package: a sub-select inside one branch of a {@code UNION}, combined with a
      * {@code pdb:parent*} walk from starts that several other branches bind.
      *
@@ -183,7 +219,7 @@ class RdfDbSparqlSemanticsTest {
     /**
      * Probe (b) of the variant work package: a hundred {@code UNION} branches in one query.
      *
-     * <p>A day of 96 timesteps loaded in one request binds one start per timestep, and some engines have a limit
+     * <p>A day of 96 timestamps loaded in one request binds one start per timestamp, and some engines have a limit
      * on the size of a {@code UNION} tree or turn one into a quadratic plan. This asserts that the request is
      * answered at all, and that every branch contributes its rows.</p>
      */

@@ -17,12 +17,13 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * The daily CGMES export of a timestep, made by editing the MicroGrid base case.
+ * The daily CGMES export of a timestamp, made by editing the MicroGrid base case.
  *
  * <p>What the ingestion path has to be tested against is a <em>set of instance files</em> that differs from the
  * base in exactly the way a schedule differs from it: the same equipment, the same identifiers, other setpoints,
@@ -36,7 +37,7 @@ import java.util.regex.Pattern;
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
-final class TimestepFixtures {
+final class TimestampFixtures {
 
     private static final String SSH = "MicroGridTestConfiguration_BC_BE_SSH_V2.xml";
     private static final String EQ = "MicroGridTestConfiguration_BC_BE_EQ_V2.xml";
@@ -44,7 +45,7 @@ final class TimestepFixtures {
     private static final String EQ_BD = "MicroGridTestConfiguration_EQ_BD.xml";
 
     /**
-     * The files of the base case that a timestep does not touch &mdash; the boundary included.
+     * The files of the base case that a timestamp does not touch &mdash; the boundary included.
      *
      * <p>The boundary is what the base voltages live in, so a set without it is not loadable at all; it also has to
      * be byte-identical to the base's, which is what {@code putAsDiff} checks.</p>
@@ -61,18 +62,18 @@ final class TimestepFixtures {
     private static final Pattern CONSUMER_P =
             Pattern.compile("(<cim:EnergyConsumer.p>)(-?[0-9.eE+]+)(</cim:EnergyConsumer.p>)");
 
-    private TimestepFixtures() {
+    private TimestampFixtures() {
     }
 
     /**
      * The base case with the active power of the first {@code loads} energy consumers scaled.
      *
-     * @param loads    how many consumers the timestep moves
-     * @param instant  the canonical scenario time the files claim, for instance {@code 2014-06-01T11:00:00Z}
-     * @param suffix   what makes the model identifiers of this timestep unique
+     * @param loads    how many consumers the timestamp moves
+     * @param instant  the scenario time the files claim, for instance {@code 2014-06-01T11:00:00Z}
+     * @param suffix   what makes the model identifiers of this timestamp unique
      * @return a data source holding the whole set
      */
-    static ReadOnlyDataSource ssh(int loads, String instant, String suffix) {
+    static ReadOnlyDataSource ssh(int loads, Instant instant, String suffix) {
         String ssh = read(SSH);
         ssh = rewriteHeader(ssh, "urn:uuid:ssh-" + suffix, instant);
         ssh = scaleConsumers(ssh, loads);
@@ -89,12 +90,12 @@ final class TimestepFixtures {
      * <p>"EQ drift": the equipment of a day is not quite the equipment of the base. A name is the cheapest change
      * that no in-place update can apply, so it is what makes the ingested difference take the slow route.</p>
      *
-     * @param loads   how many consumers the timestep moves
+     * @param loads   how many consumers the timestamp moves
      * @param instant the scenario time
      * @param suffix  what makes the model identifiers unique
      * @return a data source holding the whole set
      */
-    static ReadOnlyDataSource eqDrift(int loads, String instant, String suffix) {
+    static ReadOnlyDataSource eqDrift(int loads, Instant instant, String suffix) {
         String ssh = scaleConsumers(rewriteHeader(read(SSH), "urn:uuid:ssh-" + suffix, instant), loads);
         String eq = rewriteHeader(read(EQ), "urn:uuid:eq-" + suffix, instant);
         eq = renameFirstLine(eq);
@@ -106,13 +107,37 @@ final class TimestepFixtures {
     }
 
     /** The base case with a boundary that claims to be a different model. */
-    static ReadOnlyDataSource changedBoundary(String instant, String suffix) {
+    static ReadOnlyDataSource changedBoundary(Instant instant, String suffix) {
         MemDataSource source = new MemDataSource();
         put(source, SSH, scaleConsumers(rewriteHeader(read(SSH), "urn:uuid:ssh-" + suffix, instant), 1));
         put(source, EQ, read(EQ));
         UNCHANGED.stream().filter(name -> !EQ_BD.equals(name))
                 .forEach(name -> put(source, name, read(name)));
         put(source, EQ_BD, rewriteHeader(read(EQ_BD), "urn:uuid:eqbd-" + suffix, instant));
+        return source;
+    }
+
+    /**
+     * The MicroGrid NL base case with a boundary that claims to be a different model: another authority of the
+     * same day that does not share the boundary of the scenario.
+     *
+     * @param suffix what makes the boundary identifier unique
+     * @return a data source holding the whole set
+     */
+    static ReadOnlyDataSource changedBoundaryNl(String suffix) {
+        ReadOnlyDataSource nl = CgmesConformity1Catalog.microGridBaseCaseNL().dataSource();
+        MemDataSource source = new MemDataSource();
+        try {
+            for (String name : nl.listNames(".*")) {
+                String content = read(nl, name);
+                put(source, name, EQ_BD.equals(name)
+                        ? content.replaceFirst("rdf:about=\"urn:uuid:[^\"]*\"",
+                                Matcher.quoteReplacement("rdf:about=\"urn:uuid:eqbd-" + suffix + "\""))
+                        : content);
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
         return source;
     }
 
@@ -139,11 +164,11 @@ final class TimestepFixtures {
         return out.toString();
     }
 
-    static String rewriteHeader(String file, String modelId, String instant) {
+    static String rewriteHeader(String file, String modelId, Instant instant) {
         String rewritten = file.replaceFirst("rdf:about=\"urn:uuid:[^\"]*\"",
                 Matcher.quoteReplacement("rdf:about=\"" + modelId + "\""));
         rewritten = rewritten.replaceAll("(<md:Model.scenarioTime>)[^<]*(</md:Model.scenarioTime>)",
-                "$1" + Matcher.quoteReplacement(instant) + "$2");
+                "$1" + Matcher.quoteReplacement(instant.toString()) + "$2");
         return rewritten;
     }
 

@@ -68,8 +68,8 @@ final class TripleDiffCalculator {
      * The difference between two graphs that are already indexed.
      *
      * <p>The same comparison as above, entered one step later. It exists because the parent side of a day of
-     * timesteps is the <em>same state</em> ninety-five times over: indexing it once and keeping the
-     * {@link StatementDiff.Index} is what an ingestion does instead of materialising and decoding it per timestep.
+     * timestamps is the <em>same state</em> ninety-five times over: indexing it once and keeping the
+     * {@link StatementDiff.Index} is what an ingestion does instead of materialising and decoding it per timestamp.
      * The comparison itself is {@link StatementDiff#diff}, shared with every other producer of a difference that has
      * no recorded changes.</p>
      *

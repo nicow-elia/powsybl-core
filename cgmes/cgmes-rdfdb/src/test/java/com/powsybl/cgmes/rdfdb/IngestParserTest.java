@@ -31,13 +31,14 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * What the ingestion reads of a timestep's files, and what it deliberately does not read.
+ * What the ingestion reads of a timestamp's files, and what it deliberately does not read.
  *
  * <p>The three properties this locks are the three the ingestion's correctness rests on: a profile that is
  * compared comes out exactly as a triple store would have handed it over, a profile that is inherited is read
@@ -47,6 +48,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 class IngestParserTest {
+
+    /** What an ingestion compares when the caller names no profile. */
+    private static final Set<CgmesSubset> COMPARED =
+            Set.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS);
 
     private static final String SSH = "MicroGridTestConfiguration_BC_BE_SSH_V2.xml";
 
@@ -60,7 +65,7 @@ class IngestParserTest {
      */
     @Test
     void onlyTheComparedProfilesAreReadInFull() {
-        IngestParser.Result result = IngestParser.read(base(), null, ReportNode.NO_OP, Map.of());
+        IngestParser.Result result = IngestParser.read(base(), null, ReportNode.NO_OP, Map.of(), COMPARED);
 
         assertThat(result.files()).hasSizeGreaterThan(5);
         for (IngestParser.ParsedFile file : result.files()) {
@@ -76,15 +81,15 @@ class IngestParserTest {
 
     /**
      * A file whose model identifier is one the database already stores is the state the database holds, so it is
-     * not indexed &mdash; which is what makes a timestep that re-ships its whole export cheap.
+     * not indexed &mdash; which is what makes a timestamp that re-ships its whole export cheap.
      */
     @Test
     void aProfileTheDatabaseAlreadyHoldsIsNotIndexed() {
-        IngestParser.Result all = IngestParser.read(base(), null, ReportNode.NO_OP, Map.of());
+        IngestParser.Result all = IngestParser.read(base(), null, ReportNode.NO_OP, Map.of(), COMPARED);
         String equipmentId = all.of(CgmesSubset.EQUIPMENT).headerId();
 
         IngestParser.Result skipped = IngestParser.read(base(), null, ReportNode.NO_OP,
-                Map.of(CgmesSubset.EQUIPMENT, equipmentId));
+                Map.of(CgmesSubset.EQUIPMENT, equipmentId), COMPARED);
 
         assertThat(skipped.of(CgmesSubset.EQUIPMENT).index()).isNull();
         assertThat(skipped.of(CgmesSubset.EQUIPMENT).headerId()).isEqualTo(equipmentId);
@@ -101,8 +106,8 @@ class IngestParserTest {
      */
     @Test
     void aRepeatedTripleIsIndexedOnce() {
-        IngestParser.Result plain = IngestParser.read(base(), null, ReportNode.NO_OP, Map.of());
-        IngestParser.Result repeated = IngestParser.read(withDuplicatedConsumer(), null, ReportNode.NO_OP, Map.of());
+        IngestParser.Result plain = IngestParser.read(base(), null, ReportNode.NO_OP, Map.of(), COMPARED);
+        IngestParser.Result repeated = IngestParser.read(withDuplicatedConsumer(), null, ReportNode.NO_OP, Map.of(), COMPARED);
 
         assertThat(repeated.of(CgmesSubset.STEADY_STATE_HYPOTHESIS).index().bySubject())
                 .isEqualTo(plain.of(CgmesSubset.STEADY_STATE_HYPOTHESIS).index().bySubject());
@@ -114,12 +119,12 @@ class IngestParserTest {
      */
     @Test
     void anIdentifierIsOnlyUnchangedForItsOwnProfile() {
-        IngestParser.Result all = IngestParser.read(base(), null, ReportNode.NO_OP, Map.of());
+        IngestParser.Result all = IngestParser.read(base(), null, ReportNode.NO_OP, Map.of(), COMPARED);
         String equipmentId = all.of(CgmesSubset.EQUIPMENT).headerId();
         String sshId = all.of(CgmesSubset.STEADY_STATE_HYPOTHESIS).headerId();
 
         IngestParser.Result crossed = IngestParser.read(base(), null, ReportNode.NO_OP,
-                Map.of(CgmesSubset.STEADY_STATE_HYPOTHESIS, equipmentId, CgmesSubset.EQUIPMENT, sshId));
+                Map.of(CgmesSubset.STEADY_STATE_HYPOTHESIS, equipmentId, CgmesSubset.EQUIPMENT, sshId), COMPARED);
 
         assertThat(crossed.of(CgmesSubset.EQUIPMENT).index()).isNotNull();
         assertThat(crossed.of(CgmesSubset.STEADY_STATE_HYPOTHESIS).index()).isNotNull();
@@ -132,12 +137,12 @@ class IngestParserTest {
      */
     @Test
     void aComparedFileWhoseHeaderIsNotFirstIsReadInFull() {
-        IngestParser.Result plain = IngestParser.read(base(), null, ReportNode.NO_OP, Map.of());
+        IngestParser.Result plain = IngestParser.read(base(), null, ReportNode.NO_OP, Map.of(), COMPARED);
         IngestParser.ParsedFile plainSsh = plain.of(CgmesSubset.STEADY_STATE_HYPOTHESIS);
         String moved = headerAfterFirstObject(read(SSH));
 
         IngestParser.Result result = IngestParser.read(withSsh(moved), null, ReportNode.NO_OP,
-                Map.of(CgmesSubset.STEADY_STATE_HYPOTHESIS, plainSsh.headerId()));
+                Map.of(CgmesSubset.STEADY_STATE_HYPOTHESIS, plainSsh.headerId()), COMPARED);
 
         IngestParser.ParsedFile ssh = result.of(CgmesSubset.STEADY_STATE_HYPOTHESIS);
         assertThat(ssh.headerId()).isEqualTo(plainSsh.headerId());
@@ -154,7 +159,7 @@ class IngestParserTest {
         assertThat(profile.find()).isTrue();
         String doubled = ssh.substring(0, profile.end()) + profile.group() + ssh.substring(profile.end());
 
-        IngestParser.Result result = IngestParser.read(withSsh(doubled), null, ReportNode.NO_OP, Map.of());
+        IngestParser.Result result = IngestParser.read(withSsh(doubled), null, ReportNode.NO_OP, Map.of(), COMPARED);
 
         assertThat(result.of(CgmesSubset.STEADY_STATE_HYPOTHESIS).terms().get(RdfDbVocabulary.MODEL_PROFILE))
                 .hasSize(1);
@@ -201,8 +206,8 @@ class IngestParserTest {
                 + "<cim:EnergyConsumer.p>1.5</cim:EnergyConsumer.p>"
                 + "<cim:EnergyConsumer.LoadResponse rdf:resource=\"#_a b\"/>"
                 + "</cim:EnergyConsumer>\n" + ssh.substring(end);
-        IngestParser.Result plain = IngestParser.read(base(), null, ReportNode.NO_OP, Map.of());
-        IngestParser.Result result = IngestParser.read(withSsh(malformed), null, ReportNode.NO_OP, Map.of());
+        IngestParser.Result plain = IngestParser.read(base(), null, ReportNode.NO_OP, Map.of(), COMPARED);
+        IngestParser.Result result = IngestParser.read(withSsh(malformed), null, ReportNode.NO_OP, Map.of(), COMPARED);
 
         Map<String, Map<String, List<CgmesStatement>>> bySubject =
                 result.of(CgmesSubset.STEADY_STATE_HYPOTHESIS).index().bySubject();

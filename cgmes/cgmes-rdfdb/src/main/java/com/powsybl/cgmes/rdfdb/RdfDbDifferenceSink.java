@@ -22,6 +22,7 @@ import org.eclipse.rdf4j.model.ValueFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -92,46 +93,47 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
      * node, its difference members and their data graphs then go into the <em>same</em> guarded request: a reader
      * never sees a snapshot whose members are missing, and a losing writer leaves nothing behind.</p>
      *
-     * @param iri          the IRI of the snapshot node
-     * @param version      the version label
-     * @param timestep     the canonical timestep
-     * @param timestepLabel the {@code HH:MM} rendering of the timestep, for display only
-     * @param parent       the IRI of the parent snapshot
-     * @param edge         {@code pdb:VersionEdge} or {@code pdb:TimestepEdge}
-     * @param depth        the depth of the new snapshot
-     * @param state        the effective model per profile at the new snapshot
-     * @param timestepRoot the root snapshot of the new snapshot's timestep
-     * @param parentStates the parent states the write is guarded against, per profile
+     * @param iri                the IRI of the snapshot node
+     * @param modellingAuthority the modelling authority set of the snapshot's tree
+     * @param version            the version
+     * @param timestamp          the moment
+     * @param parent             the IRI of the parent snapshot
+     * @param edge               {@code pdb:VersionEdge} or {@code pdb:TimestampEdge}
+     * @param depth              the depth of the new snapshot
+     * @param state              the effective model per profile at the new snapshot
+     * @param timestampRoot      the root snapshot of the new snapshot's timestamp
+     * @param parentStates       the parent states the write is guarded against, per profile
      */
-    record SnapshotWrite(String iri, String version, String timestep, String timestepLabel, String parent,
-                         String edge, int depth, Map<CgmesSubset, String> state, String timestepRoot,
+    record SnapshotWrite(String iri, String modellingAuthority, int version, Instant timestamp, String parent,
+                         String edge, int depth, Map<CgmesSubset, String> state, String timestampRoot,
                          Map<CgmesSubset, String> parentStates) {
 
         /**
          * A root snapshot: no parent, and full models of every profile.
          *
-         * @param iri           the IRI of the snapshot node
-         * @param version       the version label
-         * @param timestep      the canonical timestep
-         * @param timestepLabel the {@code HH:MM} rendering of the timestep
-         * @param state         the full model per profile
+         * @param iri                the IRI of the snapshot node
+         * @param modellingAuthority the modelling authority set of the tree
+         * @param version            the version
+         * @param timestamp          the moment
+         * @param state              the full model per profile
          * @return the write
          */
-        static SnapshotWrite root(String iri, String version, String timestep, String timestepLabel,
+        static SnapshotWrite root(String iri, String modellingAuthority, int version, Instant timestamp,
                                   Map<CgmesSubset, String> state) {
-            return new SnapshotWrite(iri, version, timestep, timestepLabel, null, null, 0, state, iri, Map.of());
+            return new SnapshotWrite(iri, modellingAuthority, version, timestamp, null, null, 0, state, iri,
+                    Map.of());
         }
 
-        /** A new timestep root, whose write must fail if the timestep already exists. */
-        boolean isNewTimestep() {
-            return RdfDbVocabulary.TIMESTEP_EDGE.equals(edge);
+        /** A new timestamp root, whose write must fail if the timestamp already exists in its tree. */
+        boolean isNewTimestamp() {
+            return RdfDbVocabulary.TIMESTAMP_EDGE.equals(edge);
         }
 
         /**
          * The {@code pdb:Snapshot} node, as triples of an {@code INSERT} template.
          *
          * <p>A snapshot without a parent is a root of full models: its members and its full models are its state.
-         * A difference snapshot carries neither of the two booleans earlier releases wrote beside its links:
+         * A difference snapshot carries no boolean of its own beside its links:
          * {@link RdfDbVocabulary#FAST_PREDICATES_ONLY} is written on each member and a reader takes the conjunction
          * ({@link SnapshotInfo#fast()}), and it has no {@link RdfDbVocabulary#FULL_MODELS} link at all until a
          * {@link Checkpoint} gives it one, which is what {@link SnapshotInfo#hasFull()} reads.</p>
@@ -147,12 +149,12 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
                     .append(SparqlText.iri(RdfDbVocabulary.SNAPSHOT_CLASS)).append(" ; ")
                     .append(SparqlText.iri(RdfDbVocabulary.SCENARIO)).append(' ')
                     .append(SparqlText.str(scenario)).append(" ; ")
+                    .append(SparqlText.iri(RdfDbVocabulary.MODELLING_AUTHORITY)).append(' ')
+                    .append(SparqlText.str(modellingAuthority)).append(" ; ")
+                    .append(SparqlText.iri(RdfDbVocabulary.TIMESTAMP)).append(' ')
+                    .append(SparqlText.dateTime(timestamp)).append(" ; ")
                     .append(SparqlText.iri(RdfDbVocabulary.VERSION)).append(' ')
-                    .append(SparqlText.str(version)).append(" ; ")
-                    .append(SparqlText.iri(RdfDbVocabulary.TIMESTEP)).append(' ')
-                    .append(SparqlText.str(timestep)).append(" ; ")
-                    .append(SparqlText.iri(RdfDbVocabulary.TIMESTEP_LABEL)).append(' ')
-                    .append(SparqlText.str(timestepLabel)).append(" ; ")
+                    .append(SparqlText.integer(version)).append(" ; ")
                     .append(SparqlText.iri(RdfDbVocabulary.KIND)).append(' ')
                     .append(SparqlText.iri(parent == null ? RdfDbVocabulary.FULL : RdfDbVocabulary.DIFF))
                     .append(" ; ");
@@ -164,8 +166,8 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
             }
             query.append(SparqlText.iri(RdfDbVocabulary.DEPTH)).append(' ')
                     .append(SparqlText.integer(depth)).append(" ; ")
-                    .append(SparqlText.iri(RdfDbVocabulary.TIMESTEP_ROOT)).append(' ')
-                    .append(SparqlText.iri(timestepRoot)).append(" ; ")
+                    .append(SparqlText.iri(RdfDbVocabulary.TIMESTAMP_ROOT)).append(' ')
+                    .append(SparqlText.iri(timestampRoot)).append(" ; ")
                     .append(SparqlText.iri(RdfDbVocabulary.CREATED)).append(' ')
                     .append(SparqlText.dateTime(now));
             members.forEach(id -> appendIri(query, RdfDbVocabulary.MEMBER, id));
@@ -182,14 +184,15 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
      *
      * <p>It applies to an <em>unversioned</em> write and to nothing else. A scenario without snapshots has no other
      * way of keeping the chain of a profile linear, so the rule is the chain. A versioned write is guarded on the
-     * snapshot instead &mdash; one {@code pdb:VersionEdge} child per snapshot, a unique {@code (timestep, version)},
+     * snapshot instead &mdash; one {@code pdb:VersionEdge} child per snapshot, a version greater than every other of
+     * its {@code (modellingAuthority, timestamp)},
      * and the parent's {@code pdb:state} unchanged &mdash; and those guards subsume it.</p>
      *
-     * <p>Keeping it for versioned writes would be worse than redundant: it would be wrong. Every timestep of a day
+     * <p>Keeping it for versioned writes would be worse than redundant: it would be wrong. Every timestamp of a day
      * is "the base plus these differences", so the base steady-state model legitimately has one successor per
-     * timestep; and once one of them exists, the model-level rule would refuse the <em>next base version</em> of
+     * timestamp; and once one of them exists, the model-level rule would refuse the <em>next base version</em> of
      * that profile and freeze the base chain for the rest of the day. Versions are the inner dimension precisely
-     * so that they keep growing while timesteps fan out.</p>
+     * so that they keep growing while timestamps fan out.</p>
      */
     private boolean modelChainMustStayLinear() {
         return snapshotWrite == null;
@@ -587,20 +590,21 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
         }
         SnapshotWrite s = snapshotWrite;
         String parent = SparqlText.iri(s.parent());
+        String moment = " a pdb:Snapshot ; pdb:modellingAuthority " + SparqlText.str(s.modellingAuthority())
+                + " ; pdb:timestamp " + SparqlText.dateTime(s.timestamp());
         query.append(" FILTER NOT EXISTS { GRAPH ").append(meta).append(" { ").append(SparqlText.iri(s.iri()))
                 .append(" ?ps ?os } }")
-                .append(" FILTER NOT EXISTS { GRAPH ").append(meta)
-                .append(" { ?ys a pdb:Snapshot ; pdb:timestep ").append(SparqlText.str(s.timestep()))
-                .append(" ; pdb:version ").append(SparqlText.str(s.version())).append(" } }")
+                // Versions only grow: nothing at the same moment of the same tree is at this version or above
+                .append(" FILTER NOT EXISTS { GRAPH ").append(meta).append(" { ?ys").append(moment)
+                .append(" ; pdb:version ?yv FILTER(?yv >= ").append(SparqlText.integer(s.version())).append(") } }")
                 .append(" FILTER EXISTS { GRAPH ").append(meta).append(" { ").append(parent)
                 .append(" a pdb:Snapshot } }");
         if (RdfDbVocabulary.VERSION_EDGE.equals(s.edge())) {
             query.append(" FILTER NOT EXISTS { GRAPH ").append(meta).append(" { ?cs pdb:parent ").append(parent)
                     .append(" ; pdb:edge pdb:VersionEdge } }");
         }
-        if (s.isNewTimestep()) {
-            query.append(" FILTER NOT EXISTS { GRAPH ").append(meta)
-                    .append(" { ?ts a pdb:Snapshot ; pdb:timestep ").append(SparqlText.str(s.timestep()))
+        if (s.isNewTimestamp()) {
+            query.append(" FILTER NOT EXISTS { GRAPH ").append(meta).append(" { ?ts").append(moment)
                     .append(" } }");
         }
         s.parentStates().values().forEach(id -> query.append(" FILTER EXISTS { GRAPH ").append(meta).append(" { ")
