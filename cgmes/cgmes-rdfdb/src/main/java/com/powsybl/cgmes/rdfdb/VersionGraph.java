@@ -34,7 +34,7 @@ import static com.powsybl.cgmes.rdfdb.SnapshotRows.text;
  *
  * <h2>One round trip</h2>
  * <p>Both chains come back in a single request. A {@code UNION} binds the start of each side &mdash; the snapshot
- * the network is at, and the snapshot the caller asked for, resolved by {@code (timestep, version)} in the same
+ * the network is at, and the snapshot the caller asked for, resolved by its address in the same
  * query &mdash; and a {@code pdb:parent*} property path walks each of them up to the root. The client then finds
  * the lowest common ancestor, which on a chain that never branches is simply the deepest snapshot both sides
  * reached, and reads the path off the two chains.</p>
@@ -96,7 +96,7 @@ public final class VersionGraph {
      * @return the plan
      */
     public UpdatePlan plan(Network network, SnapshotRef target, RdfDbUpdateOptions options) {
-        catalog.check(target);
+        catalog.readable(target);
         RdfDbProvenance provenance = network.getExtension(RdfDbProvenance.class);
         if (provenance != null && !scenario.equals(provenance.scenario())) {
             return crossScenario(provenance.scenario());
@@ -114,6 +114,18 @@ public final class VersionGraph {
     }
 
     /**
+     * A plan between two trees of one scenario: the same string arithmetic as across scenarios, since the snapshot
+     * IRI carries its modelling authority. The trees share only the boundary, so no difference leads from one to
+     * the other.
+     */
+    private UpdatePlan crossAuthority(String from, String networkAuthority, SnapshotRef target) {
+        return new UpdatePlan(UpdatePlan.Kind.FULL, from, null, List.of(),
+                List.of("network is at modelling authority '" + networkAuthority + "', target is '"
+                        + target.modellingAuthority() + "': diffs never cross modelling authorities"),
+                0, false, 0, Map.of());
+    }
+
+    /**
      * Plan the way to a target from a snapshot named by its IRI or by the models a network holds.
      *
      * @param fromSnapshotIri the IRI of the snapshot the network is at, or {@code null}
@@ -124,11 +136,16 @@ public final class VersionGraph {
      */
     public UpdatePlan plan(String fromSnapshotIri, Map<CgmesSubset, String> identity, SnapshotRef target,
                            RdfDbUpdateOptions options) {
-        catalog.check(target);
+        catalog.readable(target);
         RdfDbUpdateOptions effective = options == null ? new RdfDbUpdateOptions() : options;
         if (fromSnapshotIri != null && !scenario.equals(RdfDbNames.scenarioOf(fromSnapshotIri))) {
             return crossScenario(String.valueOf(RdfDbNames.scenarioOf(fromSnapshotIri)));
         }
+        SnapshotRef fromRef = fromSnapshotIri == null ? null : RdfDbNames.refOf(fromSnapshotIri);
+        if (fromRef != null && !fromRef.modellingAuthority().equals(target.modellingAuthority())) {
+            return crossAuthority(fromSnapshotIri, fromRef.modellingAuthority(), target);
+        }
+        catalog.checkSchema();
         String from = fromSnapshotIri;
         if (from == null && !identity.isEmpty()) {
             from = catalog.byState(identity).map(SnapshotInfo::iri).orElse(null);
@@ -164,6 +181,7 @@ public final class VersionGraph {
         if (!scenario.equals(RdfDbNames.scenarioOf(snapshotIri))) {
             throw new RdfDbException("snapshot " + snapshotIri + " does not belong to scenario '" + scenario + "'");
         }
+        catalog.checkSchema();
         Chains chains = chains(Map.of(SIDE_B, new Start(snapshotIri, null)));
         List<SnapshotInfo> chain = chains.bySide().get(SIDE_B);
         if (chain.isEmpty()) {
@@ -385,7 +403,7 @@ public final class VersionGraph {
     /**
      * Walk the version graph up from many snapshots at once.
      *
-     * <p>A day of ninety-six timesteps is ninety-six chains, and asking for them one by one would be ninety-six
+     * <p>A day of ninety-six timestamps is ninety-six chains, and asking for them one by one would be ninety-six
      * round trips over a path walk that mostly reads the <em>same</em> ancestors. One request instead: a
      * {@code UNION} binds the start of every side, one branch returns which snapshots each side reached, and a
      * second branch returns the detail rows of each reached snapshot <em>once</em>, through a
@@ -476,11 +494,6 @@ public final class VersionGraph {
         if (start.snapshotIri() != null) {
             return "BIND(" + SparqlText.iri(start.snapshotIri()) + " AS ?start)";
         }
-        SnapshotRef ref = start.ref();
-        String timestep = ref.timestep() == null ? catalog.baseTimestep() : ref.timestep();
-        return "?start a pdb:Snapshot ; pdb:timestep " + SparqlText.str(timestep)
-                + (ref.version() == null
-                        ? " . FILTER NOT EXISTS { ?c pdb:parent ?start ; pdb:edge pdb:VersionEdge }"
-                        : " ; pdb:version " + SparqlText.str(ref.version()));
+        return SnapshotCatalog.addressPattern("?start", catalog.readable(start.ref()));
     }
 }

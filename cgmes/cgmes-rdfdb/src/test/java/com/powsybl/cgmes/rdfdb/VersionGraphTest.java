@@ -20,8 +20,12 @@ import org.junit.jupiter.params.provider.MethodSource;
 import java.util.List;
 import java.util.Map;
 
+import static com.powsybl.cgmes.rdfdb.Backends.BASE;
+import static com.powsybl.cgmes.rdfdb.Backends.BE;
+import static com.powsybl.cgmes.rdfdb.Backends.NL;
 import static com.powsybl.cgmes.rdfdb.Backends.microGridBe;
 import static com.powsybl.cgmes.rdfdb.Backends.params;
+import static com.powsybl.cgmes.rdfdb.Backends.ref;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -73,10 +77,10 @@ class VersionGraphTest {
         db.clear(S);
         db.clear(OTHER);
         SnapshotCatalog catalog = db.snapshots(S);
-        SnapshotInfo a = catalog.putFull(microGridBe(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
-        SnapshotInfo b = catalog.putDiff(fast(a, "urn:uuid:ssh-b", "11.0"), SnapshotRef.of(S, "1.1"));
-        SnapshotInfo c = catalog.putDiff(slow(b, "urn:uuid:ssh-c"), SnapshotRef.of(S, "1.2"));
-        SnapshotInfo d = catalog.putDiff(fast(c, "urn:uuid:ssh-d", "13.0"), SnapshotRef.of(S, "1.3"));
+        SnapshotInfo a = catalog.putFull(microGridBe(), null, ref(S, 1), null, params(), ReportNode.NO_OP);
+        SnapshotInfo b = catalog.putDiff(fast(a, "urn:uuid:ssh-b", "11.0"), ref(S, 2));
+        SnapshotInfo c = catalog.putDiff(slow(b, "urn:uuid:ssh-c"), ref(S, 3));
+        SnapshotInfo d = catalog.putDiff(fast(c, "urn:uuid:ssh-d", "13.0"), ref(S, 4));
         catalog.verify();
         return new Chain(db, a, b, c, d);
     }
@@ -93,10 +97,10 @@ class VersionGraphTest {
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void oneStepForwardIsADiff(String backend) {
         try (RdfDbConnection db = chain(backend).db) {
-            Chain chain = new Chain(db, db.snapshots(S).find(SnapshotRef.of(S, "1.0")).orElseThrow(),
-                    db.snapshots(S).find(SnapshotRef.of(S, "1.1")).orElseThrow(),
-                    db.snapshots(S).find(SnapshotRef.of(S, "1.2")).orElseThrow(),
-                    db.snapshots(S).find(SnapshotRef.of(S, "1.3")).orElseThrow());
+            Chain chain = new Chain(db, db.snapshots(S).find(ref(S, 1)).orElseThrow(),
+                    db.snapshots(S).find(ref(S, 2)).orElseThrow(),
+                    db.snapshots(S).find(ref(S, 3)).orElseThrow(),
+                    db.snapshots(S).find(ref(S, 4)).orElseThrow());
 
             UpdatePlan ab = plan(chain, chain.a, chain.b);
             assertThat(ab.kind()).isEqualTo(UpdatePlan.Kind.DIFF);
@@ -155,7 +159,7 @@ class VersionGraphTest {
         Chain chain = chain(backend);
         try (RdfDbConnection db = chain.db) {
             SnapshotInfo e = db.snapshots(S).putDiff(fast(chain.d, "urn:uuid:ssh-e", "15.0"),
-                    SnapshotRef.of(S, "1.4"));
+                    ref(S, 5));
             assertThat(plan(chain, chain.c, e).kind()).isEqualTo(UpdatePlan.Kind.DIFF);
 
             UpdatePlan limited = db.versionGraph(S).plan(chain.c.iri(), e.ref(),
@@ -207,7 +211,7 @@ class VersionGraphTest {
     void anotherScenarioIsFullWithoutAQuery(String backend) {
         Chain chain = chain(backend);
         try (RdfDbConnection db = chain.db) {
-            SnapshotInfo there = db.snapshots(OTHER).putFull(microGridBe(), null, SnapshotRef.of(OTHER, "1.0"), params(),
+            SnapshotInfo there = db.snapshots(OTHER).putFull(microGridBe(), null, ref(OTHER, 1), null, params(),
                     ReportNode.NO_OP);
 
             UpdatePlan across = db.versionGraph(S).plan(there.iri(), chain.b.ref(), new RdfDbUpdateOptions());
@@ -218,7 +222,7 @@ class VersionGraphTest {
             assertThat(across.steps()).isEmpty();
             assertThat(across.from()).isNull();
 
-            assertThatThrownBy(() -> db.versionGraph(S).plan(chain.a.iri(), SnapshotRef.of(OTHER, "1.0"),
+            assertThatThrownBy(() -> db.versionGraph(S).plan(chain.a.iri(), ref(OTHER, 1),
                     new RdfDbUpdateOptions())).isInstanceOf(RdfDbException.class)
                     .hasMessageContaining("cannot address scenario 'other'");
             assertThatThrownBy(() -> db.versionGraph(S).materialization(there.iri()))
@@ -227,12 +231,31 @@ class VersionGraphTest {
         }
     }
 
+    /**
+     * Another modelling authority of the same scenario is FULL by string arithmetic on the IRI, like another
+     * scenario: the target named here does not even exist, and a planner that asked the database would say so.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void anotherModellingAuthorityIsFullWithoutAQuery(String backend) {
+        Chain chain = chain(backend);
+        try (RdfDbConnection db = chain.db) {
+            UpdatePlan across = db.versionGraph(S).plan(chain.b.iri(), SnapshotRef.of(S, NL, BASE, 1),
+                    new RdfDbUpdateOptions());
+
+            assertThat(across.kind()).isEqualTo(UpdatePlan.Kind.FULL);
+            assertThat(across.reasons()).anyMatch(reason -> reason.contains("network is at modelling authority '"
+                    + BE + "', target is '" + NL + "'"));
+            assertThat(across.steps()).isEmpty();
+        }
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void anUnknownTargetIsRefused(String backend) {
         Chain chain = chain(backend);
         try (RdfDbConnection db = chain.db) {
-            assertThatThrownBy(() -> db.versionGraph(S).plan(chain.a.iri(), SnapshotRef.of(S, "9.9"),
+            assertThatThrownBy(() -> db.versionGraph(S).plan(chain.a.iri(), ref(S, 99),
                     new RdfDbUpdateOptions())).isInstanceOf(RdfDbException.class)
                     .hasMessageContaining("holds no snapshot");
         }
@@ -278,7 +301,7 @@ class VersionGraphTest {
         Chain chain = chain(backend);
         try (RdfDbConnection db = chain.db) {
             VersionGraph.Chains chains = db.versionGraph(S).chains(Map.of(
-                    "B0", new VersionGraph.Start(null, SnapshotRef.of(S, "9.9"))));
+                    "B0", new VersionGraph.Start(null, ref(S, 99))));
             assertThat(chains.bySide().get("B0")).isEmpty();
         }
     }

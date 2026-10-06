@@ -26,7 +26,7 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.time.ZonedDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumMap;
@@ -174,7 +174,7 @@ final class RdfDbMaterializer {
      *
      * <p>Per profile rather than per snapshot: each one starts at the nearest ancestor that holds a full graph of
      * <em>that</em> profile and applies the differences below it. That is what makes a checkpoint useful without
-     * being a new root, and what makes a timestep able to store its state variables whole while its steady state
+     * being a new root, and what makes a timestamp able to store its state variables whole while its steady state
      * is a difference.</p>
      *
      * @param db         the open connection
@@ -365,7 +365,7 @@ final class RdfDbMaterializer {
             }
         });
         NetworkIdentity.advance(network, targets);
-        network.setCaseDate(ZonedDateTime.parse(snapshot.timestep()));
+        network.setCaseDate(snapshot.timestamp().atZone(ZoneOffset.UTC));
         RdfDbProvenanceImpl provenance = new RdfDbProvenanceImpl(db.database(), scenario, graphs, Instant.now(),
                 NetworkIdentity.modelIds(network));
         provenance.setSnapshot(snapshot.iri());

@@ -10,14 +10,18 @@ package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.model.CgmesSubset;
 
+import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * How to build the data of one snapshot from what the database holds: per profile, where to start and what to apply.
  *
- * <p>Per profile rather than per snapshot, because a snapshot need not have a full graph of everything. A timestep
- * root stores the state variables of its timestep as a full graph while its steady state is a difference; a
+ * <p>Per profile rather than per snapshot, because a snapshot need not have a full graph of everything. A timestamp
+ * root stores the state variables of its timestamp as a full graph while its steady state is a difference; a
  * checkpoint materialises the profiles a chain touched and leaves the untouched ones at the instance file they have
  * always been at. So each profile walks up the chain on its own until it finds an ancestor that holds a full graph
  * of <em>that</em> profile, and the differences below that ancestor are what has to be applied.</p>
@@ -53,5 +57,32 @@ public record MaterializationPlan(String target, Map<CgmesSubset, FullSource> st
         startModel = Map.copyOf(startModel);
         steps = List.copyOf(steps);
         targetState = Map.copyOf(targetState);
+    }
+
+    /**
+     * The same plan for fewer profiles: what a load with a profile projection materialises.
+     *
+     * @param profiles the profiles to keep, or {@code null} or empty for all of them
+     * @return the plan, restricted to those profiles
+     * @throws RdfDbException if a profile is not part of the snapshot's state
+     */
+    public MaterializationPlan project(Set<CgmesSubset> profiles) {
+        if (profiles == null || profiles.isEmpty()) {
+            return this;
+        }
+        Set<CgmesSubset> missing = EnumSet.copyOf(profiles);
+        missing.removeAll(targetState.keySet());
+        if (!missing.isEmpty()) {
+            throw new RdfDbException("the snapshot " + target + " holds no " + missing + "; it holds "
+                    + new TreeSet<>(targetState.keySet()));
+        }
+        Map<CgmesSubset, FullSource> start = new EnumMap<>(CgmesSubset.class);
+        Map<CgmesSubset, String> state = new EnumMap<>(CgmesSubset.class);
+        profiles.forEach(subset -> {
+            start.put(subset, startModel.get(subset));
+            state.put(subset, targetState.get(subset));
+        });
+        return new MaterializationPlan(target, start,
+                steps.stream().filter(step -> profiles.contains(step.model().subset())).toList(), state);
     }
 }

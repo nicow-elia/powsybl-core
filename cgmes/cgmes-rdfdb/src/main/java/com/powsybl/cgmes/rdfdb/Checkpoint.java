@@ -32,7 +32,7 @@ import java.util.Objects;
  * <p>It copies one graph per profile the chain touched and applies the differences to the copies with the same
  * three replace operations the client-side application uses, so it costs about what one materialisation costs
  * &mdash; paid once, on the server, instead of on every client. {@link UpdatePlan#checkpointRecommended()} says
- * when that has become worthwhile; the rule of thumb is once per hundred versions, or once per timestep root.</p>
+ * when that has become worthwhile; the rule of thumb is once per hundred versions, or once per timestamp root.</p>
  *
  * <p>It is idempotent: a snapshot that already has full graphs is returned unchanged. It is also not on any hot
  * path, which is why it is a utility rather than something a load does by itself.</p>
@@ -67,8 +67,8 @@ public final class Checkpoint {
         Map<CgmesSubset, List<UpdatePlan.DiffStep>> steps = new EnumMap<>(CgmesSubset.class);
         Map<CgmesSubset, String> nodes = new EnumMap<>(CgmesSubset.class);
         plan.steps().forEach(step -> steps.computeIfAbsent(step.model().subset(), subset -> {
-            nodes.put(subset, RdfDbNames.materialized(ref.scenario(), info.timestep(), info.version(),
-                    subset.getIdentifier()));
+            nodes.put(subset, RdfDbNames.materialized(ref.scenario(), info.modellingAuthority(), info.timestamp(),
+                    info.version(), subset.getIdentifier()));
             return new ArrayList<>();
         }).add(step));
         if (steps.isEmpty()) {
