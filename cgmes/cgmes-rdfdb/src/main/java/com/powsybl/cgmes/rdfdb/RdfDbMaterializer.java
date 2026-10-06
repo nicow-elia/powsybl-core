@@ -19,6 +19,7 @@ import com.powsybl.iidm.network.NetworkFactory;
 import com.powsybl.triplestore.api.TripleStoreOptions;
 import com.powsybl.triplestore.impl.rdf4j.TripleStoreRDF4J;
 import com.powsybl.triplestore.impl.rdf4j.sparql.ScenarioGraphNames;
+import org.eclipse.rdf4j.model.Statement;
 import org.eclipse.rdf4j.repository.sail.SailRepository;
 import org.eclipse.rdf4j.sail.memory.MemoryStore;
 import org.slf4j.Logger;
@@ -36,6 +37,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
+import java.util.function.UnaryOperator;
 
 /**
  * Builds the network of a stored state that no difference can reach, by materialising the data first.
@@ -224,8 +226,7 @@ final class RdfDbMaterializer {
             }
             long fetchStart = System.nanoTime();
             GraphFetcher.FetchStatistics fetchStatistics = new GraphFetcher(db, scenario)
-                    .fetchInto(local, localToRemote);
-            rebaseSharedModels(local, plan, stateModels, contextOfSubset);
+                    .fetchInto(local, localToRemote, rebasedBoundary(plan, stateModels, contextOfSubset));
             Duration fetchWallClock = Duration.ofNanos(System.nanoTime() - fetchStart);
 
             long applyStart = System.nanoTime();
@@ -296,8 +297,7 @@ final class RdfDbMaterializer {
                 localToRemote.put(localName, entry.getValue().graph());
                 contexts.put(entry.getKey(), localName);
             }
-            new GraphFetcher(db, scenario).fetchInto(local, localToRemote);
-            rebaseSharedModels(local, plan, models, contexts);
+            new GraphFetcher(db, scenario).fetchInto(local, localToRemote, rebasedBoundary(plan, models, contexts));
             applySteps(db, local, plan, contexts);
             handedOver = true;
             return new MaterialisedStore(local, contexts, subjectBase(plan, models));
@@ -337,34 +337,29 @@ final class RdfDbMaterializer {
      * takes from the data source, so the files of two modelling authorities carry two subject bases. The boundary
      * of a scenario is stored once, by the first root, and every later root links it: in the store of the second
      * authority its equipment then points at {@code <base of NL>#_bv} while the base voltage stored with the
-     * boundary is {@code <base of BE>#_bv}, and the conversion finds no nominal voltage. Rewriting the boundary
-     * graph's subjects and objects in the local store to the snapshot's base is what the files themselves, read
-     * together, would have given; the stored graph stays as it was written.</p>
+     * boundary is {@code <base of BE>#_bv}, and the conversion finds no nominal voltage. Moving the boundary
+     * graphs' subjects and IRI objects to the snapshot's base while they are fetched is what the files themselves,
+     * read together, would have given; the stored graphs stay as they were written.</p>
+     *
+     * <p>Only the boundary start models are looked at: they are the only graphs a scenario shares between modelling
+     * authorities, and a boundary's start model is always its target state, so its stored model is in
+     * {@code models}.</p>
+     *
+     * @return per local context name, the mapping of its statements; empty when no boundary needs one
      */
-    private static void rebaseSharedModels(TripleStoreRDF4J local, MaterializationPlan plan,
-                                           Map<String, StoredModel> models, Map<CgmesSubset, String> contexts) {
+    private static Map<String, UnaryOperator<Statement>> rebasedBoundary(MaterializationPlan plan,
+                                                                         Map<String, StoredModel> models,
+                                                                         Map<CgmesSubset, String> contexts) {
         String base = subjectBase(plan, models);
-        if (base.isEmpty()) {
-            return;
-        }
+        Map<String, UnaryOperator<Statement>> mappings = new LinkedHashMap<>();
         plan.startModel().forEach((subset, source) -> {
             StoredModel model = models.get(source.modelId());
-            if (model == null || model.subjectBase().isEmpty() || model.subjectBase().equals(base)) {
-                return;
-            }
-            String graph = SparqlText.iri(contexts.get(subset));
-            String from = SparqlText.str(model.subjectBase());
-            String rebase = "DELETE { GRAPH " + graph + " { ?s ?p ?o } } INSERT { GRAPH " + graph + " { ?s2 ?p ?o2 } }"
-                    + " WHERE { GRAPH " + graph + " { ?s ?p ?o }"
-                    + " FILTER(STRSTARTS(STR(?s), " + from + ") || (isIRI(?o) && STRSTARTS(STR(?o), " + from + ")))"
-                    + " BIND(IF(STRSTARTS(STR(?s), " + from + "), IRI(CONCAT(" + SparqlText.str(base)
-                    + ", STRAFTER(STR(?s), " + from + "))), ?s) AS ?s2)"
-                    + " BIND(IF(isIRI(?o) && STRSTARTS(STR(?o), " + from + "), IRI(CONCAT(" + SparqlText.str(base)
-                    + ", STRAFTER(STR(?o), " + from + "))), ?o) AS ?o2) }";
-            try (var conn = local.getRepository().getConnection()) {
-                conn.prepareUpdate(rebase).execute();
+            if (!base.isEmpty() && model != null && model.isBoundary() && !model.subjectBase().isEmpty()
+                    && !model.subjectBase().equals(base)) {
+                mappings.put(contexts.get(subset), GraphFetcher.rebase(model.subjectBase(), base));
             }
         });
+        return mappings;
     }
 
     /** Fetch every difference of the plan in one request and apply them, folded, one profile at a time. */

@@ -13,15 +13,22 @@ import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.events.NetworkEvent;
+import com.powsybl.triplestore.impl.rdf4j.TripleStoreRDF4J;
+import org.eclipse.rdf4j.model.IRI;
+import org.eclipse.rdf4j.model.Statement;
 import org.eclipse.rdf4j.model.Value;
+import org.eclipse.rdf4j.repository.RepositoryConnection;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.UnaryOperator;
 
 import static com.powsybl.cgmes.rdfdb.Backends.BE;
 import static com.powsybl.cgmes.rdfdb.Backends.NL;
@@ -111,6 +118,54 @@ class RdfDbVersionedFlowTest {
             UpdateResult toNl = update(be, db, SnapshotRef.latest(S, NL), new RdfDbUpdateOptions());
             assertThat(toNl.route()).isEqualTo(UpdateResult.Route.FULL_RELOAD);
             Networks.assertSameNetwork(Network.read(microGridNl(), params()), toNl.network(), IDENTITY);
+        }
+    }
+
+    @Test
+    void theBoundaryRebaseMovesOnlyTheTermsOfTheOldBase() {
+        try (RdfDbConnection db = twoScenarios(Backends.MEMORY)) {
+            db.snapshots(S).putFull(microGridNl(), null, SnapshotRef.latest(S, NL), null, params(),
+                    ReportNode.NO_OP);
+            List<StoredModel> models = db.catalog(S).models();
+            List<StoredModel> boundary = models.stream().filter(StoredModel::isBoundary).toList();
+            String from = boundary.get(0).subjectBase();
+            String to = models.stream().filter(m -> NL.equals(m.modelingAuthoritySet()))
+                    .map(StoredModel::subjectBase).filter(base -> !base.isEmpty()).findFirst().orElseThrow();
+            assertThat(to).isNotEqualTo(from);
+            UnaryOperator<Statement> rebase = GraphFetcher.rebase(from, to);
+
+            Map<CgmesSubset, Integer> sizes = new EnumMap<>(CgmesSubset.class);
+            Map<CgmesSubset, Integer> rewritten = new EnumMap<>(CgmesSubset.class);
+            for (StoredModel model : boundary) {
+                TripleStoreRDF4J local = new TripleStoreRDF4J();
+                List<Statement> stored;
+                try {
+                    new GraphFetcher(db, S).fetchInto(local, Map.of("contexts:bd.xml", model.graph()));
+                    try (RepositoryConnection conn = local.getRepository().getConnection()) {
+                        stored = conn.getStatements(null, null, null).stream().toList();
+                    }
+                } finally {
+                    local.close();
+                }
+                int changed = 0;
+                for (Statement statement : stored) {
+                    Statement mapped = rebase.apply(statement);
+                    boolean ofOldBase = statement.getSubject().stringValue().startsWith(from)
+                            || statement.getObject() instanceof IRI iri && iri.stringValue().startsWith(from);
+                    assertThat(mapped != statement).isEqualTo(ofOldBase);
+                    assertThat(mapped.getPredicate()).isEqualTo(statement.getPredicate());
+                    assertThat(mapped.getSubject().stringValue()).doesNotStartWith(from);
+                    changed += ofOldBase ? 1 : 0;
+                }
+                sizes.put(model.subset(), stored.size());
+                rewritten.put(model.subset(), changed);
+            }
+            // Every statement of the MicroGrid boundary but the eight of its md:FullModel header (an urn:uuid
+            // subject) has a subject of the first root's base
+            assertThat(sizes).containsExactlyInAnyOrderEntriesOf(Map.of(
+                    CgmesSubset.EQUIPMENT_BOUNDARY, 184, CgmesSubset.TOPOLOGY_BOUNDARY, 104));
+            assertThat(rewritten).containsExactlyInAnyOrderEntriesOf(Map.of(
+                    CgmesSubset.EQUIPMENT_BOUNDARY, 176, CgmesSubset.TOPOLOGY_BOUNDARY, 96));
         }
     }
 
