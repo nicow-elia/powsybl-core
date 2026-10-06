@@ -289,6 +289,30 @@ public final class SnapshotCatalog {
     }
 
     /**
+     * The snapshot an address names, which has to exist.
+     *
+     * @param ref the address
+     * @return the snapshot
+     * @throws RdfDbException if the scenario holds no snapshot at that address, with the one text every entry point
+     *                        that needs one uses
+     */
+    public SnapshotInfo require(SnapshotRef ref) {
+        return find(ref).orElseThrow(() -> noSuchSnapshot(ref));
+    }
+
+    /**
+     * The refusal of an address the scenario holds no snapshot at: one text for every entry point, naming what the
+     * scenario does hold (one more request, on the failure only).
+     *
+     * @param what the address, the snapshot IRI or the list of addresses that were not found
+     * @return the exception to throw
+     */
+    RdfDbException noSuchSnapshot(Object what) {
+        return new RdfDbException("scenario '" + scenario + "' holds no snapshot " + what + ", and nothing was loaded"
+                + " or written; it holds " + snapshots().stream().map(SnapshotInfo::toString).toList());
+    }
+
+    /**
      * The graph pattern that binds a variable to the snapshot an address names, inside the metadata graph.
      *
      * <p>Shared by {@link #find} and the plan query of {@link VersionGraph}, so that an address means the same in

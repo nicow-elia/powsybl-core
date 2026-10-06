@@ -58,8 +58,7 @@ public final class Checkpoint {
         Objects.requireNonNull(db);
         Objects.requireNonNull(ref);
         SnapshotCatalog catalog = db.snapshots(ref.scenario());
-        SnapshotInfo info = catalog.find(ref).orElseThrow(() -> new RdfDbException("scenario '"
-                + ref.scenario() + "' holds no snapshot " + ref));
+        SnapshotInfo info = catalog.require(ref);
         if (info.hasFull()) {
             return info;
         }

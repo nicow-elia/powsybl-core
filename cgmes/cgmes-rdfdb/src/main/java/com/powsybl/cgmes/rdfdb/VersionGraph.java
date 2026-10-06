@@ -159,7 +159,7 @@ public final class VersionGraph {
         List<SnapshotInfo> a = chains.bySide().getOrDefault(SIDE_A, List.of());
         List<SnapshotInfo> b = chains.bySide().get(SIDE_B);
         if (b.isEmpty()) {
-            throw new RdfDbException("scenario '" + scenario + "' holds no snapshot " + target);
+            throw catalog.noSuchSnapshot(target);
         }
         if (from != null && a.isEmpty()) {
             return new UpdatePlan(UpdatePlan.Kind.FULL, from, b.get(0).iri(), List.of(),
@@ -185,7 +185,7 @@ public final class VersionGraph {
         Chains chains = chains(Map.of(SIDE_B, new Start(snapshotIri, null)));
         List<SnapshotInfo> chain = chains.bySide().get(SIDE_B);
         if (chain.isEmpty()) {
-            throw new RdfDbException("scenario '" + scenario + "' holds no snapshot " + snapshotIri);
+            throw catalog.noSuchSnapshot(snapshotIri);
         }
         return materialization(chain, chains.fullGraphs(), chains.diffs());
     }
@@ -197,9 +197,7 @@ public final class VersionGraph {
      * @return the plan
      */
     public MaterializationPlan materialization(SnapshotRef ref) {
-        SnapshotInfo info = catalog.find(ref)
-                .orElseThrow(() -> new RdfDbException("scenario '" + scenario + "' holds no snapshot " + ref));
-        return materialization(info.iri());
+        return materialization(catalog.require(ref).iri());
     }
 
     /**

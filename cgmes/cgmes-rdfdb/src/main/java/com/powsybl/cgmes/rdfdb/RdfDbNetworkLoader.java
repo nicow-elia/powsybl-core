@@ -714,11 +714,7 @@ public final class RdfDbNetworkLoader {
 
     private static LoadResult materialize(RdfDbConnection db, SnapshotRef ref, Set<CgmesSubset> profiles,
                                           NetworkFactory factory, Properties params, ReportNode rn) {
-        SnapshotCatalog catalog = db.snapshots(ref.scenario());
-        SnapshotInfo info = catalog.find(ref).orElseThrow(() -> new RdfDbException("scenario '" + ref.scenario()
-                + "' of " + db.database() + " holds no snapshot " + ref + "; it holds "
-                + catalog.snapshots().stream().map(SnapshotInfo::toString).toList()));
-        return materialize(db, info, profiles, factory, params, rn);
+        return materialize(db, db.snapshots(ref.scenario()).require(ref), profiles, factory, params, rn);
     }
 
     private static LoadResult materialize(RdfDbConnection db, SnapshotInfo info, Set<CgmesSubset> profiles,

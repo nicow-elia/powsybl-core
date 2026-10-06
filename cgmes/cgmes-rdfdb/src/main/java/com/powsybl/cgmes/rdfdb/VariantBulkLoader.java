@@ -98,8 +98,7 @@ final class VariantBulkLoader {
             }
         }
         if (!missing.isEmpty()) {
-            throw new RdfDbException("scenario '" + scenario + "' of " + db.database() + " holds no snapshot "
-                    + missing + "; nothing was loaded");
+            throw catalog.noSuchSnapshot(missing);
         }
         Day day = new Day(refs, targets, namesOf(requests, targets, effective), chains);
         Duration planning = Duration.ofNanos(System.nanoTime() - planStart);

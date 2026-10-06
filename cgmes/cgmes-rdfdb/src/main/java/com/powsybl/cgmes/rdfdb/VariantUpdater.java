@@ -132,7 +132,7 @@ final class VariantUpdater {
         VersionGraph.Chains chains = graph.chains(starts);
         List<SnapshotInfo> targetChain = chains.bySide().get(TARGET_SIDE);
         if (targetChain == null || targetChain.isEmpty()) {
-            throw new RdfDbException("scenario '" + scenario + "' holds no snapshot " + resolved);
+            throw catalog.noSuchSnapshot(resolved);
         }
         String targetIri = targetChain.get(0).iri();
 
