@@ -42,6 +42,9 @@ import java.util.Properties;
  * exists. This loader therefore always produces <em>one</em> network. To get subnetworks out of a database, load
  * each IGM into its own model set and merge the networks.</p>
  *
+ * <p>Public API: used by the RDF database layer ({@code powsybl-cgmes-rdfdb}); changing this signature is a
+ * breaking change for it.</p>
+ *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 public final class TripleStoreNetworkLoader {

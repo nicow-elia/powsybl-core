@@ -480,6 +480,9 @@ public final class FastRouteCapabilities {
      * network aware half in {@code FastRoutePlan} runs on every variant update anyway and decides the
      * {@link VariantSafety#NETWORK_DEPENDENT} cases against the receiving network.</p>
      *
+     * <p>Public API: used by the RDF database layer ({@code powsybl-cgmes-rdfdb}); changing this signature is a
+     * breaking change for it.</p>
+     *
      * @param diffs the difference models
      * @return {@link CgmesDiffImport.Route#FAST} when nothing in the documents forbids a variant local update,
      *         the answer of {@link #check(DifferenceModelSet)} when that already refuses the in-place route, and
@@ -534,6 +537,9 @@ public final class FastRouteCapabilities {
      * is to tell a caller <em>everything</em> that stands in the way. A {@link CgmesDiffImport.Route#FAST} answer
      * here means "nothing in the document forbids it"; whether the subjects exist and the groups are complete is
      * decided against a network afterwards.</p>
+     *
+     * <p>Public API: used by the RDF database layer ({@code powsybl-cgmes-rdfdb}); changing this signature is a
+     * breaking change for it.</p>
      */
     public static CgmesDiffImport.Decision check(DifferenceModelSet diffs) {
         Objects.requireNonNull(diffs);

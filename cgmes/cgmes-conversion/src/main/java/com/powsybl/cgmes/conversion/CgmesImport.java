@@ -308,6 +308,9 @@ public class CgmesImport implements Importer {
      * &mdash; end up as the very same network: the configuration, the pre- and post-processors and the closing of
      * the model are the importer's, not a second interpretation of the same parameters.</p>
      *
+     * <p>Public API: used by the RDF database layer ({@code powsybl-cgmes-rdfdb}); changing this signature is a
+     * breaking change for it.</p>
+     *
      * @param cgmes          the model to convert. It is closed by the conversion unless the parameters ask for it
      *                       to be kept as a network extension
      * @param baseName       the name the conversion is reported under, usually the data source base name
@@ -675,6 +678,9 @@ public class CgmesImport implements Importer {
      * <p>The store must have been created with {@link #tripleStoreOptions(Properties)} of the same parameters,
      * otherwise identifiers would be normalised differently here and in a later conversion.</p>
      *
+     * <p>Public API: used by the RDF database layer ({@code powsybl-cgmes-rdfdb}); changing this signature is a
+     * breaking change for it.</p>
+     *
      * @param ds         the data source holding the instance files
      * @param target     the triple store the statements are written to
      * @param p          the import parameters
@@ -695,6 +701,9 @@ public class CgmesImport implements Importer {
      * <p>Public so that a caller that creates the triple store itself &mdash; a database layer loading CGMES files
      * into a remote store, or converting a store it already holds &mdash; configures it exactly as a file import
      * would. Reading the same data with different options yields different IIDM identifiers.</p>
+     *
+     * <p>Public API: used by the RDF database layer ({@code powsybl-cgmes-rdfdb}); changing this signature is a
+     * breaking change for it.</p>
      *
      * @param p the import parameters
      * @return the options, with the query catalog left at its default (the import catalog)
@@ -783,6 +792,9 @@ public class CgmesImport implements Importer {
      * <p>Public so that a caller holding only plain properties &mdash; the difference model importer, a database
      * layer &mdash; can build the very configuration a file import would use, instead of a second interpretation of
      * the same parameter names.</p>
+     *
+     * <p>Public API: used by the RDF database layer ({@code powsybl-cgmes-rdfdb}); changing this signature is a
+     * breaking change for it.</p>
      */
     public Conversion.Config config(Properties p) {
         Conversion.Config config = new Conversion.Config()

@@ -201,7 +201,12 @@ public final class CgmesDiffExport {
         }
     }
 
-    /** Optional settings of a difference model export. */
+    /**
+     * Optional settings of a difference model export.
+     *
+     * <p>Public API: used by the RDF database layer ({@code powsybl-cgmes-rdfdb}); changing this signature is a
+     * breaking change for it.</p>
+     */
     public static final class ExportOptions {
 
         private UnsupportedChangeBehavior unsupportedChangeBehavior = UnsupportedChangeBehavior.FAIL;
@@ -356,6 +361,9 @@ public final class CgmesDiffExport {
     /**
      * What an export produced.
      *
+     * <p>Public API: used by the RDF database layer ({@code powsybl-cgmes-rdfdb}); changing this signature is a
+     * breaking change for it.</p>
+     *
      * @param differences    the difference models, one per touched profile
      * @param exportedEvents the changes that reached them, in the order in which they were written. With
      *                       {@link UnsupportedChangeBehavior#FAIL} this is every compacted change; with
@@ -366,6 +374,9 @@ public final class CgmesDiffExport {
 
     /**
      * Translate recorded changes into difference models, without writing anything.
+     *
+     * <p>Public API: used by the RDF database layer ({@code powsybl-cgmes-rdfdb}); changing this signature is a
+     * breaking change for it.</p>
      *
      * @param network       the network the changes were recorded on. It has to be an individual grid model
      * @param events        the recorded changes
