@@ -370,7 +370,8 @@ When importing a Common Grid Model (CGM) made of several Individual Grid Models 
 IGM is imported into its own PowSyBl [`Subnetwork`](../../grid_model/network_subnetwork.md), and all the subnetworks are
 then merged into a single PowSyBl `Network`. This behavior is controlled by the `iidm.import.cgmes.cgm-with-subnetworks`
 import option, which defaults to `true`. Setting it to `false` disables this separation, so the CGM is imported directly
-as a single flat `Network`.
+as a single flat `Network`. The [RDF database](rdf_database.md#a-cgm-is-a-query-and-a-load) composes the IGMs it stores
+into one flat network through the same conversion.
 
 When subnetwork separation is enabled, the `iidm.import.cgmes.cgm-with-subnetworks-defined-by` import option controls
 how the importer groups CGMES files by IGM, and therefore how it builds each subnetwork:

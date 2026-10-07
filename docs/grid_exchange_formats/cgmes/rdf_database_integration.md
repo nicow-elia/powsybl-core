@@ -249,6 +249,40 @@ and never of a wrong result. The table of which changes stay inside a variant is
 | "stays inside one variant", on this network | `CgmesDiffImport.Options.setVariantSafeOnly(true)` → `CgmesDiffNotApplicableException` | cgmes-conversion |
 | where a variant stands | `VariantBinding`, swapped in and out by `VariantScope` | rdfdb |
 
+## Composition: several authorities, one store, one conversion
+
+```{mermaid}
+flowchart TD
+    M["loadComposed(moment, [BE, NL, …], owned)"] --> Q["one chain query: every authority at the moment<br/>(latest at or below the version; a missing one refused by name)"]
+    Q --> PL["VersionGraph.materialization per authority<br/>one model read for all target states"]
+    PL --> F["GraphFetcher: every graph into ONE local store<br/>a&lt;i&gt;_model&lt;j&gt;_&lt;profile&gt;.xml, boundary once,<br/>GraphFetcher.rebase to the first authority's subject base"]
+    F --> D["CgmesDiffImport.applyToGraph per authority<br/>its own graphs, the first authority's base"]
+    D --> W["first wins: one DELETE per later authority<br/>of the (subject, property) an earlier one states"]
+    W --> O["owners: subject → authority, from the rdf:type statements<br/>of each authority's graphs (first one wins)"]
+    O --> C["TripleStoreNetworkLoader.load: the flat conversion<br/>tie lines paired on the boundary nodes"]
+    C --> N["network + RdfDbProvenance: composition, owned, ownerOf"]
+```
+
+The conversion contributes nothing new: a store holding several IGMs and one boundary is what it converts for the
+assembled CGM files already (`iidm.import.cgmes.cgm-with-subnetworks=false`), and what it needs from the store is
+one subject base (it joins by IRI), the boundary once, and context names it reads the profile off — all three
+arranged by rdfdb. The precedence is a plain SPARQL update on the local store; nothing about the composition is
+stored in the database.
+
+**Write-back routing.** `RdfDbExport.export(network, events, db, target, …)` on a composed network calls
+`CgmesDiffExport.toDifferences` once, then splits every `DifferenceModel` by `ownerOf(subject)` of each statement:
+one model per profile and owned authority, with a fresh identifier, that authority's `md:Model.modelingAuthoritySet`
+and scenario time, and `supersedes` = that authority's state in `composition()` (not `CgmesMetadataModels`, which
+holds one model per authority of a profile and is not advanced on a composed network). A statement on an object of
+a tree the network does not own refuses the export before any address is resolved. Each touched tree then gets
+`SnapshotCatalog.putDiff` with its composed snapshot as the sender, and its composition entry is advanced.
+
+| What crosses | Type | Decided by |
+|---|---|---|
+| a CGM as one network | the local `TripleStoreRDF4J`, `TripleStoreNetworkLoader.load` | rdfdb fills the store (contexts, boundary, rebase, precedence), the conversion converts it unchanged |
+| which tree an object belongs to | `RdfDbProvenance.ownerOf(mRID)` → `Optional<String>` | rdfdb, from the `rdf:type` statements of each authority's graphs |
+| where a recorded change on a composed network goes | the `DifferenceModelSet` of `toDifferences`, split per owner | the conversion translates, rdfdb routes |
+
 ## What the database knows about powsybl internals
 
 The complete list is the allow-list of `MoveOutReadinessTest`

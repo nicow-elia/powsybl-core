@@ -701,7 +701,7 @@ two *first* roots of an empty scenario. Each checked its boundary against no roo
 root also requires that the scenario still has no root; the loser gets the conflict, and retried it is a second root
 whose boundary is compared with the winner's. Writers of two scenarios never touch the same graph.
 
-### A CGM is a query
+### A CGM is a query, and a load
 
 "Every modelling authority at this moment" is one query over the scenario's metadata graph, not a stored node:
 
@@ -714,8 +714,60 @@ reached `ID` at that moment. An authority with no snapshot at that moment (or no
 absent from the map, not refused: compare its
 keys with `modellingAuthorities()` to see which (pypowsybl's `assembly()` shows such an authority as a row with no
 snapshot). The shared boundary is in the `pdb:state`
-of every entry. Loading a CGM as one network stays the caller's: load each entry by its `ref()` and merge. A stored
-assembly is deliberately not written — nothing would read it, and a wrong one stored is worse than none.
+of every entry. A stored assembly is deliberately not written — nothing would read it, and a wrong one stored is
+worse than none.
+
+Loading the CGM as **one network** is a load-time argument, not a stored thing either:
+
+```java
+LoadResult cgm = RdfDbNetworkLoader.loadComposed(db,
+        SnapshotRef.of("2016-01-01", null, instant, "ID"),      // the moment: no authority
+        List.of("http://elia.be/CGMES/2.4.15", "http://tennet.nl/CGMES/2.4.15"),   // precedence order
+        null,           // owned: the trees a write-back goes to; null = the first authority
+        null,           // profiles: null = every standard profile
+        null, importParameters, ReportNode.NO_OP);
+```
+
+* **Resolution.** Every authority is resolved as an ordinary load resolves it — its own tree, the timestamp (the
+  base timestamp of its tree for `null`), the latest version at or below the named one — and all of them in **one**
+  chain query. An authority without a snapshot at the moment is **refused, naming it** (*"modelling authority
+  'http://tennet.nl/CGMES/2.4.15' holds no snapshot at (…), and a common grid model of […] needs every one of them;
+  nothing was loaded"*): a CGM with a missing IGM is not a CGM. `assembly` stays the query that reports absence.
+* **One store.** Every authority's graphs go into one local store under context names of their own
+  (`a<i>_model<j>_<profile>.xml`), the **boundary once** (the first authority's; every authority must name the same
+  boundary models, otherwise refused), and **one subject base**: the first authority's. Relative CGMES
+  identifiers resolve against the base of the files they were parsed from and the conversion joins by IRI, so every
+  other authority's graphs are rebased on the way in, by the same mapping that rebases a shared boundary for a single
+  load. Each authority's differences are applied to its own graphs.
+* **First wins.** Then one SPARQL update per later authority on the local store removes every statement of its
+  graphs whose subject and property an earlier authority's graphs state
+  (`DELETE { GRAPH ?gi { ?s ?p ?o } } WHERE { VALUES ?ge { … } VALUES ?gi { … } GRAPH ?ge { ?s ?p ?x }
+  GRAPH ?gi { ?s ?p ?o } }`). The order of `authorities` is the only composition rule; there is no other.
+* **The flat conversion.** The store is handed to the unchanged conversion, which pairs the tie lines on the boundary
+  nodes exactly as for the assembled files: MicroGrid BE + NL compose into the network of the assembled CGM files,
+  XIIDM-identical but for the network identifier (one of the EQ model identifiers, as for the files). Every
+  authority's state variables are read.
+* **Provenance.** `RdfDbProvenance.composition()` lists the composed snapshots in precedence order, `owned()` the
+  trees a write-back goes to, and `ownerOf(mRID)` the authority of each object: the first one whose graphs type it
+  (the boundary's objects belong to the first). The map has one entry per typed object — 1 212 for MicroGrid BE+NL,
+  linear in the size of the grid. `snapshot()` is empty (no single snapshot) and `modelIds()` is the first
+  authority's. Custom profiles are not composed.
+* **Write-back.** `RdfDbExport.export(network, events, db, SnapshotRef.of(scenario, null, timestamp, version), …)`
+  translates the recorded changes once, routes every statement to the tree that owns its subject, and writes one
+  snapshot into each **owned** tree it touches (one `putDiff` per tree), superseding that tree's composed state and
+  hanging off its composed snapshot; the composition entries are advanced, so the next export grows the same
+  chains. The result is the first written tree's; `composition()` names every written snapshot. A change on an
+  object of a tree the network does not own refuses the whole export before anything is written: *"the change on
+  <mRID> belongs to modelling authority 'NL…', which this composed network does not own (owned: [BE…]); nothing was
+  written"*. The two writes are two requests, not one transaction: every address is resolved before the first one,
+  so only a write conflict on the second tree can leave the first written.
+* **Read-only for the in-place routes.** `update` (every form, with or without a target variant), `exportVariant`,
+  `exportPerVariant` and the appending `export(…, scenario, …)` refuse a composed network: *"network … is a
+  composition of […]: composed networks are read-only for the diff and variant routes; reload it with
+  RdfDbNetworkLoader.loadComposed"*. Another moment is another composition.
+* **Requests.** One schema check, one chain query, one model read, the graphs with the boundary once and one
+  statement fetch for all differences: **19** requests for MicroGrid BE + NL at their roots against **26** for the
+  two separate loads (`RdfDbRequestCountTest`; bound `2 + graphs(n) − 2(n − 1) + 2n`).
 
 ### Reading a version, and the one query that decides how
 
@@ -1430,11 +1482,12 @@ and 10, while `lv : sep` stayed between 9 and 11 throughout.
   `lastIngestStatistics()`. A rollover changes the default pin of timestamps written afterwards only; nothing is
   re-pinned, and `dropTimestamp` never cascades.
 
-* **A CGM is a query and several loads; one network per IGM.** The IGMs of one day are the trees of the modelling
-  authorities of one scenario, and `SnapshotCatalog.assembly(timestamp, version)` names the snapshot of each at one
-  moment. Loading them as one network is the caller's: load each IGM by its address and merge the networks.
-  Subnetworks of a file-loaded CGM are separated at file level, by the importer, before any triple store exists;
-  the tests compare CGMs with `iidm.import.cgmes.cgm-with-subnetworks=false` on both sides.
+* **A CGM is a query, and a flat load.** The IGMs of one day are the trees of the modelling authorities of one
+  scenario, and `SnapshotCatalog.assembly(timestamp, version)` names the snapshot of each at one moment;
+  `RdfDbNetworkLoader.loadComposed` loads them as one **flat** network (first authority wins). Subnetworks of a
+  file-loaded CGM are separated at file level, by the importer, before any triple store exists; the tests compare
+  CGMs with `iidm.import.cgmes.cgm-with-subnetworks=false` on both sides. The network identifier of a composition
+  is one of the EQ model identifiers, which one is not defined (as for the files).
 * **Graphs are mutable** in the unversioned flow, so caching is opt-in there (above). A graph a snapshot refers
   to is written once and never rewritten, and is trusted by the cache by default.
 * **One base day per scenario, and no link between two scenarios or two modelling authorities.** Walking from the
@@ -1524,7 +1577,8 @@ and 10, while `lv : sep` stayed between 9 and 11 throughout.
 * **One model per profile.** A network carrying two CGMES models of one profile — a merged model with two modelling
   authorities — cannot be the sender or the receiver of a difference: a stored chain versions one model. Such a
   network is refused rather than silently halved: write each authority's changes from a network of that
-  authority (or from its variant), into its own tree.
+  authority (or from its variant), into its own tree. A network of `loadComposed` is the exception for the
+  versioned export: it knows the tree of every object and routes each change there.
 * **A crash between the two phases of a large write leaves orphan graphs.** They are invisible to every reader;
   `ModelCatalog.orphanGraphs()` lists them.
 * **No pre-parsed on-disk cache.** Serialising the parsed graphs as RDF4J binary RDF under a cache directory would
