@@ -8,6 +8,8 @@
 
 package com.powsybl.cgmes.rdfdb;
 
+import com.powsybl.cgmes.conversion.diff.FastRouteCapabilities;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -62,6 +64,17 @@ public record UpdatePlan(Kind kind, String from, String to, List<DiffStep> steps
      *                 that walks <em>up</em> from A to the common ancestor
      */
     public record DiffStep(String snapshot, StoredModel model, boolean inverted) {
+
+        /**
+         * Whether the stored verdicts of this difference were reached by a capability table this reader does not
+         * trust &mdash; a newer writer's, or another table of the same core version &mdash; so that its statements
+         * are checked against the reader's own table before they are applied.
+         *
+         * @return whether the difference is re-checked once fetched
+         */
+        public boolean recheck() {
+            return !model.isTrustedBy(FastRouteCapabilities.version());
+        }
     }
 
     /**

@@ -13,6 +13,8 @@ import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
 import java.time.ZonedDateTime;
 import java.util.List;
 import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * One node of the metadata graph: a CGMES model the database holds, full or difference.
@@ -69,6 +71,9 @@ public record StoredModel(String scenario, String id, String subset, StoredModel
                           List<String> profiles, List<String> dependentOn, List<String> supersedes,
                           boolean fastPredicatesOnly, long tripleCount, String subjectBase, String cimNamespace,
                           int chainDepth, Boolean variantSafe, String capabilities) {
+
+    /** A core version: {@code major.minor.patch}, optionally with a qualifier such as {@code -SNAPSHOT}. */
+    private static final Pattern CORE_VERSION = Pattern.compile("(\\d+)\\.(\\d+)\\.(\\d+)(-.+)?");
 
     /** What a stored model is. */
     public enum Kind {
@@ -133,6 +138,48 @@ public record StoredModel(String scenario, String id, String subset, StoredModel
      */
     public boolean isBoundary() {
         return kind == Kind.FULL && Profiles.isBoundary(subset);
+    }
+
+    /**
+     * Whether a reader of the given capability version takes {@code fastPredicatesOnly} and {@code variantSafe} of
+     * this difference as they are.
+     *
+     * <p>It does when the writer's capability version is its own, or when the writer's core version is strictly
+     * older: a table only grows what it can apply, so an older writer's verdicts hold for a newer reader. Anything
+     * else &mdash; a newer writer, the same core version with another table (two development builds), a node
+     * without a version, a version this reader cannot parse &mdash; is re-checked against the reader's table on
+     * the statements, which are fetched anyway.</p>
+     *
+     * @param readerVersion {@code FastRouteCapabilities.version()} of the reader
+     * @return whether the stored verdicts are trusted
+     */
+    boolean isTrustedBy(String readerVersion) {
+        return capabilities != null && (capabilities.equals(readerVersion)
+                || isOlder(coreVersionOf(capabilities), coreVersionOf(readerVersion)));
+    }
+
+    private static String coreVersionOf(String capabilityVersion) {
+        return capabilityVersion.substring(capabilityVersion.indexOf('/') + 1);
+    }
+
+    /**
+     * Whether core version {@code a} is strictly older than {@code b}: numerically by major, minor and patch, and a
+     * qualified version ({@code 7.5.0-SNAPSHOT}) below the release of the same number. Two qualified versions of one
+     * number, or a version that does not parse, are not ordered: neither is older.
+     */
+    static boolean isOlder(String a, String b) {
+        Matcher ma = CORE_VERSION.matcher(a);
+        Matcher mb = CORE_VERSION.matcher(b);
+        if (!ma.matches() || !mb.matches()) {
+            return false;
+        }
+        for (int group = 1; group <= 3; group++) {
+            int compared = Long.compare(Long.parseLong(ma.group(group)), Long.parseLong(mb.group(group)));
+            if (compared != 0) {
+                return compared < 0;
+            }
+        }
+        return ma.group(4) != null && mb.group(4) == null;
     }
 
     /**

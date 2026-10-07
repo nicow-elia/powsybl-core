@@ -13,6 +13,7 @@ import com.powsybl.cgmes.conversion.Conversion;
 import com.powsybl.cgmes.conversion.TripleStoreNetworkLoader;
 import com.powsybl.cgmes.conversion.diff.CgmesDiffImport;
 import com.powsybl.cgmes.conversion.diff.CgmesDiffNotApplicableException;
+import com.powsybl.cgmes.conversion.diff.FastRouteCapabilities;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
@@ -44,6 +45,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 /**
@@ -971,11 +973,14 @@ public final class RdfDbNetworkLoader {
      * @param config  the conversion configuration
      * @param rn      where the update reports
      * @return what was applied
-     * @throws CgmesDiffNotApplicableException if the composed difference cannot be applied in place
+     * @throws CgmesDiffNotApplicableException if the composed difference cannot be applied in place, or a
+     *                                         difference of a capability version this reader does not trust fails
+     *                                         its table
      */
     static AppliedDiffs composeAndApply(Network network, RdfDbConnection db, String scenario, UpdatePlan plan,
                                         FetchedDiffs fetched, RdfDbUpdateOptions options, Conversion.Config config,
                                         ReportNode rn) {
+        recheck(plan, fetched, options.getDiffOptions().isVariantSafeOnly());
         // A path that walks up one branch and down another - which is what a step from one timestamp to the next
         // is - is composed with the upward differences already turned round, and then applied forwards like any
         // other. Only a path that is entirely upward is reverted as a whole
@@ -1064,6 +1069,47 @@ public final class RdfDbNetworkLoader {
             return new DifferenceModelSet(List.of());
         }
         return compose(plan, fetchSteps(db, from.scenario(), plan), false);
+    }
+
+    /** How many differences {@link #recheck} checked against this reader's table, for the tests. */
+    private static final AtomicInteger RECHECKED = new AtomicInteger();
+
+    static int recheckedDifferences() {
+        return RECHECKED.get();
+    }
+
+    /**
+     * Check the differences whose stored verdicts this reader does not trust against its own capability table.
+     *
+     * <p>The planner took {@code pdb:fastPredicatesOnly} and {@code pdb:variantSafe} as they are stored. For a
+     * difference written by a newer capability table ({@link UpdatePlan.DiffStep#recheck()}) they may promise more
+     * than this reader can do, so its fetched statements go through {@link FastRouteCapabilities#check} &mdash;
+     * and {@link FastRouteCapabilities#checkVariantSafe} on a variant route &mdash; before anything is composed. A
+     * refusal is the ordinary not-applicable answer, with reasons naming both versions: the caller then takes its
+     * usual fallback (a full reload, or the refusal of the variant). No request: the statements are in hand.</p>
+     *
+     * @throws CgmesDiffNotApplicableException if a re-checked difference cannot be applied in place by this reader
+     */
+    private static void recheck(UpdatePlan plan, FetchedDiffs fetched, boolean variantRoute) {
+        for (UpdatePlan.DiffStep step : plan.steps()) {
+            if (!step.recheck()) {
+                continue;
+            }
+            RECHECKED.incrementAndGet();
+            DifferenceModelSet one = new DifferenceModelSet(List.of(fetched.byId().get(step.model().id())));
+            CgmesDiffImport.Decision decision = FastRouteCapabilities.check(one);
+            if (decision.route() == CgmesDiffImport.Route.FAST && variantRoute) {
+                decision = FastRouteCapabilities.checkVariantSafe(one);
+            }
+            if (decision.route() == CgmesDiffImport.Route.SLOW_REQUIRED) {
+                String why = "difference " + step.model().id() + " of snapshot " + step.snapshot()
+                        + " was written by capability version " + step.model().capabilities() + " and this reader ("
+                        + FastRouteCapabilities.version() + ") cannot apply it in place: ";
+                throw new CgmesDiffNotApplicableException(new CgmesDiffImport.Decision(decision.route(),
+                        decision.blocking().stream().map(blocking -> new CgmesDiffImport.BlockingStatement(
+                                blocking.subset(), blocking.statement(), why + blocking.reason())).toList()));
+            }
+        }
     }
 
     private static UpdateResult applySnapshotDifferences(Network network, RdfDbConnection db, SnapshotRef target,

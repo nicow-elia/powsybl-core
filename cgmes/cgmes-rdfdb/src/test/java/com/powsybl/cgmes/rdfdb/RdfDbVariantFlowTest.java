@@ -8,6 +8,7 @@
 
 package com.powsybl.cgmes.rdfdb;
 
+import com.powsybl.cgmes.conversion.diff.FastRouteCapabilities;
 import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Load;
@@ -590,6 +591,42 @@ class RdfDbVariantFlowTest {
             // difference and the snapshot, this one names the CGMES property and the IIDM field
             assertThat(String.join(" ", result.reasons()))
                     .contains("ACLineSegment.r")
+                    .contains("branch impedances are not stored per variant");
+            assertThat(network.getVariantManager().getVariantIds()).doesNotContain("A");
+            assertThat(xiidmPerVariant(network)).isEqualTo(before);
+        }
+    }
+
+    /**
+     * The twin of the older store: a newer writer's difference that claims variant safety is re-checked against
+     * this reader's table, and the variant is refused before the apply, naming both capability versions.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void aNewerWritersVariantSafetyIsRecheckedBeforeTheApply(String backend) {
+        try (RdfDbConnection db = rootOnly(backend)) {
+            Network sender = load(db, S, 1, null);
+            String line = sender.getLineStream().map(l -> l.getId()).sorted().findFirst().orElseThrow();
+            Changes.export(sender, db, ref(S, 2),
+                n -> n.getLine(line).setR(n.getLine(line).getR() + 1.0));
+            // A newer table that would call the impedance variant safe: both the flag and the version are its own
+            String meta = "<" + RdfDbNames.metaGraph(S) + ">";
+            String newer = "ffffffffffff/99.0.0";
+            db.sparql(S).update(RdfDbVocabulary.PREFIXES + "DELETE { GRAPH " + meta + " { ?m pdb:variantSafe ?v ;"
+                    + " pdb:capabilities ?c } } INSERT { GRAPH " + meta + " { ?m pdb:variantSafe true ;"
+                    + " pdb:capabilities \"" + newer + "\" } } WHERE { GRAPH " + meta + " { ?m pdb:variantSafe ?v ;"
+                    + " pdb:capabilities ?c } }");
+            assertThat(Backends.count(db, S, RdfDbNames.metaGraph(S), "?m pdb:variantSafe false")).isZero();
+
+            Network network = load(db, S, 1, null);
+            Map<String, String> before = xiidmPerVariant(network);
+
+            UpdateResult result = bring(network, db, 2, null, "A");
+
+            assertThat(result.route()).isEqualTo(UpdateResult.Route.VARIANT_REFUSED);
+            assertThat(String.join(" ", result.reasons()))
+                    .contains("was written by capability version " + newer)
+                    .contains("this reader (" + FastRouteCapabilities.version() + ")")
                     .contains("branch impedances are not stored per variant");
             assertThat(network.getVariantManager().getVariantIds()).doesNotContain("A");
             assertThat(xiidmPerVariant(network)).isEqualTo(before);
