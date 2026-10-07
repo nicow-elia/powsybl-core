@@ -1581,6 +1581,10 @@ public final class SnapshotCatalog {
         }
         SnapshotInfo parent = head.orElseGet(() -> pin == null ? latestRollover(root, timestamp)
                 : checkPin(require(pin), authority, timestamp));
+        // The default pin is read off the listing, which still shows archived snapshots; their differences may be gone
+        archived(parent.iri()).ifPresent(refusal -> {
+            throw refusal;
+        });
 
         // Before the files: which state each profile is compared against decides which of them has to be read in
         // full at all, and asking costs two requests against a parse of a whole export

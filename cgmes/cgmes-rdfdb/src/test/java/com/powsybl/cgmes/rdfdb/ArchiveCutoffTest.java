@@ -145,6 +145,24 @@ class ArchiveCutoffTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void anIngestionIsNotComparedAgainstAnArchivedRollover(String backend) {
+        try (RdfDbConnection db = day(backend)) {
+            SnapshotCatalog catalog = db.snapshots(S);
+            // The cutoff after the rollover with no rollover at or after it: the default pin, 11:00, is archived
+            catalog.setArchiveCutoff(T2, LOCATION);
+            List<SnapshotInfo> before = catalog.snapshots();
+
+            assertThatThrownBy(() -> catalog.putAsDiff(TimestampFixtures.ssh(1, T3, "t3"), null, ref(S, 1, T3), null,
+                    params(), ReportNode.NO_OP))
+                    .isInstanceOf(RdfDbException.class)
+                    .hasMessage("snapshot " + ref(S, 1, T1) + " is in the archive at " + LOCATION + ": states before " + T2
+                            + " are not served by this store");
+            assertThat(catalog.snapshots()).isEqualTo(before);
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void theAssemblyTheChangesBetweenAndABulkLoadBeforeTheCutoffAreRefused(String backend) {
         try (RdfDbConnection db = day(backend)) {
             SnapshotCatalog catalog = db.snapshots(S);
