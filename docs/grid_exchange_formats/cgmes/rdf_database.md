@@ -631,7 +631,8 @@ so no listing or read costs more than before; every snapshot write is guarded on
 checked against and on the revision, so a registry edited through another connection makes the write refuse, and
 the writer re-reads the registry and retries (at most three times; *"the version registry of scenario 'S' changed
 (rev 3 → 4) …"*). An appended name costs one guarded request and no read-back: the snapshot write that follows is
-guarded on it. **A read uses the cache only at the store's revision**: a read at a named version takes the names
+guarded on it. The append drops the cached registry instead of assuming it won, so the next question to the
+registry reads it again (one request) and never answers from a registry the store did not have. **A read uses the cache only at the store's revision**: a read at a named version takes the names
 ranking at or below it, with their ranks, from the cache and hands them to its query as `VALUES`, together with
 the revision they were read at (`FILTER EXISTS { <schema> pdb:rev 3 }`). A stale cache therefore binds nothing;
 the reader then re-reads the registry (one request, on a miss only) and, if the revision moved, asks again. A
@@ -961,7 +962,8 @@ is between two medians of the same warm state.
   folded into one per profile before they are applied.
 * **The version registry costs no request on a read.** Its rows come with the schema check, once per catalogue;
   a read joins the rank in the query it already sends. A write under a registered name stays at seven requests; the
-  first write under a name a permissive registry does not hold yet is one more (the guarded append); an edit of
+  first write under a name a permissive registry does not hold yet is one more (the guarded append), and the next
+read of the registry one more (the append dropped the cache); an edit of
   the registry is two (the guarded edit, the read-back). Asserted by `RdfDbRequestCountTest`.
 * **A named version is resolved from the cached registry.** "The highest rank at or below `v`" hands the query
   the names ranking at or below `v` with their ranks as `VALUES` (and the revision they are valid at), so the

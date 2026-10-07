@@ -234,4 +234,28 @@ class VersionRegistryTest {
             catalog.verify();
         }
     }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void aLostAppendLeavesNoFabricatedRegistryBehind(String backend) {
+        try (RdfDbConnection db = open(backend)) {
+            SnapshotInfo base = root(db, "1");
+            SnapshotCatalog mine = new SnapshotCatalog(db, S);
+            SnapshotCatalog theirs = new SnapshotCatalog(db, S);
+            assertThat(mine.registry().rev()).isEqualTo(1);
+            // Another connection appends "Y" at rank 20 between this one's check and its append of "X"
+            mine.registry().beforeRegistryWrite(() -> theirs.putDiff(change(base, SSH, "urn:uuid:reg-y", "14.0"),
+                    at("Y")));
+            VersionRegistry.Resolved taken = mine.registry().resolve("X", "1", at("X"));
+            mine.registry().beforeRegistryWrite(null);
+            assertThat(taken).isEqualTo(new VersionRegistry.Resolved("X", 20, 2));
+            // The snapshot write that would follow failed for a reason that is no conflict (nothing is written): the
+            // catalogue must not answer from a registry the store never had
+            assertThat(mine.find(at("X"))).isEmpty();
+            assertThat(mine.registry().ranks()).containsExactly(Map.entry("1", 10), Map.entry("Y", 20));
+            assertThat(theirs.find(at("X"))).isEmpty();
+            assertThat(mine.find(at("Y")).map(SnapshotInfo::version)).contains("Y");
+            mine.verify();
+        }
+    }
 }

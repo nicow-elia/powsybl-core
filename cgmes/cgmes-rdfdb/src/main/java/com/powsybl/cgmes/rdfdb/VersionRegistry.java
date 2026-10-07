@@ -494,7 +494,8 @@ public final class VersionRegistry {
      *
      * <p>An append is one guarded request with no read-back: the snapshot write that follows is guarded on the name
      * at that rank and on the revision the append produced, so a lost append makes it refuse, and the writer
-     * re-reads the registry and retries ({@link #changedSince}).</p>
+     * re-reads the registry and retries ({@link #changedSince}). The cache is dropped after an append, so whatever
+     * happens to the write, the next read of the registry is the store's.</p>
      *
      * @param requested     the name the caller asked for, or {@code null}
      * @param parentVersion the version of the head the snapshot is written on, or {@code null} for a new timestamp
@@ -520,9 +521,10 @@ public final class VersionRegistry {
             beforeRegistryWrite.run();
         }
         connection.sparql(scenario).update(append(s, name, rank, ZonedDateTime.now()));
-        List<Entry> entries = new ArrayList<>(s.entries());
-        entries.add(new Entry(name, rank, false));
-        state = new State(s.rev() + 1, s.permissive(), List.copyOf(entries));
+        // Not read back, and not assumed either: the append may have lost to another one at the same revision, and a
+        // write that then fails for another reason would leave a registry the store never had. The next question
+        // reads the registry again; the snapshot write is guarded on what it took, not on the cache
+        invalidate();
         return new Resolved(name, rank, s.rev() + 1);
     }
 

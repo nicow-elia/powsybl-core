@@ -145,6 +145,11 @@ class RdfDbRequestCountTest {
         assertAtMost("writing a version under a name the registry does not hold yet", since(mark), 8);
 
         mark = BenchMeters.FusekiMeter.mark();
+        catalog.registry().rev();
+        // The append dropped the cached registry rather than assume it won: the next question reads it, once
+        assertAtMost("the first registry read after an append", since(mark), 1);
+
+        mark = BenchMeters.FusekiMeter.mark();
         catalog.registry().add("3");
         // The guarded edit and the read-back
         assertAtMost("an edit of the version registry", since(mark), 2);
