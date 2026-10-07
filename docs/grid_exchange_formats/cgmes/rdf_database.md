@@ -681,8 +681,9 @@ with the first-root guard behind it):
 5. the chain is linear — a second child along a `pdb:VersionEdge` is refused with *"the linear scheme allows no
    forks"*;
 6. versions only grow, by rank: *"version '20' (rank 20) is not above the parent '30' (rank 30) of (…): a new
-   version ranks above the head it is written on"*; the guard of the write joins the rank of every snapshot of the
-   moment and requires the name registered at the rank that was checked and the registry at its revision;
+   version ranks above the head it is written on"*; the rank is checked against the cached registry, and the
+   guard of the write requires the name registered at the rank that was checked and the registry at its revision
+   (with the parent still the head, an edited registry is all that could make the check stale);
 7. a snapshot describes one moment: a member stating another `md:Model.scenarioTime` is refused (its members may
    state other modelling authorities: the snapshot is stored under the one its address names);
 8. nothing crosses a scenario, and nothing but the shared boundary crosses a modelling authority: every

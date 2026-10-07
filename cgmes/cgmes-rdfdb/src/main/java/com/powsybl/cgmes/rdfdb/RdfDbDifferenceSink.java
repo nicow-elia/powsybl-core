@@ -608,11 +608,6 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
                 + " ; pdb:timestamp " + SparqlText.dateTime(s.timestamp());
         query.append(" FILTER NOT EXISTS { GRAPH ").append(meta).append(" { ").append(SparqlText.iri(s.iri()))
                 .append(" ?ps ?os } }")
-                // Versions only grow: nothing at the same moment of the same tree ranks at this version or above. The
-                // rank is joined from the registry, never stored on a snapshot
-                .append(" FILTER NOT EXISTS { GRAPH ").append(meta).append(" { ?ys").append(moment)
-                .append(" ; pdb:version ?yn . ?yv a pdb:Version ; pdb:name ?yn ; pdb:rank ?yr FILTER(?yr >= ")
-                .append(SparqlText.integer(s.version().rank())).append(") } }")
                 .append(" FILTER EXISTS { GRAPH ").append(meta).append(" { ").append(parent)
                 .append(" a pdb:Snapshot } }");
         if (RdfDbVocabulary.VERSION_EDGE.equals(s.edge())) {
