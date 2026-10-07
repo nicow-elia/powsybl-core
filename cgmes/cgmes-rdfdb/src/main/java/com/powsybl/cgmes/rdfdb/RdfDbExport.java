@@ -424,7 +424,7 @@ public final class RdfDbExport {
                         .scenarioTime(targets.get(authority).timestamp().atZone(ZoneOffset.UTC))
                         .supersedes(List.of(state.get(profile)))
                         .dependentOn(original.dependentOn().stream()
-                                .map(id -> sameProfileIn(id, states, state)).toList())
+                                .map(id -> sameProfileIn(id, states, state)).distinct().toList())
                         .build();
                 byAuthority.get(authority).add(new DifferenceModel(header, entry.getValue().forward(),
                         entry.getValue().reverse(), entry.getValue().preconditions()));

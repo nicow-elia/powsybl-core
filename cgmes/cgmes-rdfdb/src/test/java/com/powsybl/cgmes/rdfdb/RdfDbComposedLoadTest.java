@@ -201,7 +201,12 @@ class RdfDbComposedLoadTest {
             Network network = composed(db, null, List.of(BE, NL)).network();
 
             double moved = network.getLoad(Changes.LOAD_ID).getP0();
-            SnapshotInfo written = writeBack(network, db, n -> Changes.moveLoad(n, 7.0)).snapshot();
+            RdfDbExport.SnapshotResult result = writeBack(network, db, n -> Changes.moveLoad(n, 7.0));
+            SnapshotInfo written = result.snapshot();
+            // The models the change depends on are the owner's, each once (were BE's and NL's EQ both named, both map
+            // to BE's)
+            assertThat(result.stored()).isNotEmpty().allSatisfy(model -> assertThat(model.dependentOn())
+                    .isNotEmpty().doesNotHaveDuplicates().allMatch(id -> be.state().containsValue(id)));
 
             assertThat(written.modellingAuthority()).isEqualTo(BE);
             assertThat(written.parent()).isEqualTo(be.iri());
