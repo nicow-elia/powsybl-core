@@ -690,7 +690,10 @@ with the first-root guard behind it):
 9. a new timestamp hangs off its **pin**, any snapshot of another timestamp of its tree: by default the latest
    rollover at or before it for an ingestion and, for a recorded change, the snapshot the recording network is at
    (else the deepest snapshot stating what the differences supersede) ([Timestamps](#timestamps-and-one-tree-per-modelling-authority)); a pin is refused for a
-   timestamp that exists.
+   timestamp that exists;
+10. nothing is written into a timestamp before the scenario's **archive cutoff**
+    ([Archiving](#archiving-the-states-before-a-cutoff)): the head lookup of the write is a read, and is refused like
+    one.
 
 Concurrent writers: the guard decides, the loser gets a `RdfDbConflictException` naming the rule, and there is no
 retry. Writers of two authorities never conflict — every guard is scoped by the authority — with one exception:
@@ -779,8 +782,9 @@ versions, or once per timestamp. It is idempotent and is not on any hot path.
 Schema v1 above, plus the snapshot nodes, the version registry and the schema marker. Every v1 model node stays
 valid and is read unchanged. Schema 4 differs from schema 3 in the version: a snapshot's `pdb:version` is a
 registered name (a plain string) where it was an `xsd:integer`, the `pdb:Version` nodes and `pdb:rev` /
-`pdb:permissive` on the schema node are new, a snapshot may carry `pdb:rollover true`, and a `pdb:TimestampEdge`
-may point at any snapshot of the tree instead of one of the base chain.
+`pdb:permissive` (and, when set, `pdb:archiveCutoff` / `pdb:archiveLocation`) on the schema node are new, a snapshot
+may carry `pdb:rollover true`, a difference node carries `pdb:capabilities`, and a `pdb:TimestampEdge` may point at
+any snapshot of the tree instead of one of the base chain.
 
 ```turtle
 @prefix pdb: <http://powsybl.org/ns/rdfdb#> .
@@ -791,6 +795,8 @@ may point at any snapshot of the tree instead of one of the base chain.
 
 <http://powsybl.org/rdfdb/2016-01-01/schema> pdb:schema 4 ; pdb:scenario "2016-01-01" ;
     pdb:rev 2 ; pdb:permissive true .   # the registry's revision: 1 at the bootstrap, +1 per edit
+# setArchiveCutoff(…) adds, until cleared:  pdb:archiveCutoff "2016-01-01T12:00:00Z"^^xsd:dateTime ;
+#                                           pdb:archiveLocation "s3://grid-archive/2016-01-01"
 
 # the version registry: one node per name, its rank the only order versions have
 <http://powsybl.org/rdfdb/2016-01-01/version/1> a pdb:Version ; pdb:name "1" ; pdb:rank 10 ;
@@ -916,6 +922,8 @@ is between two medians of the same warm state.
 * **Timestamps.** Ingesting a new timestamp from files is at most nine requests (the default pin is one query and
   replaced the second head lookup); a rollover of a one-profile timestamp eight (its checkpoint, the flag and the
   read-back); `changesBetween` three; `dropTimestamp` three. Asserted by `RdfDbRequestCountTest`.
+* **An archive cutoff costs a read nothing**: it rides in the schema check and is a filter of the query a read
+  sends anyway; setting it is two requests (asserted), a refusal one more (the re-read that names the location).
 * Planning, fetching and composing a fifty-difference chain stays well under 100 ms on both backends (40 ms on
   Fuseki, 4 ms in process), which is the bound the build asserts.
 * **Target missed: the plan query at chain depth fifty.** It was budgeted at 10 ms and takes 31 ms on loopback
@@ -1013,6 +1021,37 @@ over for it only lengthens the tree. The equipment is what drifts: watch
 `lastIngestStatistics().forwardStatements().get(EQ)` (or `fast().get(EQ)`) of the ingestions, and roll over at the
 first timestamp of a run whose equipment delta against the pin keeps growing — typically a few times a day, at a
 topology change. The layer does not roll over by itself; the rule is the caller's loop over those statistics.
+
+### Archiving the states before a cutoff
+
+```java
+catalog.setArchiveCutoff(Instant.parse("2016-01-01T12:00:00Z"), "s3://grid-archive/2016-01-01");
+catalog.archiveCutoff();     // Optional[2016-01-01T12:00:00Z]
+catalog.archiveLocation();   // Optional[s3://grid-archive/2016-01-01]
+catalog.setArchiveCutoff(null, null);   // served again
+```
+
+An owner who moved the graphs of a scenario's early hours elsewhere tells the store with an **archive cutoff**: two
+triples on the schema node, `pdb:archiveCutoff` (`xsd:dateTime`) and `pdb:archiveLocation` (a string; a URL, a path,
+a name — the layer never reads it), set together and cleared together. From then on every read that resolves an
+address refuses a snapshot whose own timestamp is before the cutoff — `find`/`require`, a load, an update (the
+network is untouched), `assembly`, a bulk load of variants (before anything is loaded), both ends of
+`changesBetween` — with one text:
+
+*"snapshot (2016-01-01, http://elia.be/CGMES/2.4.15, 2016-01-01T08:30:00Z, 1) is in the archive at
+s3://grid-archive/2016-01-01: states before 2016-01-01T12:00:00Z are not served by this store"*
+
+* **Roots are not exempt.** The comparison is on the target's own timestamp, so the base is refused too. Set the
+  cutoff at a [rollover](#rollovers-roll-over-when-the-equipment-drifts-not-on-churn): its checkpoint is where the
+  materialisation of every later timestamp starts, so nothing after the cutoff needs an archived graph.
+* **The listings still show archived snapshots** (`snapshots()`, `timestamps`, `versions`, `verify()`), and the walk
+  of a plan still passes through them: the ancestry is metadata, only the graphs are gone.
+* **It holds at once, everywhere.** The cutoff is read with the schema check (the same request, no cost), and it is
+  also a filter inside the query that resolves an address (`FILTER NOT EXISTS { <schema> pdb:archiveCutoff ?c
+  FILTER(?ts < ?c) }`), so a cutoff another connection set is honoured before this one has read it; the refusal
+  then re-reads the schema node to name the location.
+* **One edit, two requests.** `setArchiveCutoff` is a `DELETE/INSERT` guarded by the registry revision `pdb:rev`
+  (which it bumps, like a registry edit) and the read-back; a concurrent edit is a `RdfDbConflictException`.
 
 ### Dropping a timestamp, and the changes between two
 
