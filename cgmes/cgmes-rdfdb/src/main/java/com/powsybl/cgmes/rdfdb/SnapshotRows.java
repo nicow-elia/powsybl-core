@@ -40,7 +40,8 @@ import java.util.Optional;
  * snapshot node.</p>
  *
  * <p>One component of {@link SnapshotInfo} is computed here rather than read: {@code fast}, from the bindings
- * above.</p>
+ * above. One is joined rather than stored: {@code rank}, the rank of the version name in the registry, bound as
+ * {@link #RANK}.</p>
  *
  * <p>Unknown predicates are ignored on purpose: a metadata graph written by a later release of the same schema has
  * to be readable by this one, and a schema only ever grows. The one predicate that is <em>not</em> ignored is the
@@ -84,6 +85,18 @@ final class SnapshotRows {
     static final String MEMBER_FAST_CLAUSE = " OPTIONAL { ?o pdb:kind ?" + MEMBER_KIND
             + " OPTIONAL { ?o pdb:fastPredicatesOnly ?" + MEMBER_FAST + " } } ";
 
+    /** The binding a snapshot listing carries the rank of the snapshot's version name in. */
+    static final String RANK = "rank";
+
+    /**
+     * The {@code OPTIONAL} block a snapshot listing adds to bind {@link #RANK}: the registry node whose name is the
+     * row's object.
+     *
+     * <p>A name is registered once, so this multiplies no row either; it binds on the {@code pdb:version} row and
+     * on no other row of a store written here, and the grouping reads it on that row only.</p>
+     */
+    static final String RANK_CLAUSE = " OPTIONAL { ?vn a pdb:Version ; pdb:name ?o ; pdb:rank ?" + RANK + " } ";
+
     /**
      * The key term of the earlier {@code (scenario, timestep, version)} schema.
      *
@@ -105,7 +118,7 @@ final class SnapshotRows {
      * minutes. The message says what was found and what to do.</p>
      *
      * @param scenario the scenario
-     * @param found    what the metadata graph carries instead of {@code pdb:schema 3}
+     * @param found    what the metadata graph carries instead of {@code pdb:schema 4}
      * @return the exception to throw
      */
     static RdfDbException legacySchema(String scenario, String found) {
@@ -120,7 +133,7 @@ final class SnapshotRows {
      *
      * @param scenario the scenario the rows belong to
      * @param rows     the rows, with the bindings {@code s}, {@code p}, {@code o} and optionally {@code sub},
-     *                 {@code mkind} and {@code mfast}
+     *                 {@code mkind}, {@code mfast} and {@code rank}
      * @param subject  the name of the binding carrying the snapshot node
      * @return the snapshots, keyed by IRI, in the order the rows first named them
      */
@@ -137,19 +150,20 @@ final class SnapshotRows {
                 throw legacySchema(scenario, "a snapshot node keyed by pdb:timestep");
             }
             builders.computeIfAbsent(s.stringValue(), Builder::new)
-                    .add(p.stringValue(), o, row.get("sub"), row.get(MEMBER_KIND), row.get(MEMBER_FAST));
+                    .add(p.stringValue(), o, row.get("sub"), row.get(MEMBER_KIND), row.get(MEMBER_FAST),
+                            row.get(RANK));
         }
         Map<String, SnapshotInfo> snapshots = new LinkedHashMap<>();
         builders.forEach((iri, builder) -> builder.build(scenario).ifPresent(info -> snapshots.put(iri, info)));
         return snapshots;
     }
 
-    /** The natural order of a listing: by modelling authority, by timestamp, then by depth in the chain. */
+    /** The natural order of a listing: by modelling authority, by timestamp, by depth in the chain, then by rank. */
     static Comparator<SnapshotInfo> byTimestampAndDepth() {
         return Comparator.comparing(SnapshotInfo::modellingAuthority)
                 .thenComparing(SnapshotInfo::timestamp)
                 .thenComparingInt(SnapshotInfo::depth)
-                .thenComparingInt(SnapshotInfo::version);
+                .thenComparingInt(SnapshotInfo::rank);
     }
 
     static CgmesSubset subsetOf(Value value) {
@@ -220,7 +234,8 @@ final class SnapshotRows {
         private final String iri;
         private String modellingAuthority;
         private Instant timestamp;
-        private int version;
+        private String version;
+        private int rank;
         private String kind;
         private String parent;
         private String edge;
@@ -239,13 +254,17 @@ final class SnapshotRows {
             this.iri = iri;
         }
 
-        void add(String predicate, Value object, Value subsetValue, Value memberKind, Value memberFast) {
+        void add(String predicate, Value object, Value subsetValue, Value memberKind, Value memberFast,
+                 Value rankValue) {
             switch (predicate) {
                 case RdfDbVocabulary.RDF_TYPE -> isSnapshot |= RdfDbVocabulary.SNAPSHOT_CLASS.equals(
                         object.stringValue());
                 case RdfDbVocabulary.MODELLING_AUTHORITY -> modellingAuthority = object.stringValue();
                 case RdfDbVocabulary.TIMESTAMP -> timestamp = instantOf(object);
-                case RdfDbVocabulary.VERSION -> version = intOf(object);
+                case RdfDbVocabulary.VERSION -> {
+                    version = object.stringValue();
+                    rank = rankValue == null ? 0 : intOf(rankValue);
+                }
                 case RdfDbVocabulary.KIND -> kind = object.stringValue();
                 case RdfDbVocabulary.PARENT -> parent = object.stringValue();
                 case RdfDbVocabulary.EDGE -> edge = object.stringValue();
@@ -295,7 +314,8 @@ final class SnapshotRows {
         }
 
         Optional<SnapshotInfo> build(String scenario) {
-            if (!isSnapshot || modellingAuthority == null || timestamp == null || version < 1) {
+            if (!isSnapshot || modellingAuthority == null || timestamp == null || version == null
+                    || version.isBlank()) {
                 return Optional.empty();
             }
             SnapshotInfo.Kind snapshotKind = RdfDbVocabulary.FULL.equals(kind)
@@ -308,9 +328,9 @@ final class SnapshotRows {
             } else {
                 edgeKind = SnapshotInfo.EdgeKind.VERSION;
             }
-            return Optional.of(new SnapshotInfo(scenario, iri, modellingAuthority, timestamp, version, snapshotKind,
-                    parent, edgeKind, depth, fast, state, members, full, timestampRoot == null ? iri : timestampRoot,
-                    created, description));
+            return Optional.of(new SnapshotInfo(scenario, iri, modellingAuthority, timestamp, version, rank,
+                    snapshotKind, parent, edgeKind, depth, fast, state, members, full,
+                    timestampRoot == null ? iri : timestampRoot, created, description));
         }
     }
 }

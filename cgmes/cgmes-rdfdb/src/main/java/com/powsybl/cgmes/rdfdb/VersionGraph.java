@@ -433,7 +433,7 @@ public final class VersionGraph {
         String starting = startPattern.toString();
 
         String query = RdfDbVocabulary.PREFIXES
-                + "SELECT ?side ?snap ?p ?o ?sub ?graph ?fwd ?rev ?mfast ?vsafe ?n ?sbase ?cim ?cdepth"
+                + "SELECT ?side ?snap ?p ?o ?sub ?graph ?fwd ?rev ?mfast ?vsafe ?n ?sbase ?cim ?cdepth ?rank"
                 + " WHERE { GRAPH " + SparqlText.iri(metaGraph) + " {"
                 + " {" + starting + " ?start pdb:parent* ?snap . ?snap a pdb:Snapshot }"
                 + " UNION"
@@ -444,7 +444,7 @@ public final class VersionGraph {
                 + "     OPTIONAL { ?o pdb:forwardGraph ?fwd ; pdb:reverseGraph ?rev ;"
                 + "       pdb:fastPredicatesOnly ?mfast ; pdb:subjectBase ?sbase ; pdb:cimNamespace ?cim ;"
                 + "       pdb:chainDepth ?cdepth . OPTIONAL { ?o pdb:tripleCount ?n }"
-                + "       OPTIONAL { ?o pdb:variantSafe ?vsafe } } } } } }";
+                + "       OPTIONAL { ?o pdb:variantSafe ?vsafe } } }" + SnapshotRows.RANK_CLAUSE + "} } }";
 
         List<Map<String, Value>> rows = connection.sparql(scenario).select(query);
         List<Map<String, Value>> detailRows = new ArrayList<>();

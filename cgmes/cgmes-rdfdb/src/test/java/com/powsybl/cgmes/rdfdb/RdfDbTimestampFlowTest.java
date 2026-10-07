@@ -65,7 +65,7 @@ class RdfDbTimestampFlowTest {
     }
 
     private static Network load(RdfDbConnection db, String scenario, Integer version, Instant timestamp) {
-        return RdfDbNetworkLoader.load(db, SnapshotRef.of(scenario, BE, timestamp, version), null, params(),
+        return RdfDbNetworkLoader.load(db, SnapshotRef.of(scenario, BE, timestamp, version == null ? null : version.toString()), null, params(),
                 ReportNode.NO_OP);
     }
 
@@ -115,7 +115,7 @@ class RdfDbTimestampFlowTest {
             assertThat(second.timestamp()).isEqualTo(T1);
             assertThat(db.snapshots(S).versions(BE, T1)).hasSize(2);
             assertThat(db.snapshots(S).versions(BE, null)).hasSize(1);
-            assertThat(db.snapshots(S).nextVersion(SnapshotRef.latestAt(S, BE, T1))).isEqualTo(3);
+            assertThat(db.snapshots(S).nextVersionName(SnapshotRef.latestAt(S, BE, T1))).isEqualTo("3");
             db.snapshots(S).verify();
         }
     }
@@ -207,7 +207,7 @@ class RdfDbTimestampFlowTest {
             Networks.assertSameNetworkIgnoringStateVariables(sender, materialised, IDENTITY,
                     Set.of(Changes.LOAD_ID));
             assertThat(materialised.getCaseDate().toInstant()).isEqualTo(T1);
-            assertThat(db.snapshots(S).snapshotOf(materialised).orElseThrow().version()).isEqualTo(2);
+            assertThat(db.snapshots(S).snapshotOf(materialised).orElseThrow().version()).isEqualTo("2");
         }
     }
 
@@ -240,7 +240,7 @@ class RdfDbTimestampFlowTest {
             SnapshotCatalog catalog = db.snapshots(S);
 
             // An offset date-time is the instant it means, and sub-second precision is not part of the key
-            assertThat(catalog.find(SnapshotRef.of(S, BE, OffsetDateTime.parse("2014-06-01T12:00:00+01:00").toInstant(), 1)))
+            assertThat(catalog.find(SnapshotRef.of(S, BE, OffsetDateTime.parse("2014-06-01T12:00:00+01:00").toInstant(), "1")))
                     .contains(written);
             assertThat(catalog.find(ref(S, 1, T1.plusMillis(250)))).contains(written);
             assertThat(catalog.find(SnapshotRef.latestAt(S, BE, T1))).contains(written);
@@ -303,7 +303,7 @@ class RdfDbTimestampFlowTest {
             assertThat(result.route()).isEqualTo(UpdateResult.Route.DIFF_APPLIED);
             assertThat(result.statistics().diffCount()).isEqualTo(2);
             Networks.assertSameNetworkIgnoringStateVariables(study, client, IDENTITY, Set.of(Changes.LOAD_ID));
-            assertThat(db.snapshots(S).snapshotOf(client).orElseThrow().version()).isEqualTo(2);
+            assertThat(db.snapshots(S).snapshotOf(client).orElseThrow().version()).isEqualTo("2");
         }
     }
 

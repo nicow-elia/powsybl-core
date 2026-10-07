@@ -61,11 +61,11 @@ class SnapshotCatalogTest {
 
     private static SnapshotInfo root(RdfDbConnection db, String scenario, Integer version) {
         return db.snapshots(scenario).putFull(microGridBe(), null, SnapshotRef.of(scenario, BE, null,
-                version), Set.of(), params(), ReportNode.NO_OP);
+                version == null ? null : version.toString()), Set.of(), params(), ReportNode.NO_OP);
     }
 
     private static SnapshotRef at(String scenario, Integer version) {
-        return SnapshotRef.of(scenario, BE, null, version);
+        return SnapshotRef.of(scenario, BE, null, version == null ? null : version.toString());
     }
 
     /** A difference of one profile superseding what the given snapshot states for it. */
@@ -90,7 +90,7 @@ class SnapshotCatalogTest {
             SnapshotInfo root = db.snapshots(S).putFull(microGridBe(), null, SnapshotRef.latest(S, null), null,
                     params(), ReportNode.NO_OP);
 
-            assertThat(root.version()).isEqualTo(1);
+            assertThat(root.version()).isEqualTo("1");
             assertThat(root.modellingAuthority()).isEqualTo(BE);
             assertThat(root.timestamp()).isEqualTo(BASE);
             assertThat(root.kind()).isEqualTo(SnapshotInfo.Kind.FULL);
@@ -103,8 +103,8 @@ class SnapshotCatalogTest {
             assertThat(root.profiles()).isEqualTo(root.state().keySet());
             assertThat(root.state()).isEqualTo(root.fullModels());
             assertThat(root.members()).hasSameSizeAs(root.state().values());
-            assertThat(root.iri()).isEqualTo(RdfDbNames.snapshot(S, BE, BASE, 1));
-            assertThat(root.ref()).isEqualTo(SnapshotRef.of(S, BE, BASE, 1));
+            assertThat(root.iri()).isEqualTo(RdfDbNames.snapshot(S, BE, BASE, "1"));
+            assertThat(root.ref()).isEqualTo(SnapshotRef.of(S, BE, BASE, "1"));
 
             SnapshotCatalog catalog = db.snapshots(S);
             assertThat(catalog.isVersioned()).isTrue();
@@ -114,7 +114,7 @@ class SnapshotCatalogTest {
             assertThat(catalog.find(SnapshotRef.latest(S, BE))).contains(root);
             assertThat(catalog.find(SnapshotRef.latest(S, NL))).isEmpty();
             assertThat(catalog.snapshots()).containsExactly(root);
-            assertThat(catalog.nextVersion(SnapshotRef.latest(S, BE))).isEqualTo(2);
+            assertThat(catalog.nextVersionName(SnapshotRef.latest(S, BE))).isEqualTo("2");
             // The versioned graphs are not instance file contexts of the scenario
             assertThat(db.contextNames(S)).isEmpty();
             catalog.verify();
@@ -295,7 +295,7 @@ class SnapshotCatalogTest {
                     ReportNode.NO_OP);
 
             assertThat(nl.modellingAuthority()).isEqualTo(NL);
-            assertThat(nl.version()).isEqualTo(1);
+            assertThat(nl.version()).isEqualTo("1");
             assertThat(catalog.modellingAuthorities()).containsExactly(BE, NL);
             // The second root links the stored boundary instead of uploading it again
             assertThat(nl.state().get(CgmesSubset.EQUIPMENT_BOUNDARY))
@@ -307,9 +307,9 @@ class SnapshotCatalogTest {
                     .isBoundary()).isTrue();
             // Each authority is its own tree: versions and heads never mix
             SnapshotInfo be2 = catalog.putDiff(change(be, SSH, "urn:uuid:ssh-be", "12.0"), SnapshotRef.latest(S, BE));
-            assertThat(be2.version()).isEqualTo(2);
+            assertThat(be2.version()).isEqualTo("2");
             assertThat(catalog.find(SnapshotRef.latest(S, NL))).contains(nl);
-            assertThat(catalog.nextVersion(SnapshotRef.latest(S, NL))).isEqualTo(2);
+            assertThat(catalog.nextVersionName(SnapshotRef.latest(S, NL))).isEqualTo("2");
             catalog.verify();
         }
     }
@@ -359,8 +359,8 @@ class SnapshotCatalogTest {
             assertThat(heads).containsOnlyKeys(BE, NL);
             assertThat(heads.get(BE)).isEqualTo(be2);
             assertThat(heads.get(NL)).isEqualTo(nl);
-            assertThat(catalog.assembly(BASE, 1)).containsExactlyInAnyOrderEntriesOf(Map.of(BE, be, NL, nl));
-            assertThat(catalog.assembly(BASE, 2)).containsOnlyKeys(BE);
+            assertThat(catalog.assembly(BASE, "1")).containsExactlyInAnyOrderEntriesOf(Map.of(BE, be, NL, nl));
+            assertThat(catalog.assembly(BASE, "2")).containsOnlyKeys(BE);
             assertThat(catalog.assembly(NOON, null)).isEmpty();
         }
     }
@@ -376,7 +376,7 @@ class SnapshotCatalogTest {
 
             SnapshotInfo v2 = catalog.putDiff(change(base, SSH, "urn:uuid:ssh-d2", "12.0"), at(S, 2));
 
-            assertThat(v2.version()).isEqualTo(2);
+            assertThat(v2.version()).isEqualTo("2");
             assertThat(v2.timestamp()).isEqualTo(BASE);
             assertThat(v2.modellingAuthority()).isEqualTo(BE);
             assertThat(v2.kind()).isEqualTo(SnapshotInfo.Kind.DIFF);
@@ -390,7 +390,7 @@ class SnapshotCatalogTest {
             assertThat(v2.state().get(EQ)).isEqualTo(base.state().get(EQ));
             assertThat(v2.timestampRoot()).isEqualTo(base.iri());
             assertThat(catalog.find(SnapshotRef.latest(S, BE))).contains(v2);
-            assertThat(catalog.nextVersion(SnapshotRef.latest(S, BE))).isEqualTo(3);
+            assertThat(catalog.nextVersionName(SnapshotRef.latest(S, BE))).isEqualTo("3");
             assertThat(db.catalog(S).model("urn:uuid:ssh-d2")).isPresent();
             catalog.verify();
         }
@@ -404,10 +404,10 @@ class SnapshotCatalogTest {
             SnapshotCatalog catalog = db.snapshots(S);
             // No version: the head's plus one
             SnapshotInfo v11 = catalog.putDiff(change(base, SSH, "urn:uuid:ssh-a", "12.0"), at(S, null));
-            assertThat(v11.version()).isEqualTo(11);
+            assertThat(v11.version()).isEqualTo("11");
             // A gap is allowed
             SnapshotInfo v20 = catalog.putDiff(change(v11, SSH, "urn:uuid:ssh-b", "13.0"), at(S, 20));
-            assertThat(v20.version()).isEqualTo(20);
+            assertThat(v20.version()).isEqualTo("20");
             // Not greater than the head: refused, naming both numbers
             assertThatThrownBy(() -> catalog.putDiff(change(v20, SSH, "urn:uuid:ssh-c", "14.0"), at(S, 20)))
                     .isInstanceOf(RdfDbConflictException.class)
@@ -415,7 +415,7 @@ class SnapshotCatalogTest {
             assertThatThrownBy(() -> catalog.putDiff(change(v20, SSH, "urn:uuid:ssh-c", "14.0"), at(S, 15)))
                     .isInstanceOf(RdfDbConflictException.class)
                     .hasMessageContaining("version 15 is not greater than the head version 20");
-            assertThat(catalog.versions(BE, null)).extracting(SnapshotInfo::version).containsExactly(10, 11, 20);
+            assertThat(catalog.versions(BE, null)).extracting(SnapshotInfo::version).containsExactly("10", "11", "20");
             catalog.verify();
         }
     }
@@ -473,7 +473,7 @@ class SnapshotCatalogTest {
                     SnapshotRef.latestAt(S, BE, NOON));
 
             assertThat(root.timestamp()).isEqualTo(NOON);
-            assertThat(root.version()).isEqualTo(1);
+            assertThat(root.version()).isEqualTo("1");
             assertThat(root.edge()).isEqualTo(SnapshotInfo.EdgeKind.TIMESTAMP);
             assertThat(root.parent()).isEqualTo(base.iri());
             assertThat(root.timestampRoot()).isEqualTo(root.iri());

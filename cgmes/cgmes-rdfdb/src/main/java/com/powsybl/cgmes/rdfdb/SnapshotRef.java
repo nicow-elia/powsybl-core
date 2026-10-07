@@ -16,7 +16,8 @@ import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 
 /**
- * The address of a stored grid state: {@code (scenario, modellingAuthority, timestamp, version)}.
+ * The address of a stored grid state: {@code (scenario, modellingAuthority, timestamp, version)}, and whether the
+ * version is meant exactly.
  *
  * <p>The four keys together are unique in a database. The <strong>scenario</strong> is required everywhere: it is
  * one base grid model &mdash; one day &mdash; and a database is expected to hold several of them; guessing which
@@ -34,8 +35,8 @@ import java.time.temporal.ChronoUnit;
  * <ul>
  *   <li>{@code timestamp == null} means the <em>base timestamp</em> of the modelling authority's tree, which is the
  *       timestamp of its root snapshot. It is resolved against the database rather than guessed here.</li>
- *   <li>{@code version == null} means the head of that timestamp's version chain on a read, and the head plus one
- *       on a write (1 for a root).</li>
+ *   <li>{@code version == null} means the head of that timestamp's version chain on a read, and on a write the
+ *       lowest registered version ranking above the head's (the lowest registered one for a new timestamp).</li>
  *   <li>{@code modellingAuthority == null} is accepted by the writes that read instance files
  *       ({@code SnapshotCatalog.putFull}, {@code putAsDiff}) and by {@code putDiff}, which take it from the
  *       equipment and steady state hypothesis headers of what they write. Every read refuses it: guessing the
@@ -49,17 +50,27 @@ import java.time.temporal.ChronoUnit;
  * zones cannot disagree about it. A naive or unknown time zone cannot occur in this API at all &mdash; there is no
  * way to build an {@code Instant} without saying where it is &mdash; and the only place a zone-less text is still
  * read is the {@code md:Model.scenarioTime} of a CGMES header, which {@link #scenarioTime(String)} reads as UTC.
- * The version is an integer of at least 1; its order is the order of the chain, and a new version is always
- * greater than the head it is written on.</p>
+ * The version is a <strong>name</strong> registered in the scenario's {@link VersionRegistry} (for instance
+ * {@code "DA"}, {@code "ID"}, {@code "RT"}, or {@code "1"}, {@code "2"} in a scenario that registers names as they
+ * come); the registry ranks the names, and a new version always ranks above the head it is written on.</p>
+ *
+ * <p>A read at a named version means the snapshot of the timestamp whose version ranks <em>highest at or below</em>
+ * it: asking for {@code "RT"} where the timestamp only reached {@code "ID"} reads {@code "ID"}. An
+ * {@linkplain #exactly() exact} address means that version and nothing else, and is absent when the timestamp does
+ * not carry it. Writes ignore {@link #exact()}: a write names the version it creates.</p>
  *
  * @param scenario           the scenario, required and never blank
  * @param modellingAuthority the modelling authority set, never blank; {@code null} only on the writes named above
  * @param timestamp          the moment, or {@code null} for the base timestamp of the authority's tree
- * @param version            the version, at least 1, or {@code null} for the head (read) or the next one (write)
+ * @param version            the version name, never blank, or {@code null} for the head (read) or the next one
+ *                           (write)
+ * @param exact              whether a read means exactly this version rather than the highest ranking one at or
+ *                           below it; ignored by writes, and only allowed with a version
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
-public record SnapshotRef(String scenario, String modellingAuthority, Instant timestamp, Integer version) {
+public record SnapshotRef(String scenario, String modellingAuthority, Instant timestamp, String version,
+                          boolean exact) {
 
     public SnapshotRef {
         RdfDbNames.checkScenario(scenario);
@@ -67,14 +78,26 @@ public record SnapshotRef(String scenario, String modellingAuthority, Instant ti
             throw new RdfDbException("a modelling authority must not be blank: pass the md:Model.modelingAuthoritySet"
                     + " of the instance files, or null on a write to take it from them");
         }
-        checkVersion(version);
+        if (version != null && version.isBlank()) {
+            throw new RdfDbException("a version name must not be blank: pass a registered name, or null for the head"
+                    + " on a read and the next version on a write");
+        }
+        if (exact && version == null) {
+            throw new RdfDbException("an exact address needs a version name: the head is never exact");
+        }
         timestamp = timestamp == null ? null : timestamp.truncatedTo(ChronoUnit.SECONDS);
     }
 
-    private static void checkVersion(Integer version) {
-        if (version != null && version < 1) {
-            throw new RdfDbException("a version must be at least 1, got " + version);
-        }
+    /**
+     * An address whose read means the highest ranking version at or below {@code version}.
+     *
+     * @param scenario           the scenario
+     * @param modellingAuthority the modelling authority set
+     * @param timestamp          the moment, or {@code null} for the base timestamp
+     * @param version            the version name, or {@code null}
+     */
+    public SnapshotRef(String scenario, String modellingAuthority, Instant timestamp, String version) {
+        this(scenario, modellingAuthority, timestamp, version, false);
     }
 
     /**
@@ -83,10 +106,10 @@ public record SnapshotRef(String scenario, String modellingAuthority, Instant ti
      * @param scenario           the scenario
      * @param modellingAuthority the modelling authority set
      * @param timestamp          the moment, or {@code null} for the base timestamp
-     * @param version            the version, or {@code null}
+     * @param version            the version name, or {@code null}
      * @return the reference
      */
-    public static SnapshotRef of(String scenario, String modellingAuthority, Instant timestamp, Integer version) {
+    public static SnapshotRef of(String scenario, String modellingAuthority, Instant timestamp, String version) {
         return new SnapshotRef(scenario, modellingAuthority, timestamp, version);
     }
 
@@ -134,17 +157,28 @@ public record SnapshotRef(String scenario, String modellingAuthority, Instant ti
      * @return the reference
      */
     public SnapshotRef at(Instant newTimestamp) {
-        return new SnapshotRef(scenario, modellingAuthority, newTimestamp, version);
+        return new SnapshotRef(scenario, modellingAuthority, newTimestamp, version, exact);
     }
 
     /**
-     * The same address at another version.
+     * The same address at another version, not exact.
      *
-     * @param newVersion the version, at least 1
+     * @param newVersion the version name
      * @return the reference
      */
-    public SnapshotRef withVersion(int newVersion) {
+    public SnapshotRef withVersion(String newVersion) {
         return new SnapshotRef(scenario, modellingAuthority, timestamp, newVersion);
+    }
+
+    /**
+     * The same address meaning exactly its version: a read is absent when the timestamp does not carry that
+     * version, instead of falling back to the highest ranking one below it.
+     *
+     * @return the reference
+     * @throws RdfDbException if the address names no version
+     */
+    public SnapshotRef exactly() {
+        return new SnapshotRef(scenario, modellingAuthority, timestamp, version, true);
     }
 
     /**
@@ -154,7 +188,7 @@ public record SnapshotRef(String scenario, String modellingAuthority, Instant ti
      * @return the reference
      */
     SnapshotRef withAuthority(String authority) {
-        return new SnapshotRef(scenario, authority, timestamp, version);
+        return new SnapshotRef(scenario, authority, timestamp, version, exact);
     }
 
     /**
@@ -188,6 +222,6 @@ public record SnapshotRef(String scenario, String modellingAuthority, Instant ti
     public String toString() {
         return "(" + scenario + ", " + (modellingAuthority == null ? "?" : modellingAuthority) + ", "
                 + (timestamp == null ? "base" : timestamp.toString()) + ", "
-                + (version == null ? "latest" : version.toString()) + ")";
+                + (version == null ? "latest" : (exact ? "=" : "") + version) + ")";
     }
 }

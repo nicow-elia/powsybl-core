@@ -151,8 +151,13 @@ public final class RdfDbVocabulary {
      */
     public static final String SCHEMA = NS + "schema";
 
-    /** The value of {@link #SCHEMA} this release writes and reads. */
-    public static final int SCHEMA_VERSION = 3;
+    /**
+     * The value of {@link #SCHEMA} this release writes and reads.
+     *
+     * <p>Schema 4 made versions names ranked by a registry ({@link #VERSION_CLASS}); a store of schema 3, whose
+     * versions are integers, is refused rather than migrated.</p>
+     */
+    public static final int SCHEMA_VERSION = 4;
 
     /** {@code pdb:Materialized}, the class of a model node whose graph a checkpoint copied and folded. */
     public static final String MATERIALIZED = NS + "Materialized";
@@ -163,8 +168,76 @@ public final class RdfDbVocabulary {
     /** Value of {@link #EDGE} for the link from a timestamp root to the base-chain snapshot it derives from. */
     public static final String TIMESTAMP_EDGE = NS + "TimestampEdge";
 
-    /** The version of a snapshot, an {@code xsd:integer} of at least 1. */
+    /**
+     * The version of a snapshot: the registered name, a plain string literal equal to the {@link #NAME} of one
+     * {@link #VERSION_CLASS} node of the scenario.
+     *
+     * <p>A snapshot never stores a rank. Every comparison of versions joins the name to its registry node, so a
+     * rerank rewrites one node and not the history.</p>
+     */
     public static final String VERSION = NS + "version";
+
+    // ------------------------------------------------------------------ the version registry
+
+    /**
+     * {@code pdb:Version}, the class of one registered version name of a scenario, on the node
+     * {@code RdfDbNames.versionNode(scenario, name)}.
+     *
+     * <p>The registry of a scenario is the set of these nodes; their {@link #RANK} orders the versions.</p>
+     */
+    public static final String VERSION_CLASS = NS + "Version";
+
+    /** The name of a {@link #VERSION_CLASS} node, a plain string literal: what {@link #VERSION} carries. */
+    public static final String NAME = NS + "name";
+
+    /**
+     * The rank of a {@link #VERSION_CLASS} node, an {@code xsd:integer}: sparse (step 10 when appended), unique in
+     * the scenario, and the only order versions have.
+     */
+    public static final String RANK = NS + "rank";
+
+    /**
+     * Whether a registered version is transient, an {@code xsd:boolean}; absent means {@code false}.
+     *
+     * <p>Deleting a transient version drops the snapshots that carry it, which must be leaves.</p>
+     */
+    public static final String TRANSIENT = NS + "transient";
+
+    /**
+     * The revision of the registry of a scenario, an {@code xsd:integer} on the schema node: 1 when the registry
+     * is created, one more on every edit.
+     *
+     * <p>It is the cache token of the registry. Every edit is guarded on it, and so is every snapshot write, so a
+     * registry edited elsewhere refuses a write that checked its rank against an older registry.</p>
+     */
+    public static final String REV = NS + "rev";
+
+    /**
+     * Whether a scenario registers an unknown version name on its first write, an {@code xsd:boolean} on the
+     * schema node.
+     *
+     * <p>A strict scenario refuses a name that is not registered; a permissive one appends it above the highest
+     * rank.</p>
+     */
+    public static final String PERMISSIVE = NS + "permissive";
+
+    /** The moment before which a scenario's snapshots are archived, an {@code xsd:dateTime}, on the schema node. */
+    public static final String ARCHIVE_CUTOFF = NS + "archiveCutoff";
+
+    /** Where the archived snapshots of a scenario went, a string next to {@link #ARCHIVE_CUTOFF}. */
+    public static final String ARCHIVE_LOCATION = NS + "archiveLocation";
+
+    /**
+     * Whether a snapshot is a rollover, an {@code xsd:boolean}; absent means {@code false}: a snapshot later
+     * timestamps of its tree may be ingested against.
+     */
+    public static final String ROLLOVER = NS + "rollover";
+
+    /**
+     * What the writer of a difference could apply, a string {@code <table hash>/<core version>} on the difference
+     * node.
+     */
+    public static final String CAPABILITIES = NS + "capabilities";
 
     /**
      * The {@code md:Model.modelingAuthoritySet} a snapshot is stored under, as a plain literal.

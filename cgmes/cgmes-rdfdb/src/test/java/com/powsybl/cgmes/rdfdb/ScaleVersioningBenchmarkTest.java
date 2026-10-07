@@ -129,7 +129,7 @@ class ScaleVersioningBenchmarkTest {
             refs.add(head.ref());
             for (int i = 1; i <= DEPTH; i++) {
                 head = catalog.putDiff(ScaleLoadBenchmarkTest.step(head, i, loadId, loadClass, !grid.svedala()),
-                        head.ref().withVersion(i + 1));
+                        head.ref().withVersion(String.valueOf(i + 1)));
                 refs.add(head.ref());
             }
             long buildMs = (System.nanoTime() - build) / 1_000_000;

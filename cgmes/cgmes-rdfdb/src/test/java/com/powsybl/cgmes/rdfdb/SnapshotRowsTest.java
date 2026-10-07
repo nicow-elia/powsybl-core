@@ -36,7 +36,7 @@ class SnapshotRowsTest {
     private static final String S = "rows";
     private static final String MAS = "http://elia.be/CGMES/2.4.15";
     private static final Instant T = Instant.parse("2014-06-01T10:30:00Z");
-    private static final String IRI = RdfDbNames.snapshot(S, MAS, T, 2);
+    private static final String IRI = RdfDbNames.snapshot(S, MAS, T, "2");
 
     private static Map<String, Value> row(String predicate, Value object) {
         return Map.of("s", VF.createIRI(IRI), "p", VF.createIRI(predicate), "o", object);
@@ -63,8 +63,8 @@ class SnapshotRowsTest {
         assertThat(info).isNotNull();
         assertThat(info.modellingAuthority()).isEqualTo(MAS);
         assertThat(info.timestamp()).isEqualTo(T);
-        assertThat(info.version()).isEqualTo(2);
-        assertThat(info.ref()).isEqualTo(SnapshotRef.of(S, MAS, T, 2));
+        assertThat(info.version()).isEqualTo("2");
+        assertThat(info.ref()).isEqualTo(SnapshotRef.of(S, MAS, T, "2"));
         assertThat(info.profiles()).isEqualTo(Set.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS));
         assertThat(info.edge()).isEqualTo(SnapshotInfo.EdgeKind.NONE);
     }

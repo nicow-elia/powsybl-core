@@ -408,7 +408,7 @@ class ScaleLoadBenchmarkTest {
                     ReportNode.NO_OP);
             SnapshotRef root = head.ref();
             for (int i = 1; i <= CHAIN; i++) {
-                head = catalog.putDiff(step(head, i, loadId, loadClass, cim16), head.ref().withVersion(i + 1));
+                head = catalog.putDiff(step(head, i, loadId, loadClass, cim16), head.ref().withVersion(String.valueOf(i + 1)));
             }
             SnapshotRef top = head.ref();
             int warmups = BenchMeters.warmups(grid);

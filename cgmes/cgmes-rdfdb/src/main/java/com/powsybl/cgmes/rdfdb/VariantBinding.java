@@ -71,9 +71,9 @@ public record VariantBinding(String variantId, String scenario, SnapshotRef ref,
     }
 
     /**
-     * @return the version of the snapshot, or {@code null} when the variant is not at a snapshot
+     * @return the version name of the snapshot, or {@code null} when the variant is not at a snapshot
      */
-    public Integer version() {
+    public String version() {
         return ref == null ? null : ref.version();
     }
 

@@ -240,7 +240,7 @@ class VersionGraphTest {
     void anotherModellingAuthorityIsFullWithoutAQuery(String backend) {
         Chain chain = chain(backend);
         try (RdfDbConnection db = chain.db) {
-            UpdatePlan across = db.versionGraph(S).plan(chain.b.iri(), SnapshotRef.of(S, NL, BASE, 1),
+            UpdatePlan across = db.versionGraph(S).plan(chain.b.iri(), SnapshotRef.of(S, NL, BASE, "1"),
                     new RdfDbUpdateOptions());
 
             assertThat(across.kind()).isEqualTo(UpdatePlan.Kind.FULL);

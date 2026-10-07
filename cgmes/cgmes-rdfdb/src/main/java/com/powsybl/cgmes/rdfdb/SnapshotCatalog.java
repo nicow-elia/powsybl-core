@@ -85,9 +85,9 @@ import java.util.stream.Stream;
  * shared boundary.</p>
  *
  * <h2>One schema</h2>
- * <p>The metadata graph carries {@code pdb:schema 3}. A scenario written by the earlier
- * {@code (scenario, timestep, version)} schema is refused with a message, not migrated: clear it and ingest it
- * again.</p>
+ * <p>The metadata graph carries {@code pdb:schema 4}. A scenario written by an earlier schema &mdash; schema 3,
+ * whose versions were integers, or the {@code (scenario, timestep, version)} schema before it &mdash; is refused
+ * with a message, not migrated: clear it and ingest it again.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
@@ -192,7 +192,7 @@ public final class SnapshotCatalog {
      * ever written by this release. Called by every listing, so no read decodes a node of an older schema into a
      * wrong address.</p>
      *
-     * @throws RdfDbException if the graph holds snapshots but not {@code pdb:schema 3}, or a node of the earlier
+     * @throws RdfDbException if the graph holds snapshots but not {@code pdb:schema 4}, or a node of the earlier
      *                        {@code (scenario, timestep, version)} schema
      */
     void checkSchema() {
@@ -332,7 +332,7 @@ public final class SnapshotCatalog {
                 .append(authority).append(" ; pdb:timestamp ")
                 .append(ref.timestamp() == null ? var + "Base" : SparqlText.dateTime(ref.timestamp()));
         if (ref.version() != null) {
-            pattern.append(" ; pdb:version ").append(SparqlText.integer(ref.version()));
+            pattern.append(" ; pdb:version ").append(SparqlText.str(ref.version()));
         }
         pattern.append(" . ");
         if (ref.timestamp() == null) {
@@ -424,9 +424,9 @@ public final class SnapshotCatalog {
      */
     private Map<String, SnapshotInfo> snapshotsWhere(String pattern, String outerFilter) {
         checkSchema();
-        return SnapshotRows.group(scenario, select("SELECT ?s ?p ?o ?sub ?mkind ?mfast WHERE {" + graphClause()
-                + "{ " + pattern + "?s a pdb:Snapshot ; ?p ?o OPTIONAL { ?o pdb:subset ?sub }"
-                + SnapshotRows.MEMBER_FAST_CLAUSE + "}" + outerFilter + " }"), "s");
+        return SnapshotRows.group(scenario, select("SELECT ?s ?p ?o ?sub ?mkind ?mfast ?rank WHERE {"
+                + graphClause() + "{ " + pattern + "?s a pdb:Snapshot ; ?p ?o OPTIONAL { ?o pdb:subset ?sub }"
+                + SnapshotRows.MEMBER_FAST_CLAUSE + SnapshotRows.RANK_CLAUSE + "}" + outerFilter + " }"), "s");
     }
 
     /**
@@ -550,16 +550,15 @@ public final class SnapshotCatalog {
     }
 
     /**
-     * The version a new snapshot at an address gets when the caller names none: the head's plus one, 1 when the
-     * timestamp has no snapshot yet.
+     * The version name a new snapshot at an address gets when the caller names none.
      *
      * @param ref the address; its version is ignored
-     * @return the next version
+     * @return the next version name
      */
-    public int nextVersion(SnapshotRef ref) {
+    String nextVersionName(SnapshotRef ref) {
         readable(ref);
         return find(SnapshotRef.latestAt(scenario, ref.modellingAuthority(), ref.timestamp()))
-                .map(head -> head.version() + 1).orElse(1);
+                .map(head -> String.valueOf(Integer.parseInt(head.version()) + 1)).orElse("1");
     }
 
     /**
@@ -573,14 +572,14 @@ public final class SnapshotCatalog {
      * merge.</p>
      *
      * @param timestamp the moment
-     * @param version   the version every authority is taken at, or {@code null} for the head of each
+     * @param version   the version name every authority is taken at, or {@code null} for the head of each
      * @return the snapshot per modelling authority, sorted by authority
      */
-    public Map<String, SnapshotInfo> assembly(Instant timestamp, Integer version) {
+    public Map<String, SnapshotInfo> assembly(Instant timestamp, String version) {
         Objects.requireNonNull(timestamp);
         SnapshotRef moment = SnapshotRef.of(scenario, null, timestamp, version);
         String restriction = "?s pdb:timestamp " + SparqlText.dateTime(moment.timestamp())
-                + (version == null ? "" : " ; pdb:version " + SparqlText.integer(version)) + " . ";
+                + (version == null ? "" : " ; pdb:version " + SparqlText.str(version)) + " . ";
         Map<String, SnapshotInfo> byAuthority = new TreeMap<>();
         snapshotsWhere(restriction, "").values().forEach(info -> byAuthority.merge(info.modellingAuthority(), info,
                 (a, b) -> a.depth() >= b.depth() ? a : b));
@@ -646,7 +645,7 @@ public final class SnapshotCatalog {
                     roots::keySet, "the instance files");
             refuseSecondRoot(roots, authority);
             Instant timestamp = ref.timestamp() != null ? ref.timestamp() : scenarioTimeOf(headers);
-            int version = ref.version() == null ? 1 : ref.version();
+            String version = ref.version() == null ? "1" : ref.version();
             Set<String> shared = sharedBoundary(headers, roots, authority);
             Map<String, Header> own = new LinkedHashMap<>(headers);
             own.values().removeIf(header -> shared.contains(header.id));
@@ -924,14 +923,15 @@ public final class SnapshotCatalog {
         checkScenarioTimes(models, timestamp);
         boolean newTimestamp = existingHead.isEmpty();
         SnapshotInfo parent = newTimestamp ? pin(models, authority, timestamp) : existingHead.get();
-        int version;
+        String version;
         if (newTimestamp) {
-            version = target.version() == null ? 1 : target.version();
+            version = target.version() == null ? "1" : target.version();
         } else {
             if (target.timestamp() != null) {
                 checkNotASecondRoot(models, parent, authority, timestamp);
             }
-            version = target.version() == null ? parent.version() + 1 : target.version();
+            version = target.version() == null ? String.valueOf(Integer.parseInt(parent.version()) + 1)
+                    : target.version();
             checkVersionGrows(parent, version);
         }
         SnapshotRef address = SnapshotRef.of(scenario, authority, timestamp, version);
@@ -1369,11 +1369,11 @@ public final class SnapshotCatalog {
     }
 
     /** A new version is greater than the head it is written on; gaps are allowed. */
-    private void checkVersionGrows(SnapshotInfo head, int version) {
-        if (version <= head.version()) {
+    private void checkVersionGrows(SnapshotInfo head, String version) {
+        if (Integer.parseInt(version) <= Integer.parseInt(head.version())) {
             throw new RdfDbConflictException("version " + version + " is not greater than the head version "
                     + head.version() + " of (" + scenario + ", " + head.modellingAuthority() + ", "
-                    + head.timestamp() + "): versions only grow; pass none to get " + (head.version() + 1));
+                    + head.timestamp() + "): versions only grow");
         }
     }
 
@@ -1406,7 +1406,7 @@ public final class SnapshotCatalog {
             return "snapshot " + parent.ref() + " already has successor " + nowHead.get().ref()
                     + " - the linear scheme allows no forks; update to the head first";
         }
-        if (nowHead.isPresent() && nowHead.get().version() >= address.version()) {
+        if (nowHead.isPresent() && nowHead.get().version().equals(address.version())) {
             return "version " + address.version() + " is not greater than the head version "
                     + nowHead.get().version() + " of " + nowHead.get().ref();
         }
@@ -1496,9 +1496,9 @@ public final class SnapshotCatalog {
                 throw new RdfDbException("snapshot " + parent + " of scenario '" + scenario + "' has more than one"
                         + " version successor: the chain forked");
             }
-            if (info.edge() == SnapshotInfo.EdgeKind.VERSION && info.version() <= parent.version()) {
+            if (info.edge() == SnapshotInfo.EdgeKind.VERSION && info.rank() <= parent.rank()) {
                 throw new RdfDbException("snapshot " + info + " of scenario '" + scenario + "' has a version not"
-                        + " greater than its parent " + parent + "'s");
+                        + " ranking above its parent " + parent + "'s");
             }
             verifyTimestampRoot(info, parent, byIri, roots.get(info.modellingAuthority()));
             verifyState(info, parent);

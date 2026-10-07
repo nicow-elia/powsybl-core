@@ -104,7 +104,7 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
      * @param timestampRoot      the root snapshot of the new snapshot's timestamp
      * @param parentStates       the parent states the write is guarded against, per profile
      */
-    record SnapshotWrite(String iri, String modellingAuthority, int version, Instant timestamp, String parent,
+    record SnapshotWrite(String iri, String modellingAuthority, String version, Instant timestamp, String parent,
                          String edge, int depth, Map<CgmesSubset, String> state, String timestampRoot,
                          Map<CgmesSubset, String> parentStates) {
 
@@ -118,7 +118,7 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
          * @param state              the full model per profile
          * @return the write
          */
-        static SnapshotWrite root(String iri, String modellingAuthority, int version, Instant timestamp,
+        static SnapshotWrite root(String iri, String modellingAuthority, String version, Instant timestamp,
                                   Map<CgmesSubset, String> state) {
             return new SnapshotWrite(iri, modellingAuthority, version, timestamp, null, null, 0, state, iri,
                     Map.of());
@@ -154,7 +154,7 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
                     .append(SparqlText.iri(RdfDbVocabulary.TIMESTAMP)).append(' ')
                     .append(SparqlText.dateTime(timestamp)).append(" ; ")
                     .append(SparqlText.iri(RdfDbVocabulary.VERSION)).append(' ')
-                    .append(SparqlText.integer(version)).append(" ; ")
+                    .append(SparqlText.str(version)).append(" ; ")
                     .append(SparqlText.iri(RdfDbVocabulary.KIND)).append(' ')
                     .append(SparqlText.iri(parent == null ? RdfDbVocabulary.FULL : RdfDbVocabulary.DIFF))
                     .append(" ; ");
@@ -595,9 +595,9 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
                 + " ; pdb:timestamp " + SparqlText.dateTime(s.timestamp());
         query.append(" FILTER NOT EXISTS { GRAPH ").append(meta).append(" { ").append(SparqlText.iri(s.iri()))
                 .append(" ?ps ?os } }")
-                // Versions only grow: nothing at the same moment of the same tree is at this version or above
+                // One snapshot per version of a moment of a tree
                 .append(" FILTER NOT EXISTS { GRAPH ").append(meta).append(" { ?ys").append(moment)
-                .append(" ; pdb:version ?yv FILTER(?yv >= ").append(SparqlText.integer(s.version())).append(") } }")
+                .append(" ; pdb:version ").append(SparqlText.str(s.version())).append(" } }")
                 .append(" FILTER EXISTS { GRAPH ").append(meta).append(" { ").append(parent)
                 .append(" a pdb:Snapshot } }");
         if (RdfDbVocabulary.VERSION_EDGE.equals(s.edge())) {

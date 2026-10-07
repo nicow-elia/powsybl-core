@@ -286,7 +286,7 @@ class RdfDbRequestCountTest {
         }
         day.getVariantManager().setWorkingVariant(RdfDbProvenance.PRIMARY_VARIANT);
         mark = BenchMeters.FusekiMeter.mark();
-        RdfDbExport.exportPerVariant(day, more, db, 50, new CgmesDiffExport.ExportOptions(),
+        RdfDbExport.exportPerVariant(day, more, db, "50", new CgmesDiffExport.ExportOptions(),
                 ReportNode.NO_OP);
         assertAtMost("writing one difference per variant for 3 variants, version label given", since(mark),
                 8 * 3);

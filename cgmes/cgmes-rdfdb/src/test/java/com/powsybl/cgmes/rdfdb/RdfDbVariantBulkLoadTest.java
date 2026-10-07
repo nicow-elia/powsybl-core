@@ -230,7 +230,7 @@ class RdfDbVariantBulkLoadTest {
             assertThat(result.refused()).isEmpty();
             VariantBinding binding = result.network().getExtension(RdfDbProvenance.class)
                     .variantBinding("head").orElseThrow();
-            assertThat(binding.version()).isEqualTo(2);
+            assertThat(binding.version()).isEqualTo("2");
             assertThat(binding.timestamp()).isEqualTo(DAY.get(0));
         }
     }
@@ -250,7 +250,7 @@ class RdfDbVariantBulkLoadTest {
 
             assertThat(result.refused()).isEmpty();
             RdfDbProvenance provenance = result.network().getExtension(RdfDbProvenance.class);
-            assertThat(provenance.variantBinding("t11-v11").orElseThrow().version()).isEqualTo(2);
+            assertThat(provenance.variantBinding("t11-v11").orElseThrow().version()).isEqualTo("2");
             // The 1.1 variant is one difference away from the 1.0 variant of the same timestamp, not from the base
             assertThat(result.outcomes().get(2).diffCount()).isEqualTo(1);
             assertThat(result.outcomes().get(2).clonedFrom()).isEqualTo("t11-v10");

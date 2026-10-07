@@ -215,13 +215,19 @@ class RdfDbVersioningBenchmarkTest {
         StringBuilder update = new StringBuilder(RdfDbVocabulary.PREFIXES)
                 .append("INSERT DATA { GRAPH ").append(meta).append(" { ");
         StringBuilder filler = new StringBuilder(SparqlText.iri(RdfDbNames.schemaNode(scenario)) + " pdb:schema "
-                + SparqlText.integer(RdfDbVocabulary.SCHEMA_VERSION) + " . ");
+                + SparqlText.integer(RdfDbVocabulary.SCHEMA_VERSION) + " ; pdb:rev " + SparqlText.integer(1)
+                + " ; pdb:permissive true . ");
         Instant timestamp = Instant.parse("2016-01-01T00:00:00Z");
         for (int i = 0; i < snapshots; i++) {
-            String iri = RdfDbNames.snapshot(scenario, BE, timestamp, i + 1);
+            String name = String.valueOf(i + 1);
+            String iri = RdfDbNames.snapshot(scenario, BE, timestamp, name);
+            // The registry node of the version name, which every comparison of versions joins
+            filler.append(SparqlText.iri(RdfDbNames.versionNode(scenario, name))).append(" a pdb:Version ; pdb:name ")
+                    .append(SparqlText.str(name)).append(" ; pdb:rank ").append(SparqlText.integer(10L * (i + 1)))
+                    .append(" . ");
             update.append(SparqlText.iri(iri)).append(" a pdb:Snapshot ; pdb:scenario ")
                     .append(SparqlText.str(scenario)).append(" ; pdb:modellingAuthority ").append(SparqlText.str(BE))
-                    .append(" ; pdb:version ").append(SparqlText.integer(i + 1L))
+                    .append(" ; pdb:version ").append(SparqlText.str(name))
                     .append(" ; pdb:timestamp ").append(SparqlText.dateTime(timestamp))
                     .append(" ; pdb:depth ").append(SparqlText.integer(i));
             if (i == 0) {
@@ -233,7 +239,7 @@ class RdfDbVersioningBenchmarkTest {
             }
             if (i > 0) {
                 update.append(" ; pdb:parent ")
-                        .append(SparqlText.iri(RdfDbNames.snapshot(scenario, BE, timestamp, i)))
+                        .append(SparqlText.iri(RdfDbNames.snapshot(scenario, BE, timestamp, String.valueOf(i))))
                         .append(" ; pdb:edge pdb:VersionEdge");
             }
             update.append(" . ");

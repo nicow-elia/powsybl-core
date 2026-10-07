@@ -50,7 +50,7 @@ class LegacySchemaRefusedTest {
     void everyEntryPointRefusesAnEarlierStoreAndClearIsTheWayOut(String backend) {
         try (RdfDbConnection db = legacyStore(backend, CATALOG_NODE)) {
             String expected = "scenario 'legacy' was written by the (scenario, timestep, version) schema of an"
-                    + " earlier release (a pdb:Catalog node); this release reads only stores of schema 3";
+                    + " earlier release (a pdb:Catalog node); this release reads only stores of schema 4";
             assertThatThrownBy(() -> db.snapshots(S).snapshots())
                     .isInstanceOf(RdfDbException.class).hasMessageContaining(expected).hasMessageContaining("re-ingest");
             assertThatThrownBy(() -> RdfDbNetworkLoader.load(db, ref(S, 1), null, params(), ReportNode.NO_OP))
@@ -75,7 +75,7 @@ class LegacySchemaRefusedTest {
     @ParameterizedTest(name = "{0}")
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aSnapshotWithoutTheSchemaMarkerIsRefused(String backend) {
-        String snapshot = "<" + RdfDbNames.snapshot(S, BE, Backends.BASE, 1) + "> a <" + NS + "Snapshot> ; <" + NS
+        String snapshot = "<" + RdfDbNames.snapshot(S, BE, Backends.BASE, "1") + "> a <" + NS + "Snapshot> ; <" + NS
                 + "modellingAuthority> \"" + BE + "\" . ";
         try (RdfDbConnection db = legacyStore(backend, snapshot)) {
             assertThatThrownBy(() -> db.snapshots(S).find(SnapshotRef.latest(S, BE)))
@@ -100,12 +100,11 @@ class LegacySchemaRefusedTest {
     @ParameterizedTest(name = "{0}")
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aStoreOfAnotherSchemaNumberIsRefused(String backend) {
-        String marker = "<" + RdfDbNames.schemaNode(S) + "> <" + NS + "schema> 4 . ";
+        String marker = "<" + RdfDbNames.schemaNode(S) + "> <" + NS + "schema> 3 . ";
         try (RdfDbConnection db = legacyStore(backend, marker)) {
             assertThatThrownBy(() -> db.snapshots(S).snapshots())
                     .isInstanceOf(RdfDbException.class)
-                    .hasMessageContaining("carries pdb:schema 4")
-                    .hasMessageContaining("reads only stores of schema 3");
+                    .hasMessageContaining("carries pdb:schema 3, and this release reads only stores of schema 4");
         }
     }
 }

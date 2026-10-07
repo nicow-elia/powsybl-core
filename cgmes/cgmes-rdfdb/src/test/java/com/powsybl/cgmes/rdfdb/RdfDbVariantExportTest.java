@@ -107,8 +107,8 @@ class RdfDbVariantExportTest {
             assertThat(written.keySet()).containsExactly("10:30", "11:00");
             assertThat(written.get("10:30").result().snapshot().timestamp()).isEqualTo(T0);
             assertThat(written.get("11:00").result().snapshot().timestamp()).isEqualTo(T1);
-            assertThat(written.get("10:30").result().snapshot().version()).isEqualTo(2);
-            assertThat(written.get("11:00").result().snapshot().version()).isEqualTo(2);
+            assertThat(written.get("10:30").result().snapshot().version()).isEqualTo("2");
+            assertThat(written.get("11:00").result().snapshot().version()).isEqualTo("2");
 
             // A second process loads the successors and finds what the sender's variants hold
             Network at0 = RdfDbNetworkLoader.load(db, ref(S, 2, T0), null, params(), ReportNode.NO_OP);
@@ -118,10 +118,10 @@ class RdfDbVariantExportTest {
 
             // Each variant advanced its own identity; the primary did not move
             RdfDbProvenance provenance = sender.getExtension(RdfDbProvenance.class);
-            assertThat(provenance.variantBinding("10:30").orElseThrow().version()).isEqualTo(2);
-            assertThat(provenance.variantBinding("11:00").orElseThrow().version()).isEqualTo(2);
+            assertThat(provenance.variantBinding("10:30").orElseThrow().version()).isEqualTo("2");
+            assertThat(provenance.variantBinding("11:00").orElseThrow().version()).isEqualTo("2");
             assertThat(provenance.variantBinding(VariantManagerConstants.INITIAL_VARIANT_ID).orElseThrow()
-                    .version()).isEqualTo(1);
+                    .version()).isEqualTo("1");
         }
     }
 
@@ -138,7 +138,7 @@ class RdfDbVariantExportTest {
                     new CgmesDiffExport.ExportOptions(), ReportNode.NO_OP);
 
             assertThat(result.snapshot().timestamp()).isEqualTo(T1);
-            Network reloaded = RdfDbNetworkLoader.load(db, ref(S, result.snapshot().version(), T1), null, params(),
+            Network reloaded = RdfDbNetworkLoader.load(db, SnapshotRef.of(S, BE, T1, result.snapshot().version()), null, params(),
                     ReportNode.NO_OP);
             assertThat(reloaded.getLoad(Changes.LOAD_ID).getP0()).isEqualTo(before + 5.0);
             // The base timestamp is untouched
@@ -186,7 +186,7 @@ class RdfDbVariantExportTest {
             assertThat(written.get("11:00").rejected()).isNotEmpty();
             assertThat(written.get("11:00").result()).isNotNull();
             Network reloaded = RdfDbNetworkLoader.load(db,
-                    ref(S, written.get("11:00").result().snapshot().version(), T1), null, params(), ReportNode.NO_OP);
+                    SnapshotRef.of(S, BE, T1, written.get("11:00").result().snapshot().version()), null, params(), ReportNode.NO_OP);
             assertThat(reloaded.getLoad(Changes.LOAD_ID).getP0()).isEqualTo(77.0);
         }
     }
@@ -252,10 +252,10 @@ class RdfDbVariantExportTest {
             events.addAll(recordOn(sender, "11:00", n -> n.getLoad(Changes.LOAD_ID).setP0(22.0)));
 
             Map<String, RdfDbExport.VariantExport> written = RdfDbExport.exportPerVariant(sender, events, db,
-                    50, new CgmesDiffExport.ExportOptions(), ReportNode.NO_OP);
+                    "50", new CgmesDiffExport.ExportOptions(), ReportNode.NO_OP);
 
-            assertThat(written.get("10:30").result().snapshot().version()).isEqualTo(50);
-            assertThat(written.get("11:00").result().snapshot().version()).isEqualTo(50);
+            assertThat(written.get("10:30").result().snapshot().version()).isEqualTo("50");
+            assertThat(written.get("11:00").result().snapshot().version()).isEqualTo("50");
         }
     }
 

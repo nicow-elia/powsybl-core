@@ -29,7 +29,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
-import java.util.function.ToIntFunction;
 
 /**
  * Record a change on a network and store it as a difference in a scenario of an RDF database, in one call.
@@ -191,7 +190,7 @@ public final class RdfDbExport {
      * @param db         the open connection
      * @param target     the address the new snapshot gets. A {@code null} modelling authority is the one of the
      *                   snapshot the network is at, a {@code null} timestamp the base timestamp of that authority's
-     *                   tree, a {@code null} version the head's plus one
+     *                   tree, a {@code null} version the lowest registered one ranking above the head's
      * @param options    the granularity, the header values and the unsupported change behaviour
      * @param reportNode where the stored differences are reported
      * @return what was exported, what was stored and the snapshot it became
@@ -212,7 +211,7 @@ public final class RdfDbExport {
                 : authorityOf(network);
         SnapshotRef located = SnapshotRef.latestAt(target.scenario(), authority,
                 target.timestamp() == null ? catalog.baseTimestamp(authority) : target.timestamp());
-        SnapshotRef effective = located.withVersion(target.isLatest() ? catalog.nextVersion(located)
+        SnapshotRef effective = located.withVersion(target.isLatest() ? catalog.nextVersionName(located)
                 : target.version());
 
         // In variant mode every operation of this package is a variant operation: the difference describes the
@@ -337,8 +336,8 @@ public final class RdfDbExport {
      * @param events     the recorded changes
      * @param db         the open connection
      * @param variantId  the variant whose history is being written
-     * @param newVersion the version the new snapshot gets, or {@code null} for the next one of that timestamp's
-     *                   chain
+     * @param newVersion the version name the new snapshot gets, or {@code null} for the next one of that
+     *                   timestamp's chain
      * @param options    the granularity, the header values and the unsupported change behaviour
      * @param reportNode where the stored differences are reported
      * @return what was exported, what was stored and the snapshot it became
@@ -346,7 +345,7 @@ public final class RdfDbExport {
      *                        that is not the variant's timestamp
      */
     public static SnapshotResult exportVariant(Network network, Collection<NetworkEvent> events,
-                                               RdfDbConnection db, String variantId, Integer newVersion,
+                                               RdfDbConnection db, String variantId, String newVersion,
                                                CgmesDiffExport.ExportOptions options, ReportNode reportNode) {
         Objects.requireNonNull(network);
         Objects.requireNonNull(db);
@@ -357,7 +356,7 @@ public final class RdfDbExport {
         provenance.enableVariantMode();
         VariantBinding binding = binding(provenance, network, variantId);
         SnapshotCatalog catalog = db.snapshots(binding.scenario());
-        SnapshotRef target = targetOf(binding, newVersion, options, variantId, catalog::nextVersion);
+        SnapshotRef target = targetOf(binding, newVersion, options, variantId, catalog::nextVersionName);
 
         CgmesDiffExport.ExportOptions variantOptions = variantOptions(network, options, variantId);
         return VariantScope.call(network, provenance, variantId, () -> store(network, db, catalog,
@@ -398,7 +397,7 @@ public final class RdfDbExport {
      * @param network    the network the changes were recorded on
      * @param events     the recorded changes
      * @param db         the open connection
-     * @param newVersion the version every new snapshot gets, or {@code null} for the next one of each
+     * @param newVersion the version name every new snapshot gets, or {@code null} for the next one of each
      *                   timestamp's chain
      * @param options    the granularity, the header values and the unsupported change behaviour
      * @param reportNode where the stored differences are reported
@@ -407,7 +406,7 @@ public final class RdfDbExport {
      *                        behaviour is to fail
      */
     public static Map<String, VariantExport> exportPerVariant(Network network, Collection<NetworkEvent> events,
-                                                              RdfDbConnection db, Integer newVersion,
+                                                              RdfDbConnection db, String newVersion,
                                                               CgmesDiffExport.ExportOptions options,
                                                               ReportNode reportNode) {
         Objects.requireNonNull(network);
@@ -424,7 +423,7 @@ public final class RdfDbExport {
 
         Map<String, List<NetworkEvent>> byVariant = groupByVariant(network, events);
         // One version lookup per distinct moment, and none at all when the caller named the version
-        Map<SnapshotRef, Integer> versionByMoment = new LinkedHashMap<>();
+        Map<SnapshotRef, String> versionByMoment = new LinkedHashMap<>();
         // Phase one: everything that can refuse, with nothing written
         Map<String, Translated> translated = new LinkedHashMap<>();
         for (Map.Entry<String, List<NetworkEvent>> group : byVariant.entrySet()) {
@@ -440,7 +439,8 @@ public final class RdfDbExport {
             }
             VariantBinding binding = impl.variantBinding(variantId).orElseThrow();
             SnapshotRef target = targetOf(binding, newVersion, options, variantId,
-                    moment -> versionByMoment.computeIfAbsent(moment, db.snapshots(binding.scenario())::nextVersion));
+                    moment -> versionByMoment.computeIfAbsent(moment,
+                            db.snapshots(binding.scenario())::nextVersionName));
             CgmesDiffExport.ExportOptions variantOptions = variantOptions(network, options, variantId);
             translated.put(variantId, VariantScope.call(network, impl, variantId, () -> {
                 CgmesDiffExport.Result exported = translate(network, events, target.timestamp(), variantOptions);
@@ -533,9 +533,9 @@ public final class RdfDbExport {
     }
 
     /** The snapshot a variant's changes become: the next version of that variant's own timestamp. */
-    private static SnapshotRef targetOf(VariantBinding binding, Integer newVersion,
+    private static SnapshotRef targetOf(VariantBinding binding, String newVersion,
                                         CgmesDiffExport.ExportOptions options, String variantId,
-                                        ToIntFunction<SnapshotRef> nextVersion) {
+                                        Function<SnapshotRef, String> nextVersionName) {
         Instant timestamp = binding.timestamp();
         if (timestamp == null) {
             throw new RdfDbException("variant '" + variantId + "' is not at a snapshot of a versioned scenario,"
@@ -548,7 +548,7 @@ public final class RdfDbExport {
                     + ": a variant's changes are written into its own timestamp");
         }
         SnapshotRef moment = SnapshotRef.latestAt(binding.scenario(), binding.modellingAuthority(), timestamp);
-        return moment.withVersion(newVersion != null ? newVersion : nextVersion.applyAsInt(moment));
+        return moment.withVersion(newVersion != null ? newVersion : nextVersionName.apply(moment));
     }
 
     /**

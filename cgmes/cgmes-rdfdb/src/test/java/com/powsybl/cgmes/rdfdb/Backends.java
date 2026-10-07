@@ -143,19 +143,24 @@ final class Backends {
     /** The modelling authority set the SSH file of {@link #cgmesFull()} states. */
     static final String CGMES_FULL_SSH = "http://elia.be/CGMES";
 
-    /** A version of the MicroGrid BE tree of a scenario, at its base timestamp. */
+    /**
+     * A version of the MicroGrid BE tree of a scenario, at its base timestamp.
+     *
+     * <p>The number is the version's name, {@code "1"}, {@code "2"}, …: a scenario whose first root is written
+     * without a registry registers the names as they come, ranked in that order.</p>
+     */
     static SnapshotRef ref(String scenario, int version) {
-        return SnapshotRef.of(scenario, BE, null, version);
+        return SnapshotRef.of(scenario, BE, null, String.valueOf(version));
     }
 
     /** A version of the MicroGrid BE tree of a scenario, at a timestamp. */
     static SnapshotRef ref(String scenario, int version, Instant timestamp) {
-        return SnapshotRef.of(scenario, BE, timestamp, version);
+        return SnapshotRef.of(scenario, BE, timestamp, String.valueOf(version));
     }
 
     /** A version of the Svedala tree of a scenario, at a timestamp, or at the base timestamp for {@code null}. */
     static SnapshotRef svk(String scenario, int version, Instant timestamp) {
-        return SnapshotRef.of(scenario, SVK, timestamp, version);
+        return SnapshotRef.of(scenario, SVK, timestamp, String.valueOf(version));
     }
 
     /** An instant written as ISO text, for the readability of a test. */

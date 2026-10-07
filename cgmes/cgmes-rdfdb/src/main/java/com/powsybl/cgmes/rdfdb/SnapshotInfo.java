@@ -42,7 +42,9 @@ import java.util.Set;
  * @param iri                the IRI of the snapshot node
  * @param modellingAuthority the modelling authority set whose tree the snapshot is in
  * @param timestamp          the moment the snapshot describes
- * @param version            the version, at least 1
+ * @param version            the registered version name
+ * @param rank               the rank of that name in the scenario's registry when the snapshot was listed: the order
+ *                           of the versions, read in the same request, never stored on the snapshot
  * @param kind               whether the snapshot is a root of full models or a difference on its parent
  * @param parent             the IRI of the snapshot this one derives from, {@code null} for a root
  * @param edge               which kind of link {@link #parent()} is
@@ -57,8 +59,8 @@ import java.util.Set;
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
-public record SnapshotInfo(String scenario, String iri, String modellingAuthority, Instant timestamp, int version,
-                           Kind kind, String parent, EdgeKind edge, int depth, boolean fast,
+public record SnapshotInfo(String scenario, String iri, String modellingAuthority, Instant timestamp, String version,
+                           int rank, Kind kind, String parent, EdgeKind edge, int depth, boolean fast,
                            Map<CgmesSubset, String> state, List<String> members,
                            Map<CgmesSubset, String> fullModels, String timestampRoot, ZonedDateTime created,
                            String description) {
@@ -86,6 +88,7 @@ public record SnapshotInfo(String scenario, String iri, String modellingAuthorit
         Objects.requireNonNull(iri);
         Objects.requireNonNull(modellingAuthority);
         Objects.requireNonNull(timestamp);
+        Objects.requireNonNull(version);
         state = Map.copyOf(state);
         members = List.copyOf(members);
         fullModels = Map.copyOf(fullModels);

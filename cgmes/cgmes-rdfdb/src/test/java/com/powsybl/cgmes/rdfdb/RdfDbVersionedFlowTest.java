@@ -73,7 +73,7 @@ class RdfDbVersionedFlowTest {
     }
 
     private static Network load(RdfDbConnection db, String scenario, Integer version) {
-        return RdfDbNetworkLoader.load(db, SnapshotRef.of(scenario, BE, null, version), null, params(),
+        return RdfDbNetworkLoader.load(db, SnapshotRef.of(scenario, BE, null, version == null ? null : version.toString()), null, params(),
                 ReportNode.NO_OP);
     }
 
@@ -94,7 +94,7 @@ class RdfDbVersionedFlowTest {
             Networks.assertSameNetwork(fromFiles, fromDb, IDENTITY);
             RdfDbProvenance provenance = fromDb.getExtension(RdfDbProvenance.class);
             assertThat(provenance.scenario()).isEqualTo(S);
-            assertThat(provenance.snapshot()).contains(RdfDbNames.snapshot(S, BE, Instant.parse("2014-06-01T10:30:00Z"), 1));
+            assertThat(provenance.snapshot()).contains(RdfDbNames.snapshot(S, BE, Instant.parse("2014-06-01T10:30:00Z"), "1"));
             assertThat(db.snapshots(S).snapshotOf(fromDb)).isPresent();
             assertThat(db.snapshots(OTHER).snapshotOf(fromDb)).isEmpty();
         }
@@ -204,7 +204,7 @@ class RdfDbVersionedFlowTest {
             Network latest = load(db, S, null);
 
             Networks.assertSameNetworkIgnoringStateVariables(sender, latest, IDENTITY, Set.of(Changes.LOAD_ID));
-            assertThat(db.snapshots(S).snapshotOf(latest).orElseThrow().version()).isEqualTo(2);
+            assertThat(db.snapshots(S).snapshotOf(latest).orElseThrow().version()).isEqualTo("2");
         }
     }
 
@@ -219,7 +219,7 @@ class RdfDbVersionedFlowTest {
             RdfDbExport.SnapshotResult exported =
                     Changes.export(sender, db, ref(S, 2), n -> Changes.moveLoad(n, 12.0));
 
-            assertThat(exported.snapshot().version()).isEqualTo(2);
+            assertThat(exported.snapshot().version()).isEqualTo("2");
             // Derived from pdb:fastPredicatesOnly of the member, and never written onto the snapshot node: the
             // retired pdb:fast term appears nowhere in the metadata graph of a scenario this release wrote
             assertThat(exported.snapshot().fast()).isTrue();
@@ -232,7 +232,7 @@ class RdfDbVersionedFlowTest {
             assertThat(result.network()).isSameAs(receiver);
             assertThat(result.statistics().diffCount()).isEqualTo(1);
             Networks.assertSameNetworkIgnoringStateVariables(sender, receiver, IDENTITY, Set.of(Changes.LOAD_ID));
-            assertThat(db.snapshots(S).snapshotOf(receiver).orElseThrow().version()).isEqualTo(2);
+            assertThat(db.snapshots(S).snapshotOf(receiver).orElseThrow().version()).isEqualTo("2");
             assertThat(receiver.getExtension(RdfDbProvenance.class).snapshot())
                     .contains(exported.snapshot().iri());
         }
@@ -261,7 +261,7 @@ class RdfDbVersionedFlowTest {
 
             assertThat(result.route()).isEqualTo(UpdateResult.Route.DIFF_APPLIED);
             Networks.assertSameNetworkIgnoringStateVariables(base, sender, IDENTITY, Set.of(Changes.LOAD_ID));
-            assertThat(db.snapshots(S).snapshotOf(sender).orElseThrow().version()).isEqualTo(1);
+            assertThat(db.snapshots(S).snapshotOf(sender).orElseThrow().version()).isEqualTo("1");
         }
     }
 
@@ -315,7 +315,7 @@ class RdfDbVersionedFlowTest {
 
             Network after = load(db, S, 6);
             Networks.assertSameNetwork(before, after, IDENTITY);
-            assertThat(db.snapshots(S).snapshotOf(after).orElseThrow().version()).isEqualTo(6);
+            assertThat(db.snapshots(S).snapshotOf(after).orElseThrow().version()).isEqualTo("6");
             // The materialised graph carries the identity of the state it holds, so a client that never reads the
             // metadata graph still sees the right model
             String materialisedGraph = afterPlan.startModel().get(SSH).graph();
@@ -344,14 +344,14 @@ class RdfDbVersionedFlowTest {
             Network f1 = RdfDbNetworkLoader.load(db, S, null, params(), ReportNode.NO_OP);
             Networks.assertSameNetworkIgnoringStateVariables(load(db, S, 3), f1, IDENTITY,
                     Set.of(Changes.LOAD_ID));
-            assertThat(db.snapshots(S).snapshotOf(f1).orElseThrow().version()).isEqualTo(3);
+            assertThat(db.snapshots(S).snapshotOf(f1).orElseThrow().version()).isEqualTo("3");
 
             // ...and so is "the head" of an update
             Network receiver = load(db, S, 1);
             UpdateResult result = RdfDbNetworkLoader.update(receiver, db, S, DiffTarget.head(),
                     new RdfDbUpdateOptions(), params(), ReportNode.NO_OP);
             assertThat(result.route()).isEqualTo(UpdateResult.Route.DIFF_APPLIED);
-            assertThat(db.snapshots(S).snapshotOf(receiver).orElseThrow().version()).isEqualTo(3);
+            assertThat(db.snapshots(S).snapshotOf(receiver).orElseThrow().version()).isEqualTo("3");
         }
     }
 
@@ -370,10 +370,10 @@ class RdfDbVersionedFlowTest {
             assertThat(db.catalog(S).head(SSH).orElseThrow().id()).isEqualTo(headBefore);
             assertThat(db.catalog(S).full(SSH)).isPresent();
             assertThat(db.catalog(S).models().stream().map(StoredModel::id))
-                    .doesNotContain(RdfDbNames.materialized(S, BE, Instant.parse("2014-06-01T10:30:00Z"), 3, "SSH"));
+                    .doesNotContain(RdfDbNames.materialized(S, BE, Instant.parse("2014-06-01T10:30:00Z"), "3", "SSH"));
             // ...and the pre-versioning entry points still work
             Network f1 = RdfDbNetworkLoader.load(db, S, null, params(), ReportNode.NO_OP);
-            assertThat(db.snapshots(S).snapshotOf(f1).orElseThrow().version()).isEqualTo(3);
+            assertThat(db.snapshots(S).snapshotOf(f1).orElseThrow().version()).isEqualTo("3");
         }
     }
 
@@ -406,7 +406,7 @@ class RdfDbVersionedFlowTest {
             Networks.assertSameNetworkIgnoringStateVariables(there, result.network(), IDENTITY,
                     Set.of(Changes.LOAD_ID));
             // The original is untouched and still updatable inside its own scenario
-            assertThat(db.snapshots(S).snapshotOf(here).orElseThrow().version()).isEqualTo(1);
+            assertThat(db.snapshots(S).snapshotOf(here).orElseThrow().version()).isEqualTo("1");
         }
     }
 
@@ -496,7 +496,7 @@ class RdfDbVersionedFlowTest {
 
             Network receiver = load(db, S, 1);
             UpdateResult result = RdfDbNetworkLoader.update(receiver, db,
-                    SnapshotRef.of(S, BE, OffsetDateTime.parse("2014-06-01T12:30:00+02:00").toInstant(), 2),
+                    SnapshotRef.of(S, BE, OffsetDateTime.parse("2014-06-01T12:30:00+02:00").toInstant(), "2"),
                     new RdfDbUpdateOptions(), params(), ReportNode.NO_OP);
 
             assertThat(result.route()).isEqualTo(UpdateResult.Route.DIFF_APPLIED);

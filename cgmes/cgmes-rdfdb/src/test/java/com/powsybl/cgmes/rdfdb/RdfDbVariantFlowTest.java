@@ -70,13 +70,13 @@ class RdfDbVariantFlowTest {
     }
 
     private static Network load(RdfDbConnection db, String scenario, Integer version, Instant timestamp) {
-        return RdfDbNetworkLoader.load(db, SnapshotRef.of(scenario, BE, timestamp, version), null, params(),
+        return RdfDbNetworkLoader.load(db, SnapshotRef.of(scenario, BE, timestamp, version == null ? null : version.toString()), null, params(),
                 ReportNode.NO_OP);
     }
 
     private static UpdateResult bring(Network network, RdfDbConnection db, Integer version, Instant timestamp,
                                       String variant) {
-        return RdfDbNetworkLoader.update(network, db, SnapshotRef.of(S, BE, timestamp, version),
+        return RdfDbNetworkLoader.update(network, db, SnapshotRef.of(S, BE, timestamp, version == null ? null : version.toString()),
                 new RdfDbUpdateOptions().setTargetVariant(variant), params(), ReportNode.NO_OP);
     }
 
@@ -373,7 +373,7 @@ class RdfDbVariantFlowTest {
 
             RdfDbProvenance provenance = network.getExtension(RdfDbProvenance.class);
             assertThat(provenance.variantBinding(VariantManagerConstants.INITIAL_VARIANT_ID).orElseThrow()
-                    .version()).isEqualTo(2);
+                    .version()).isEqualTo("2");
             assertThat(provenance.variantBindings()).doesNotContainKey(
                     VariantManagerConstants.INITIAL_VARIANT_ID);
 
@@ -457,14 +457,14 @@ class RdfDbVariantFlowTest {
             assertThat(bring(network, db, 2, null, "A").route())
                     .isEqualTo(UpdateResult.Route.DIFF_APPLIED);
             VariantBinding a = network.getExtension(RdfDbProvenance.class).variantBinding("A").orElseThrow();
-            assertThat(a.version()).isEqualTo(2);
+            assertThat(a.version()).isEqualTo("2");
             assertThat(a.timestamp()).isEqualTo(BASE_TIMESTAMP);
 
             // both left open: the newest version of the base timestamp
             assertThat(bring(network, db, null, null, "B").route())
                     .isEqualTo(UpdateResult.Route.DIFF_APPLIED);
             VariantBinding b = network.getExtension(RdfDbProvenance.class).variantBinding("B").orElseThrow();
-            assertThat(b.version()).isEqualTo(3);
+            assertThat(b.version()).isEqualTo("3");
             assertThat(b.timestamp()).isEqualTo(BASE_TIMESTAMP);
 
             // ... which is exactly what the export needs to find the timestamp to write into. B is at the head
@@ -475,7 +475,7 @@ class RdfDbVariantFlowTest {
             RdfDbExport.SnapshotResult written = RdfDbExport.exportVariant(network, events, db, "B", null,
                     new CgmesDiffExport.ExportOptions(), ReportNode.NO_OP);
             assertThat(written.snapshot().timestamp()).isEqualTo(BASE_TIMESTAMP);
-            assertThat(written.snapshot().version()).isEqualTo(4);
+            assertThat(written.snapshot().version()).isEqualTo("4");
         }
     }
 
@@ -608,7 +608,7 @@ class RdfDbVariantFlowTest {
             // A clone the user made is bound to the same snapshot, and can be updated from there
             network.getVariantManager().cloneVariant("A", "A-copy");
             assertThat(network.getExtension(RdfDbProvenance.class).variantBinding("A-copy").orElseThrow()
-                    .version()).isEqualTo(2);
+                    .version()).isEqualTo("2");
             assertThat(bring(network, db, 3, null, "A-copy").route())
                     .isEqualTo(UpdateResult.Route.DIFF_APPLIED);
 
@@ -762,9 +762,9 @@ class RdfDbVariantFlowTest {
             assertThat(result.route()).isEqualTo(UpdateResult.Route.DIFF_APPLIED);
             RdfDbProvenance provenance = network.getExtension(RdfDbProvenance.class);
             assertThat(provenance.scenario()).isEqualTo(S);
-            assertThat(provenance.variantBinding("A").orElseThrow().version()).isEqualTo(2);
+            assertThat(provenance.variantBinding("A").orElseThrow().version()).isEqualTo("2");
             assertThat(provenance.variantBinding(VariantManagerConstants.INITIAL_VARIANT_ID).orElseThrow()
-                    .version()).isEqualTo(1);
+                    .version()).isEqualTo("1");
         }
     }
 
@@ -806,7 +806,7 @@ class RdfDbVariantFlowTest {
             Network network = load(db, S, 1, null);
             Map<String, String> before = xiidmPerVariant(network);
 
-            UpdateResult result = RdfDbNetworkLoader.update(network, db, SnapshotRef.of(S, NL, BASE_TIMESTAMP, 1),
+            UpdateResult result = RdfDbNetworkLoader.update(network, db, SnapshotRef.of(S, NL, BASE_TIMESTAMP, "1"),
                     new RdfDbUpdateOptions().setTargetVariant("nl"), params(), ReportNode.NO_OP);
 
             assertThat(result.route()).isEqualTo(UpdateResult.Route.VARIANT_REFUSED);

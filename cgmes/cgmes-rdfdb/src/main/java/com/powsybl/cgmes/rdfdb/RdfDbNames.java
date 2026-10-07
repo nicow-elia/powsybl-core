@@ -148,20 +148,35 @@ public final class RdfDbNames {
     }
 
     /**
+     * The node of one registered version name of a scenario, one per name.
+     *
+     * <p>{@code <base>/<scenario>/version/<name>}, the name percent-encoded. It carries the name and its rank; the
+     * snapshots that carry the name are ranked through it.</p>
+     *
+     * @param scenario the scenario
+     * @param name     the version name
+     * @return the node IRI
+     */
+    public static String versionNode(String scenario, String name) {
+        return BASE + safe(scenario) + "/version/" + ScenarioGraphNames.encode(name);
+    }
+
+    /**
      * The IRI of a snapshot, which is what {@code (scenario, modellingAuthority, timestamp, version)} addresses.
      *
-     * <p>{@code <base>/<scenario>/<authority>/snapshot/<ISO instant>/<version>}, every segment percent-encoded: a
-     * modelling authority set is a URI and holds {@code :} and {@code /}.</p>
+     * <p>{@code <base>/<scenario>/<authority>/snapshot/<ISO instant>/<version name>}, every segment
+     * percent-encoded: a modelling authority set is a URI and holds {@code :} and {@code /}, and a version name may
+     * hold them too. The IRI is minted once, which is why a name that snapshots carry cannot be renamed.</p>
      *
      * @param scenario           the scenario
      * @param modellingAuthority the modelling authority set
      * @param timestamp          the moment
-     * @param version            the version
+     * @param version            the version name
      * @return the snapshot IRI
      */
-    public static String snapshot(String scenario, String modellingAuthority, Instant timestamp, int version) {
+    public static String snapshot(String scenario, String modellingAuthority, Instant timestamp, String version) {
         return BASE + safe(scenario) + "/" + ScenarioGraphNames.encode(modellingAuthority) + SNAPSHOT_SEGMENT
-                + ScenarioGraphNames.encode(timestamp.toString()) + "/" + version;
+                + ScenarioGraphNames.encode(timestamp.toString()) + "/" + ScenarioGraphNames.encode(version);
     }
 
     /**
@@ -184,14 +199,15 @@ public final class RdfDbNames {
      * @param scenario           the scenario
      * @param modellingAuthority the modelling authority set of the snapshot
      * @param timestamp          the timestamp of the snapshot
-     * @param version            the version of the snapshot
+     * @param version            the version name of the snapshot
      * @param subset             the CGMES profile identifier, for instance {@code SSH}
      * @return the node IRI; its graph is this IRI plus {@code /graph}
      */
-    public static String materialized(String scenario, String modellingAuthority, Instant timestamp, int version,
+    public static String materialized(String scenario, String modellingAuthority, Instant timestamp, String version,
                                       String subset) {
         return BASE + safe(scenario) + "/materialized/" + ScenarioGraphNames.encode(modellingAuthority) + "/"
-                + ScenarioGraphNames.encode(timestamp.toString()) + "/" + version + "/" + subset;
+                + ScenarioGraphNames.encode(timestamp.toString()) + "/" + ScenarioGraphNames.encode(version) + "/"
+                + subset;
     }
 
     /**
@@ -230,7 +246,7 @@ public final class RdfDbNames {
     /**
      * The address a snapshot IRI encodes.
      *
-     * <p>The inverse of {@link #snapshot(String, String, Instant, int)}. It exists because the identity a network
+     * <p>The inverse of {@link #snapshot(String, String, Instant, String)}. It exists because the identity a network
      * carries is the snapshot <em>IRI</em>, while what a user wants to see &mdash; and what a variant binding shows
      * &mdash; is the address: which authority, which moment, which version. Reading it off the IRI costs nothing
      * and asks no database.</p>
@@ -243,15 +259,15 @@ public final class RdfDbNames {
         if (scenario == null) {
             return null;
         }
-        // <scenario>/<authority>/snapshot/<timestamp>/<version>: four segments after the scenario's
+        // <scenario>/<authority>/snapshot/<timestamp>/<version name>: four segments after the scenario's
         String[] segments = snapshotIri.substring(scenarioPrefix(scenario).length()).split("/", -1);
         if (segments.length != 4 || !"snapshot".equals(segments[1])) {
             return null;
         }
         try {
             return new SnapshotRef(scenario, ScenarioGraphNames.decode(segments[0]),
-                    Instant.parse(ScenarioGraphNames.decode(segments[2])), Integer.valueOf(segments[3]));
-        } catch (DateTimeParseException | NumberFormatException e) {
+                    Instant.parse(ScenarioGraphNames.decode(segments[2])), ScenarioGraphNames.decode(segments[3]));
+        } catch (DateTimeParseException | NumberFormatException | RdfDbException e) {
             return null;
         }
     }
