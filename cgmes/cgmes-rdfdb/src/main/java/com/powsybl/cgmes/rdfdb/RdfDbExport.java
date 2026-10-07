@@ -198,6 +198,30 @@ public final class RdfDbExport {
     public static SnapshotResult export(Network network, Collection<NetworkEvent> events, RdfDbConnection db,
                                         SnapshotRef target, CgmesDiffExport.ExportOptions options,
                                         ReportNode reportNode) {
+        return export(network, events, db, target, null, options, reportNode);
+    }
+
+    /**
+     * Translate recorded changes and store them as a new snapshot; a new timestamp hangs off the given pin.
+     *
+     * @param network    the network the changes were recorded on
+     * @param events     the recorded changes
+     * @param db         the open connection
+     * @param target     the address the new snapshot gets, as for the form without a pin
+     * @param pin        the snapshot a new timestamp hangs off, of the same tree and stating what the changes
+     *                   supersede, or {@code null} for the deepest one that does (see
+     *                   {@link SnapshotCatalog#putDiff(com.powsybl.cgmes.model.diff.DifferenceModelSet, SnapshotRef,
+     *                   SnapshotRef, ReportNode)})
+     * @param options    the granularity, the header values and the unsupported change behaviour
+     * @param reportNode where the stored differences are reported
+     * @return what was exported, what was stored and the snapshot it became
+     * @throws RdfDbException         if the network belongs to another scenario, or the pin does not exist
+     * @throws RdfDbConflictException if the address is taken, the chain would fork, the timestamp exists and a pin
+     *                                is named, or the pin does not state what the changes supersede
+     */
+    public static SnapshotResult export(Network network, Collection<NetworkEvent> events, RdfDbConnection db,
+                                        SnapshotRef target, SnapshotRef pin, CgmesDiffExport.ExportOptions options,
+                                        ReportNode reportNode) {
         Objects.requireNonNull(network);
         Objects.requireNonNull(db);
         Objects.requireNonNull(target);
@@ -215,7 +239,8 @@ public final class RdfDbExport {
         // In variant mode every operation of this package is a variant operation: the difference describes the
         // working variant and supersedes the model that variant is at, not the primary's
         return inVariantOrClassic(network, options,
-                writeOptions -> writeSnapshot(network, events, db, catalog, effective, writeOptions, reportNode));
+                writeOptions -> writeSnapshot(network, events, db, catalog, effective, pin, writeOptions,
+                        reportNode));
     }
 
     /** The modelling authority of the snapshot a network is at, for an export whose address names none. */
@@ -232,11 +257,12 @@ public final class RdfDbExport {
     /** Translate the changes and store them as the given snapshot; the caller decides the variant context. */
     private static SnapshotResult writeSnapshot(Network network, Collection<NetworkEvent> events,
                                                 RdfDbConnection db, SnapshotCatalog catalog, SnapshotRef effective,
-                                                CgmesDiffExport.ExportOptions options, ReportNode reportNode) {
+                                                SnapshotRef pin, CgmesDiffExport.ExportOptions options,
+                                                ReportNode reportNode) {
         // The sender check reads the identity, so it belongs inside whatever variant context the caller set up
         NetworkIdentity.modelIds(network, DIFF_SUBSETS);
         CgmesDiffExport.Result exported = translate(network, events, effective.timestamp(), options);
-        return store(network, db, catalog, exported, effective, reportNode);
+        return store(network, db, catalog, exported, effective, pin, reportNode);
     }
 
     /**
@@ -254,9 +280,9 @@ public final class RdfDbExport {
 
     /** Store an already translated difference set as a snapshot, and advance the sender to it. */
     private static SnapshotResult store(Network network, RdfDbConnection db, SnapshotCatalog catalog,
-                                        CgmesDiffExport.Result exported, SnapshotRef effective,
+                                        CgmesDiffExport.Result exported, SnapshotRef effective, SnapshotRef pin,
                                         ReportNode reportNode) {
-        SnapshotInfo snapshot = catalog.putDiff(exported.differences(), effective,
+        SnapshotInfo snapshot = catalog.putDiff(exported.differences(), effective, pin,
                 reportNode == null ? ReportNode.NO_OP : reportNode);
 
         List<StoredModel> stored = db.catalog(effective.scenario())
@@ -358,7 +384,7 @@ public final class RdfDbExport {
 
         CgmesDiffExport.ExportOptions variantOptions = variantOptions(network, options, variantId);
         return VariantScope.call(network, provenance, variantId, () -> store(network, db, catalog,
-                translate(network, events, target.timestamp(), variantOptions), target, reportNode));
+                translate(network, events, target.timestamp(), variantOptions), target, null, reportNode));
     }
 
     /**
@@ -461,7 +487,7 @@ public final class RdfDbExport {
             SnapshotCatalog catalog = db.snapshots(one.target().scenario());
             try {
                 SnapshotResult stored = VariantScope.call(network, impl, variantId,
-                        () -> store(network, db, catalog, one.exported(), one.target(), reportNode));
+                        () -> store(network, db, catalog, one.exported(), one.target(), null, reportNode));
                 results.put(variantId, new VariantExport(variantId, stored, one.rejected()));
             } catch (RdfDbConflictException e) {
                 throw new RdfDbConflictException("writing the changes of variant '" + variantId + "' failed after"

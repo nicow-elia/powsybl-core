@@ -75,9 +75,24 @@ final class TimestampFixtures {
      * @return a data source holding the whole set
      */
     static ReadOnlyDataSource ssh(int loads, Instant instant, String suffix) {
+        return ssh(loads, 7.0, instant, suffix);
+    }
+
+    /**
+     * The base case with the active power of the first {@code loads} energy consumers moved by {@code shift},
+     * {@code shift + 1}, &hellip;: the fixture holds three, so a day of more than three distinct timestamps moves
+     * them by other amounts.
+     *
+     * @param loads   how many consumers the timestamp moves, at most three
+     * @param shift   how far the first one moves, never zero
+     * @param instant the scenario time the files claim
+     * @param suffix  what makes the model identifiers of this timestamp unique
+     * @return a data source holding the whole set
+     */
+    static ReadOnlyDataSource ssh(int loads, double shift, Instant instant, String suffix) {
         String ssh = read(SSH);
         ssh = rewriteHeader(ssh, "urn:uuid:ssh-" + suffix, instant);
-        ssh = scaleConsumers(ssh, loads);
+        ssh = scaleConsumers(ssh, loads, shift);
         MemDataSource source = new MemDataSource();
         put(source, SSH, ssh);
         put(source, EQ, read(EQ));
@@ -97,7 +112,7 @@ final class TimestampFixtures {
      * @return a data source holding the whole set
      */
     static ReadOnlyDataSource eqDrift(int loads, Instant instant, String suffix) {
-        String ssh = scaleConsumers(rewriteHeader(read(SSH), "urn:uuid:ssh-" + suffix, instant), loads);
+        String ssh = scaleConsumers(rewriteHeader(read(SSH), "urn:uuid:ssh-" + suffix, instant), loads, 7.0);
         String eq = rewriteHeader(read(EQ), "urn:uuid:eq-" + suffix, instant);
         eq = renameFirstLine(eq);
         MemDataSource source = new MemDataSource();
@@ -110,7 +125,7 @@ final class TimestampFixtures {
     /** The base case with a boundary that claims to be a different model. */
     static ReadOnlyDataSource changedBoundary(Instant instant, String suffix) {
         MemDataSource source = new MemDataSource();
-        put(source, SSH, scaleConsumers(rewriteHeader(read(SSH), "urn:uuid:ssh-" + suffix, instant), 1));
+        put(source, SSH, scaleConsumers(rewriteHeader(read(SSH), "urn:uuid:ssh-" + suffix, instant), 1, 7.0));
         put(source, EQ, read(EQ));
         UNCHANGED.stream().filter(name -> !EQ_BD.equals(name))
                 .forEach(name -> put(source, name, read(name)));
@@ -213,7 +228,7 @@ final class TimestampFixtures {
 
     // ------------------------------------------------------------------ the edits
 
-    private static String scaleConsumers(String ssh, int loads) {
+    private static String scaleConsumers(String ssh, int loads, double shift) {
         Matcher matcher = CONSUMER_P.matcher(ssh);
         StringBuilder out = new StringBuilder();
         int done = 0;
@@ -222,7 +237,7 @@ final class TimestampFixtures {
             if (done < loads) {
                 double value = Double.parseDouble(matcher.group(2));
                 // A value that is never the original one, and never zero: the difference has to be visible
-                replacement = matcher.group(1) + (value + 7.0 + done) + matcher.group(3);
+                replacement = matcher.group(1) + (value + shift + done) + matcher.group(3);
                 done++;
             }
             matcher.appendReplacement(out, Matcher.quoteReplacement(replacement));

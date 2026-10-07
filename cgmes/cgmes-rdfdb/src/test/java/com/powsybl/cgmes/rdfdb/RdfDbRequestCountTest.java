@@ -223,12 +223,24 @@ class RdfDbRequestCountTest {
 
         List<VariantRequest> timestamps = new java.util.ArrayList<>();
         timestamps.add(VariantRequest.of(ref(scenario, 1)));
+        int newTimestamp = 0;
         for (int i = 1; i < 8; i++) {
             Instant instant = Instant.parse(String.format("2014-06-01T%02d:00:00Z", 11 + i));
+            BenchMeters.FusekiMeter.Reading ingest = BenchMeters.FusekiMeter.mark();
             catalog.putAsDiff(TimestampFixtures.ssh(1 + i % 3, instant, "rq" + i), null,
                     ref(scenario, 1, instant), null, params(), ReportNode.NO_OP);
+            newTimestamp = since(ingest);
             timestamps.add(VariantRequest.of(ref(scenario, 1, instant)));
         }
+        // The head lookup, the default pin (the latest rollover), the parent's plan and models, the head lookup and
+        // the three of the sink inside putDiff, the read-back; the parent state itself comes out of the cache
+        assertAtMost("ingesting a new timestamp from files", newTimestamp, 9);
+
+        // A rollover is the checkpoint (here of one profile: the snapshot, its plan, copy and apply, the metadata,
+        // the read-back) plus the flag and its read-back
+        BenchMeters.FusekiMeter.Reading rollover = BenchMeters.FusekiMeter.mark();
+        catalog.rollover(ref(scenario, 1, Instant.parse("2014-06-01T18:00:00Z")));
+        assertAtMost("flagging a rollover of one profile", since(rollover), 8);
         Network sender = RdfDbNetworkLoader.load(db, ref(scenario, 1), null, params(),
                 ReportNode.NO_OP);
         RdfDbExport.export(sender, Changes.record(sender, n -> Changes.moveLoad(n, 4.0)), db,

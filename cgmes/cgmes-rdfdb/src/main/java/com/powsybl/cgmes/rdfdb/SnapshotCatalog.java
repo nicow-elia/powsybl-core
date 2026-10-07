@@ -73,9 +73,11 @@ import java.util.stream.Stream;
  * scenario every modelling authority owns <strong>one tree</strong> with exactly one root; another day is another
  * scenario, never a second root of the same authority. All trees of a scenario live in its one metadata graph and
  * share its boundary, so "every authority at this moment" &mdash; a CGM &mdash; is one query ({@link #assembly}).
- * Below a root the version chain of a timestamp is linear, and its versions are names that only grow in the order
- * of the scenario's {@link VersionRegistry}: a new version ranks above the head it is written on, and a read at a
- * version means the highest ranking one at or below it. The profiles a snapshot covers are not a key;
+ * Every other timestamp of a tree has a root of its own, <em>pinned</em> to another snapshot of the same tree
+ * &mdash; by default the latest {@linkplain #rollover rollover} at or before it &mdash; and below that root the
+ * version chain of a timestamp is linear, its versions names that only grow in the order of the scenario's
+ * {@link VersionRegistry}: a new version ranks above the head it is written on, and a read at a version means the
+ * highest ranking one at or below it. The profiles a snapshot covers are not a key;
  * they are what it holds ({@link SnapshotInfo#profiles()}) and what a caller projects on.</p>
  *
  * <h2>Nothing crosses a scenario</h2>
@@ -579,11 +581,11 @@ public final class SnapshotCatalog {
      * @param root               the IRI of the timestamp's root snapshot
      * @param head               the IRI of the newest version of the timestamp
      * @param versionCount       how many snapshots the timestamp holds
-     * @param pinnedBase         the IRI of the base-chain snapshot the root hangs off, {@code null} for the base
-     *                           timestamp
+     * @param pin                the IRI of the snapshot the timestamp's root hangs off, any snapshot of another
+     *                           timestamp of the tree; {@code null} for the base timestamp
      */
     public record TimestampInfo(String scenario, String modellingAuthority, Instant timestamp, String root,
-                                String head, int versionCount, String pinnedBase) {
+                                String head, int versionCount, String pin) {
     }
 
     /**
@@ -1001,6 +1003,34 @@ public final class SnapshotCatalog {
      * @return the new snapshot
      */
     public SnapshotInfo putDiff(DifferenceModelSet set, SnapshotRef target, ReportNode reportNode) {
+        return putDiff(set, target, null, reportNode);
+    }
+
+    /**
+     * Write a difference set as a new version on top of the head of its timestamp, or as the root of a new
+     * timestamp hanging off a pin.
+     *
+     * <p>A timestamp the tree does not hold yet gets a root of its own, linked by a {@code pdb:TimestampEdge} to
+     * its <em>pin</em>: any snapshot of the same tree, at another timestamp. Which one is not a guess: the caller
+     * names it, or it is the deepest snapshot of the tree whose state the differences say they supersede. Either
+     * way the pin must state what every difference supersedes, because the new timestamp is "the pin plus these
+     * differences". A timestamp the tree holds already grows another version on its head, and a pin is refused
+     * there: it is chosen once, when the timestamp is created.</p>
+     *
+     * @param set        the difference models
+     * @param target     the address the new snapshot gets, as for {@link #putDiff(DifferenceModelSet, SnapshotRef,
+     *                   ReportNode)}
+     * @param pin        the snapshot a new timestamp hangs off, of the same tree, or {@code null} for the deepest
+     *                   snapshot of the tree stating what the differences supersede
+     * @param reportNode where the write reports
+     * @return the new snapshot
+     * @throws RdfDbConflictException if a difference does not supersede the state of its profile at the pin or the
+     *                                head, if a pin is named for a timestamp that exists, or for any reason of the
+     *                                three-argument form
+     * @throws RdfDbException         if the pin does not exist or belongs to another tree
+     */
+    public SnapshotInfo putDiff(DifferenceModelSet set, SnapshotRef target, SnapshotRef pin,
+                                ReportNode reportNode) {
         Objects.requireNonNull(set);
         check(target);
         checkSchema();
@@ -1008,7 +1038,7 @@ public final class SnapshotCatalog {
         if (models.isEmpty()) {
             throw new RdfDbException("no difference to store as " + target + " of scenario '" + scenario + "'");
         }
-        return putDiff(models, Wholes.NONE, target, null, reportNode);
+        return putDiff(models, Wholes.NONE, target, pin == null ? null : require(pin), reportNode);
     }
 
     /**
@@ -1025,14 +1055,15 @@ public final class SnapshotCatalog {
     /**
      * Write differences, and the whole graphs of custom profiles, as a new snapshot.
      *
-     * @param models         the differences, possibly none when {@code wholes} names a profile
-     * @param wholes         the custom profiles stored whole, whose graphs were uploaded already
-     * @param target         the address
-     * @param fallbackParent the snapshot a new timestamp hangs off when no difference says which, or {@code null}
-     * @param reportNode     where the write reports
+     * @param models     the differences, possibly none when {@code wholes} names a profile and a pin is given
+     * @param wholes     the custom profiles stored whole, whose graphs were uploaded already
+     * @param target     the address
+     * @param pin        the snapshot a new timestamp hangs off, or {@code null} for the deepest one stating what the
+     *                   differences supersede
+     * @param reportNode where the write reports
      */
     private SnapshotInfo putDiff(List<DifferenceModel> models, Wholes wholes, SnapshotRef target,
-                                 SnapshotInfo fallbackParent, ReportNode reportNode) {
+                                 SnapshotInfo pin, ReportNode reportNode) {
         check(target);
         checkSchema();
         Map<String, String> stated = Profiles.map();
@@ -1042,8 +1073,8 @@ public final class SnapshotCatalog {
         String authority = authorityOf(stated, target.modellingAuthority(), this::modellingAuthorities,
                 "the difference models");
         // One request: an open timestamp is the base one, resolved inside the head lookup. A timestamp this tree
-        // does not hold yet becomes a new timestamp root hanging off the base chain; a timestamp it already holds
-        // grows another version inside itself
+        // does not hold yet becomes a new timestamp root hanging off its pin; a timestamp it already holds grows
+        // another version inside itself
         Optional<SnapshotInfo> existingHead = head(authority, target.timestamp());
         if (existingHead.isEmpty() && target.timestamp() == null) {
             throw noRoot(authority);
@@ -1051,16 +1082,22 @@ public final class SnapshotCatalog {
         Instant timestamp = existingHead.map(SnapshotInfo::timestamp).orElse(target.timestamp());
         checkScenarioTimes(models, timestamp);
         boolean newTimestamp = existingHead.isEmpty();
+        if (!newTimestamp && pin != null) {
+            throw new RdfDbConflictException("timestamp " + timestamp + " of modelling authority '" + authority
+                    + "' of scenario '" + scenario + "' already exists, and a pin is chosen when a timestamp is"
+                    + " created: a new version of it grows on its head " + existingHead.get().ref()
+                    + ", so write it without a pin");
+        }
         SnapshotInfo parent;
         if (!newTimestamp) {
             parent = existingHead.get();
+            if (target.timestamp() != null) {
+                checkNotASecondRoot(models, parent, authority, timestamp);
+            }
         } else {
-            parent = models.isEmpty() && fallbackParent != null ? fallbackParent : pin(models, authority, timestamp);
+            parent = pin != null ? checkPin(pin, authority, timestamp) : defaultPin(models, authority, timestamp);
         }
-        if (!newTimestamp && target.timestamp() != null && !models.isEmpty()) {
-            checkNotASecondRoot(models, parent, authority, timestamp);
-        }
-        checkSupersedes(models, parent);
+        checkSupersedes(models, parent, newTimestamp ? "the pin" : "the head");
 
         Map<String, String> state = Profiles.map(parent.state());
         Map<String, String> parentStates = Profiles.map();
@@ -1116,37 +1153,64 @@ public final class SnapshotCatalog {
     }
 
     /**
-     * The base-chain snapshot a new timestamp root hangs off.
+     * The snapshot a new timestamp root of a recorded change hangs off when the caller names none.
      *
-     * <p>A timestamp is "the base plus these differences", and which base is not a guess: it is the snapshot of the
-     * same modelling authority whose state the differences say they supersede. It has to be on the <em>base</em>
-     * chain, so a client sitting at 08:30 cannot write 08:45 as a child of it &mdash; that would make 08:45
-     * reachable only through 08:30 and turn the day into a line rather than a fan.</p>
+     * <p>A timestamp is "its pin plus these differences", and which pin is not a guess: it is the snapshot of the
+     * same tree whose state the differences say they supersede, the deepest one when several do (a snapshot that
+     * changed none of the superseded profiles states them as well as its parent).</p>
      */
-    private SnapshotInfo pin(List<DifferenceModel> models, String authority, Instant timestamp) {
-        Instant base = baseTimestamp(authority);
+    private SnapshotInfo defaultPin(List<DifferenceModel> models, String authority, Instant timestamp) {
         List<String> superseded = models.stream()
                 .filter(model -> model.header().supersedes().size() == 1)
                 .map(model -> model.header().supersedes().get(0))
                 .toList();
         if (superseded.isEmpty()) {
             throw new RdfDbConflictException("the difference models of the new timestamp " + timestamp
-                    + " of scenario '" + scenario + "' do not each supersede exactly one stored model, so the base"
-                    + " version they were made against cannot be identified");
+                    + " of scenario '" + scenario + "' do not each supersede exactly one stored model, so the"
+                    + " snapshot they were made against cannot be identified");
         }
         List<Map<String, Value>> rows = deepestByState(superseded, " ; pdb:modellingAuthority "
-                + SparqlText.str(authority) + " ; pdb:timestamp " + SparqlText.dateTime(base), 2);
+                + SparqlText.str(authority), 2);
         if (rows.isEmpty()) {
-            throw new RdfDbConflictException("timestamp roots derive from the base timestamp of modelling authority '"
-                    + authority + "' of scenario '" + scenario + "' (" + base + "), and no snapshot of it states"
-                    + " what these difference models supersede; update the network to the base head first");
+            throw new RdfDbConflictException("a new timestamp hangs off a snapshot of its own tree, and no snapshot"
+                    + " of modelling authority '" + authority + "' of scenario '" + scenario + "' states what the"
+                    + " difference models of " + timestamp + " supersede " + superseded + "; update the network to"
+                    + " a snapshot of the tree and re-record");
         }
-        if (rows.size() > 1) {
-            LOGGER.warn("Several base snapshots of '{}' in scenario '{}' state what the new timestamp {} supersedes;"
-                    + " the deepest is taken", authority, scenario, timestamp);
+        if (rows.size() > 1 && SnapshotRows.intOf(rows.get(0).get("d")) == SnapshotRows.intOf(rows.get(1).get("d"))) {
+            LOGGER.warn("Several snapshots of '{}' in scenario '{}' at depth {} state what the new timestamp {}"
+                    + " supersedes; the first is taken", authority, scenario, rows.get(0).get("d").stringValue(),
+                    timestamp);
         }
         return info(rows.get(0).get("s").stringValue()).orElseThrow(() -> new RdfDbException(
                 "scenario '" + scenario + "' lost the snapshot it was pinned to"));
+    }
+
+    /**
+     * The snapshot a new timestamp is ingested against when the caller names none: the latest rollover of the tree
+     * at or before it, deepest first at one timestamp, in one request.
+     *
+     * @return the rollover, or the root of the tree when it holds none (a tree whose root carries no flag)
+     */
+    private SnapshotInfo latestRollover(SnapshotInfo root, Instant timestamp) {
+        return snapshotsWhere("{ SELECT ?s WHERE { ?s pdb:rollover true ; pdb:modellingAuthority "
+                + SparqlText.str(root.modellingAuthority()) + " ; pdb:timestamp ?t ; pdb:depth ?d FILTER(?t <= "
+                + SparqlText.dateTime(timestamp) + ") } ORDER BY DESC(?t) DESC(?d) LIMIT 1 } ", "").values().stream()
+                .findFirst().orElse(root);
+    }
+
+    /** A pin the caller named belongs to the tree and to another timestamp. */
+    private SnapshotInfo checkPin(SnapshotInfo pin, String authority, Instant timestamp) {
+        if (!pin.modellingAuthority().equals(authority)) {
+            throw new RdfDbException("the pin " + pin.ref() + " is a snapshot of modelling authority '"
+                    + pin.modellingAuthority() + "', and a new timestamp of '" + authority + "' hangs off a snapshot"
+                    + " of its own tree");
+        }
+        if (pin.timestamp().equals(timestamp)) {
+            throw new RdfDbException("the pin " + pin.ref() + " is at the timestamp " + timestamp + " it would be"
+                    + " the pin of; a timestamp hangs off another one");
+        }
+        return pin;
     }
 
     /**
@@ -1243,6 +1307,35 @@ public final class SnapshotCatalog {
      */
     public SnapshotInfo putAsDiff(ReadOnlyDataSource ds, ReadOnlyDataSource boundary, SnapshotRef target,
                                   Set<String> profiles, Properties importParams, ReportNode rn) {
+        return putAsDiff(ds, boundary, target, profiles, null, importParams, rn);
+    }
+
+    /**
+     * Write the CGMES export of one timestamp as a difference against the snapshot it is pinned to.
+     *
+     * <p>As {@link #putAsDiff(ReadOnlyDataSource, ReadOnlyDataSource, SnapshotRef, Set, Properties, ReportNode)},
+     * with the snapshot a <em>new</em> timestamp is compared against and hangs off named: any snapshot of another
+     * timestamp of the same tree. Without one it is the latest {@linkplain #rollover rollover} of the tree at or
+     * before the timestamp &mdash; the root until a later snapshot is flagged &mdash; so that a day is stored as
+     * the change since its last rollover rather than since the morning. A timestamp the tree holds already grows
+     * on its head, and a pin is refused there.</p>
+     *
+     * @param ds           the data source holding the instance files of that timestamp
+     * @param boundary     the data source holding the boundary files, or {@code null}
+     * @param target       the address the new snapshot gets
+     * @param profiles     the profiles to compare, or {@code null} or empty for {@code EQ} and {@code SSH}
+     * @param pin          the snapshot a new timestamp is compared against and hangs off, or {@code null} for the
+     *                     latest rollover at or before it
+     * @param importParams the CGMES import parameters
+     * @param rn           where the ingestion reports
+     * @return the new snapshot
+     * @throws RdfDbConflictException if the boundary changed, if a pin is named for a timestamp that exists, or if
+     *                                the write is refused
+     * @throws RdfDbException         if the scenario has no root, if the pin does not exist or belongs to another
+     *                                tree, or if nothing changed
+     */
+    public SnapshotInfo putAsDiff(ReadOnlyDataSource ds, ReadOnlyDataSource boundary, SnapshotRef target,
+                                  Set<String> profiles, SnapshotRef pin, Properties importParams, ReportNode rn) {
         check(target);
         Objects.requireNonNull(ds);
         ReportNode report = rn == null ? ReportNode.NO_OP : rn;
@@ -1258,8 +1351,16 @@ public final class SnapshotCatalog {
                         Set.of())).values()), null, this::modellingAuthorities, "the instance files");
         SnapshotInfo root = root(authority).orElseThrow(() -> noRoot(authority));
         Instant timestamp = target.timestamp() == null ? root.timestamp() : target.timestamp();
-        SnapshotInfo parent = head(authority, timestamp)
-                .orElseGet(() -> head(authority, root.timestamp()).orElse(root));
+        // An existing timestamp grows on its head; a new one is compared against its pin, which it then hangs off
+        Optional<SnapshotInfo> head = head(authority, timestamp);
+        if (head.isPresent() && pin != null) {
+            throw new RdfDbConflictException("timestamp " + timestamp + " of modelling authority '" + authority
+                    + "' of scenario '" + scenario + "' already exists, and a pin is chosen when a timestamp is"
+                    + " created: a new version of it grows on its head " + head.get().ref() + ", so ingest it"
+                    + " without a pin");
+        }
+        SnapshotInfo parent = head.orElseGet(() -> pin == null ? latestRollover(root, timestamp)
+                : checkPin(require(pin), authority, timestamp));
 
         // Before the files: which state each profile is compared against decides which of them has to be read in
         // full at all, and asking costs two requests against a parse of a whole export
@@ -1341,7 +1442,7 @@ public final class SnapshotCatalog {
             Wholes wholes = wholeFiles.isEmpty() ? Wholes.NONE
                     : uploadWholes(ds, parsed, headers, wholeFiles, uploaded);
             written = putDiff(models, wholes, SnapshotRef.of(scenario, authority, timestamp, target.version()),
-                    parent, report);
+                    head.isPresent() ? null : parent, report);
         } finally {
             if (written == null) {
                 // Unreferenced graphs are invisible to every reader; dropping them keeps a refusal traceless
@@ -1553,22 +1654,23 @@ public final class SnapshotCatalog {
      * A writer that believes it is creating a timestamp the tree already holds.
      *
      * <p>It is told what actually happened rather than being handed the generic "supersedes the wrong model"
-     * message: what its differences supersede is the state of the <em>base</em> chain, which is what a timestamp
-     * root supersedes, so it is not a stale version writer but the loser of a race for the root.</p>
+     * message: what its differences supersede is the state of the timestamp's <em>pin</em>, which is what a
+     * timestamp root supersedes, so it is not a stale version writer but the loser of a race for the root. Asked
+     * only when the differences do not supersede the head, so the ordinary write costs no request here.</p>
      */
     private void checkNotASecondRoot(List<DifferenceModel> models, SnapshotInfo head, String authority,
                                      Instant timestamp) {
-        SnapshotInfo root = root(authority).orElse(null);
-        if (root == null || root.iri().equals(head.iri()) || timestamp.equals(root.timestamp())) {
+        if (models.isEmpty() || supersedes(models, head)) {
+            return;
+        }
+        SnapshotInfo timestampRoot = head.iri().equals(head.timestampRoot()) ? head
+                : info(head.timestampRoot()).orElse(null);
+        if (timestampRoot == null || timestampRoot.parent() == null) {
             // The base timestamp has no root of its own to race for: its root is the tree's
             return;
         }
-        boolean againstTheBase = models.stream().allMatch(model -> {
-            List<String> supersedes = model.header().supersedes();
-            return supersedes.size() == 1
-                    && supersedes.get(0).equals(root.state().get(Profiles.of(model.header().subset())));
-        });
-        if (againstTheBase) {
+        Optional<SnapshotInfo> pin = info(timestampRoot.parent());
+        if (pin.isPresent() && supersedes(models, pin.get())) {
             throw new RdfDbConflictException("timestamp " + timestamp + " of modelling authority '" + authority
                     + "' of scenario '" + scenario + "' already has a root (version " + head.version() + "); a new"
                     + " version of it must supersede its head, so update the network to " + head.ref()
@@ -1576,7 +1678,14 @@ public final class SnapshotCatalog {
         }
     }
 
-    private void checkSupersedes(List<DifferenceModel> models, SnapshotInfo parent) {
+    /** Whether every difference supersedes exactly the state of its profile at a snapshot. */
+    private static boolean supersedes(List<DifferenceModel> models, SnapshotInfo snapshot) {
+        return models.stream().allMatch(model -> model.header().supersedes()
+                .equals(List.of(Objects.requireNonNullElse(
+                        snapshot.state().get(Profiles.of(model.header().subset())), ""))));
+    }
+
+    private void checkSupersedes(List<DifferenceModel> models, SnapshotInfo parent, String what) {
         for (DifferenceModel model : models) {
             String subset = Profiles.of(model.header().subset());
             List<String> supersedes = model.header().supersedes();
@@ -1592,8 +1701,8 @@ public final class SnapshotCatalog {
                     }
                 }
                 throw new RdfDbConflictException("difference model of subset " + subset
-                        + " supersedes " + found + " but the head " + parent.ref() + " is at " + expected
-                        + ": update the network to the head and re-record" + elsewhere);
+                        + " supersedes " + found + " but " + what + " " + parent.ref() + " is at " + expected
+                        + ": update the network to " + what + " and re-record" + elsewhere);
             }
         }
     }
@@ -1804,7 +1913,7 @@ public final class SnapshotCatalog {
                 throw new RdfDbException("snapshot " + info + " of scenario '" + scenario + "' has a version not"
                         + " ranking above its parent " + parent + "'s");
             }
-            verifyTimestampRoot(info, parent, byIri, roots.get(info.modellingAuthority()));
+            verifyTimestampRoot(info, parent, byIri);
             verifyState(info, parent);
         }
     }
@@ -1823,21 +1932,24 @@ public final class SnapshotCatalog {
     }
 
     /**
-     * A timestamp root derives from the base chain of its own tree; every other snapshot belongs to its parent's
-     * timestamp.
+     * A timestamp root hangs off a snapshot of another timestamp of its own tree, its pin; every other snapshot
+     * belongs to its parent's timestamp.
      */
-    private void verifyTimestampRoot(SnapshotInfo info, SnapshotInfo parent, Map<String, SnapshotInfo> byIri,
-                                     SnapshotInfo root) {
+    private void verifyTimestampRoot(SnapshotInfo info, SnapshotInfo parent, Map<String, SnapshotInfo> byIri) {
         if (info.edge() == SnapshotInfo.EdgeKind.TIMESTAMP) {
             if (!info.iri().equals(info.timestampRoot())) {
                 throw new RdfDbException("the timestamp root " + info + " of scenario '" + scenario + "' names "
                         + info.timestampRoot() + " as its own root");
             }
-            if (root == null || !parent.timestamp().equals(root.timestamp())) {
+            if (parent.timestamp().equals(info.timestamp())) {
                 throw new RdfDbException("the timestamp root " + info + " of scenario '" + scenario + "' hangs off "
-                        + parent + ", which is not on the base chain of its tree");
+                        + parent + ", which is at its own timestamp: a pin is a snapshot of another timestamp");
             }
             return;
+        }
+        if (!info.timestamp().equals(parent.timestamp())) {
+            throw new RdfDbException("snapshot " + info + " of scenario '" + scenario + "' is a version of "
+                    + parent + ", which is at another timestamp");
         }
         if (!info.timestampRoot().equals(parent.timestampRoot())) {
             throw new RdfDbException("snapshot " + info + " of scenario '" + scenario + "' names the timestamp root "
