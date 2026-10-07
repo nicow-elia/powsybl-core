@@ -21,6 +21,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static com.powsybl.cgmes.rdfdb.Backends.BASE;
 import static com.powsybl.cgmes.rdfdb.Backends.BE;
@@ -66,6 +67,10 @@ class SnapshotCatalogTest {
 
     private static SnapshotRef at(String scenario, Integer version) {
         return SnapshotRef.of(scenario, BE, null, version == null ? null : version.toString());
+    }
+
+    private static SnapshotRef at(String scenario, String version) {
+        return SnapshotRef.of(scenario, BE, null, version);
     }
 
     /** A difference of one profile superseding what the given snapshot states for it. */
@@ -398,25 +403,124 @@ class SnapshotCatalogTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
-    void versionsOnlyGrowAndMayLeaveGaps(String backend) {
+    void versionsRankAboveTheirParentAndNamesMayBeSparse(String backend) {
         try (RdfDbConnection db = open(backend)) {
+            db.snapshots(S).registry().create(List.of("10", "20", "30"), false);
             SnapshotInfo base = root(db, S, 10);
             SnapshotCatalog catalog = db.snapshots(S);
-            // No version: the head's plus one
-            SnapshotInfo v11 = catalog.putDiff(change(base, SSH, "urn:uuid:ssh-a", "12.0"), at(S, null));
-            assertThat(v11.version()).isEqualTo("11");
-            // A gap is allowed
-            SnapshotInfo v20 = catalog.putDiff(change(v11, SSH, "urn:uuid:ssh-b", "13.0"), at(S, 20));
-            assertThat(v20.version()).isEqualTo("20");
-            // Not greater than the head: refused, naming both numbers
-            assertThatThrownBy(() -> catalog.putDiff(change(v20, SSH, "urn:uuid:ssh-c", "14.0"), at(S, 20)))
+            // A name may skip registered ones
+            SnapshotInfo v30 = catalog.putDiff(change(base, SSH, "urn:uuid:ssh-a", "12.0"), at(S, 30));
+            assertThat(v30.version()).isEqualTo("30");
+            assertThat(v30.rank()).isEqualTo(30);
+            // Not above the head: refused, naming both ranks
+            assertThatThrownBy(() -> catalog.putDiff(change(v30, SSH, "urn:uuid:ssh-c", "14.0"), at(S, 20)))
                     .isInstanceOf(RdfDbConflictException.class)
-                    .hasMessageContaining("version 20 is not greater than the head version 20");
-            assertThatThrownBy(() -> catalog.putDiff(change(v20, SSH, "urn:uuid:ssh-c", "14.0"), at(S, 15)))
-                    .isInstanceOf(RdfDbConflictException.class)
-                    .hasMessageContaining("version 15 is not greater than the head version 20");
-            assertThat(catalog.versions(BE, null)).extracting(SnapshotInfo::version).containsExactly("10", "11", "20");
+                    .hasMessageContaining("version '20' (rank 20) is not above the parent '30' (rank 30) of (" + S
+                            + ", " + BE + ", " + BASE + "): a new version ranks above the head it is written on");
+            // Strict: a name that is not registered is refused, naming the registry
+            assertThatThrownBy(() -> catalog.putDiff(change(v30, SSH, "urn:uuid:ssh-c", "14.0"), at(S, 40)))
+                    .isInstanceOf(RdfDbException.class)
+                    .hasMessageContaining("version '40' is not registered in scenario '" + S + "' (registry: [10 10,"
+                            + " 20 20, 30 30]); register it or write into a permissive scenario");
+            catalog.registry().add("40");
+            SnapshotInfo v40 = catalog.putDiff(change(v30, SSH, "urn:uuid:ssh-c", "14.0"), at(S, 40));
+            assertThat(catalog.versions(BE, null)).extracting(SnapshotInfo::version).containsExactly("10", "30", "40");
+            assertThat(catalog.versions(BE, null)).extracting(SnapshotInfo::rank).containsExactly(10, 30, 40);
+            assertThat(catalog.find(SnapshotRef.latest(S, BE))).contains(v40);
             catalog.verify();
+
+            // Permissive, as a scenario whose root was written without a registry: unknown names are appended
+            SnapshotInfo other = root(db, OTHER, 1);
+            SnapshotCatalog permissive = db.snapshots(OTHER);
+            SnapshotInfo seven = permissive.putDiff(change(other, SSH, "urn:uuid:ssh-o7", "12.0"), at(OTHER, 7));
+            assertThat(seven.rank()).isEqualTo(20);
+            // No name and nothing registered above: the generated name is the next number the registry lacks
+            SnapshotInfo next = permissive.putDiff(change(seven, SSH, "urn:uuid:ssh-o3", "13.0"), SnapshotRef.latest(OTHER, BE));
+            assertThat(next.version()).isEqualTo("3");
+            assertThat(next.rank()).isEqualTo(30);
+            assertThat(permissive.registry().names()).containsExactly("1", "7", "3");
+            permissive.verify();
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void aNullVersionTakesTheNextRegisteredName(String backend) {
+        try (RdfDbConnection db = open(backend)) {
+            SnapshotCatalog catalog = db.snapshots(S);
+            catalog.registry().create(List.of("DA", "ID", "RT"), false);
+            SnapshotInfo da = catalog.putFull(microGridBe(), null, SnapshotRef.latest(S, BE), null, params(),
+                    ReportNode.NO_OP);
+            assertThat(da.version()).isEqualTo("DA");
+            assertThat(catalog.nextVersionName(SnapshotRef.latest(S, BE))).isEqualTo("ID");
+            SnapshotInfo id = catalog.putDiff(change(da, SSH, "urn:uuid:ssh-id", "12.0"), SnapshotRef.latest(S, BE));
+            assertThat(id.version()).isEqualTo("ID");
+            SnapshotInfo rt = catalog.putDiff(change(id, SSH, "urn:uuid:ssh-rt", "13.0"), SnapshotRef.latest(S, BE));
+            assertThat(rt.version()).isEqualTo("RT");
+            // Strict, and nothing ranks above RT
+            assertThatThrownBy(() -> catalog.nextVersionName(SnapshotRef.latest(S, BE)))
+                    .isInstanceOf(RdfDbException.class)
+                    .hasMessageContaining("no version of the registry ranks above 'RT' (rank 30) in scenario '" + S
+                            + "'");
+            assertThatThrownBy(() -> catalog.putDiff(change(rt, SSH, "urn:uuid:ssh-x", "14.0"),
+                    SnapshotRef.latest(S, BE))).isInstanceOf(RdfDbException.class)
+                    .hasMessageContaining("no version of the registry ranks above 'RT'");
+            // A new timestamp starts at the lowest registered name, whatever the snapshot it hangs off carries
+            SnapshotInfo noon = catalog.putDiff(change(rt, SSH, "urn:uuid:ssh-noon", "15.0"),
+                    SnapshotRef.latestAt(S, BE, NOON));
+            assertThat(noon.version()).isEqualTo("DA");
+            assertThat(noon.edge()).isEqualTo(SnapshotInfo.EdgeKind.TIMESTAMP);
+            catalog.verify();
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void anAutoAppendedNameWinsOrRetries(String backend) {
+        try (RdfDbConnection db = open(backend)) {
+            SnapshotInfo base = root(db, S, 1);
+            // Two writers with registries of their own, both at revision 1
+            SnapshotCatalog mine = new SnapshotCatalog(db, S);
+            SnapshotCatalog theirs = new SnapshotCatalog(db, S);
+            assertThat(mine.registry().rev()).isEqualTo(1);
+            assertThat(theirs.registry().rev()).isEqualTo(1);
+            AtomicBoolean once = new AtomicBoolean();
+            // Between my check and my append, they append a name of their own at the rank I am about to take
+            mine.registry().beforeRegistryWrite(() -> {
+                if (once.compareAndSet(false, true)) {
+                    theirs.putDiff(change(base, SSH, "urn:uuid:ssh-y", "11.0"), SnapshotRef.of(S, BE, NOON, "Y"));
+                }
+            });
+            SnapshotInfo x = mine.putDiff(change(base, SSH, "urn:uuid:ssh-x", "12.0"), at(S, "X"));
+
+            VersionRegistry registry = db.snapshots(S).registry();
+            registry.refresh();
+            assertThat(registry.ranks()).containsExactly(Map.entry("1", 10), Map.entry("Y", 20),
+                    Map.entry("X", 30));
+            assertThat(x.rank()).isEqualTo(30);
+            assertThat(db.snapshots(S).require(SnapshotRef.of(S, BE, NOON, "Y")).rank()).isEqualTo(20);
+            db.snapshots(S).verify();
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void aRegistryEditedElsewhereRefusesTheWriteOnceAndRetries(String backend) {
+        try (RdfDbConnection db = open(backend)) {
+            SnapshotInfo base = root(db, S, 1);
+            db.snapshots(S).registry().add("2");
+            SnapshotCatalog stale = new SnapshotCatalog(db, S);
+            assertThat(stale.registry().rev()).isEqualTo(2);
+            // Edited through another catalogue: the stale one does not know
+            db.snapshots(S).registry().add("3");
+            assertThat(stale.registry().rev()).isEqualTo(2);
+
+            SnapshotInfo two = stale.putDiff(change(base, SSH, "urn:uuid:ssh-2", "12.0"), at(S, 2));
+            // The write was refused on the revision, the registry re-read and the write retried
+            assertThat(stale.registry().rev()).isEqualTo(3);
+            assertThat(two.version()).isEqualTo("2");
+            assertThat(two.rank()).isEqualTo(20);
+            db.snapshots(S).verify();
         }
     }
 

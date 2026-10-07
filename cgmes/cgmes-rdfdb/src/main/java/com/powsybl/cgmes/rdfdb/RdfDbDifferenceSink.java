@@ -95,7 +95,7 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
      *
      * @param iri                the IRI of the snapshot node
      * @param modellingAuthority the modelling authority set of the snapshot's tree
-     * @param version            the version
+     * @param version            the version name, its rank and the registry revision both were checked against
      * @param timestamp          the moment
      * @param parent             the IRI of the parent snapshot
      * @param edge               {@code pdb:VersionEdge} or {@code pdb:TimestampEdge}
@@ -104,7 +104,8 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
      * @param timestampRoot      the root snapshot of the new snapshot's timestamp
      * @param parentStates       the parent states the write is guarded against, per profile
      */
-    record SnapshotWrite(String iri, String modellingAuthority, String version, Instant timestamp, String parent,
+    record SnapshotWrite(String iri, String modellingAuthority, VersionRegistry.Resolved version, Instant timestamp,
+                         String parent,
                          String edge, int depth, Map<CgmesSubset, String> state, String timestampRoot,
                          Map<CgmesSubset, String> parentStates) {
 
@@ -113,13 +114,13 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
          *
          * @param iri                the IRI of the snapshot node
          * @param modellingAuthority the modelling authority set of the tree
-         * @param version            the version
+         * @param version            the version the root took from the registry
          * @param timestamp          the moment
          * @param state              the full model per profile
          * @return the write
          */
-        static SnapshotWrite root(String iri, String modellingAuthority, String version, Instant timestamp,
-                                  Map<CgmesSubset, String> state) {
+        static SnapshotWrite root(String iri, String modellingAuthority, VersionRegistry.Resolved version,
+                                  Instant timestamp, Map<CgmesSubset, String> state) {
             return new SnapshotWrite(iri, modellingAuthority, version, timestamp, null, null, 0, state, iri,
                     Map.of());
         }
@@ -154,7 +155,7 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
                     .append(SparqlText.iri(RdfDbVocabulary.TIMESTAMP)).append(' ')
                     .append(SparqlText.dateTime(timestamp)).append(" ; ")
                     .append(SparqlText.iri(RdfDbVocabulary.VERSION)).append(' ')
-                    .append(SparqlText.str(version)).append(" ; ")
+                    .append(SparqlText.str(version.name())).append(" ; ")
                     .append(SparqlText.iri(RdfDbVocabulary.KIND)).append(' ')
                     .append(SparqlText.iri(parent == null ? RdfDbVocabulary.FULL : RdfDbVocabulary.DIFF))
                     .append(" ; ");
@@ -184,7 +185,7 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
      *
      * <p>It applies to an <em>unversioned</em> write and to nothing else. A scenario without snapshots has no other
      * way of keeping the chain of a profile linear, so the rule is the chain. A versioned write is guarded on the
-     * snapshot instead &mdash; one {@code pdb:VersionEdge} child per snapshot, a version greater than every other of
+     * snapshot instead &mdash; one {@code pdb:VersionEdge} child per snapshot, a version ranking above every other of
      * its {@code (modellingAuthority, timestamp)},
      * and the parent's {@code pdb:state} unchanged &mdash; and those guards subsume it.</p>
      *
@@ -595,9 +596,11 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
                 + " ; pdb:timestamp " + SparqlText.dateTime(s.timestamp());
         query.append(" FILTER NOT EXISTS { GRAPH ").append(meta).append(" { ").append(SparqlText.iri(s.iri()))
                 .append(" ?ps ?os } }")
-                // One snapshot per version of a moment of a tree
+                // Versions only grow: nothing at the same moment of the same tree ranks at this version or above. The
+                // rank is joined from the registry, never stored on a snapshot
                 .append(" FILTER NOT EXISTS { GRAPH ").append(meta).append(" { ?ys").append(moment)
-                .append(" ; pdb:version ").append(SparqlText.str(s.version())).append(" } }")
+                .append(" ; pdb:version ?yn . ?yv a pdb:Version ; pdb:name ?yn ; pdb:rank ?yr FILTER(?yr >= ")
+                .append(SparqlText.integer(s.version().rank())).append(") } }")
                 .append(" FILTER EXISTS { GRAPH ").append(meta).append(" { ").append(parent)
                 .append(" a pdb:Snapshot } }");
         if (RdfDbVocabulary.VERSION_EDGE.equals(s.edge())) {
@@ -610,6 +613,8 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
         }
         s.parentStates().values().forEach(id -> query.append(" FILTER EXISTS { GRAPH ").append(meta).append(" { ")
                 .append(parent).append(" pdb:state ").append(SparqlText.iri(id)).append(" } }"));
+        // The name is registered at the rank that was checked, and the registry did not change under the write
+        connection.snapshots(scenario).registry().appendWriteGuards(query, s.version());
     }
 
     private static void appendOptional(StringBuilder query, String predicate, ZonedDateTime value) {

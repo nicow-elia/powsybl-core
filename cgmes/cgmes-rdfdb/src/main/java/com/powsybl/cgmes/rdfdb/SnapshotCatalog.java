@@ -73,8 +73,9 @@ import java.util.stream.Stream;
  * scenario every modelling authority owns <strong>one tree</strong> with exactly one root; another day is another
  * scenario, never a second root of the same authority. All trees of a scenario live in its one metadata graph and
  * share its boundary, so "every authority at this moment" &mdash; a CGM &mdash; is one query ({@link #assembly}).
- * Below a root the version chain of a timestamp is linear and its versions are integers that only grow: a new
- * version is greater than the head it is written on, gaps allowed. The profiles a snapshot covers are not a key;
+ * Below a root the version chain of a timestamp is linear, and its versions are names that only grow in the order
+ * of the scenario's {@link VersionRegistry}: a new version ranks above the head it is written on, and a read at a
+ * version means the highest ranking one at or below it. The profiles a snapshot covers are not a key;
  * they are what it holds ({@link SnapshotInfo#profiles()}) and what a caller projects on.</p>
  *
  * <h2>Nothing crosses a scenario</h2>
@@ -94,6 +95,9 @@ import java.util.stream.Stream;
 public final class SnapshotCatalog {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(SnapshotCatalog.class);
+
+    /** How often a write retries after the version registry changed under it, before it gives up. */
+    private static final int REGISTRY_RETRIES = 3;
 
     /** The profiles whose stated modelling authority decides the authority of a snapshot that names none. */
     private static final Set<CgmesSubset> DECIDING_PROFILES =
@@ -570,15 +574,19 @@ public final class SnapshotCatalog {
     }
 
     /**
-     * The version name a new snapshot at an address gets when the caller names none.
+     * The version name a new snapshot at an address gets when the caller names none, without registering it: what
+     * {@link #putDiff} would take. The exports ask it before they write, to refuse two variants that would become
+     * the same snapshot while nothing is written.
      *
      * @param ref the address; its version is ignored
-     * @return the next version name
+     * @return the lowest registered name ranking above the head's, or the name a permissive registry would append
+     * @throws RdfDbException if the registry is strict and holds no such name
      */
     String nextVersionName(SnapshotRef ref) {
         readable(ref);
-        return find(SnapshotRef.latestAt(scenario, ref.modellingAuthority(), ref.timestamp()))
-                .map(head -> String.valueOf(Integer.parseInt(head.version()) + 1)).orElse("1");
+        Optional<SnapshotInfo> head = find(SnapshotRef.latestAt(scenario, ref.modellingAuthority(), ref.timestamp()));
+        return registry.nextName(head.map(SnapshotInfo::version).orElse(null),
+                head.map(h -> moment(h.modellingAuthority(), h.timestamp())).orElse(ref.toString()));
     }
 
     /**
@@ -633,7 +641,8 @@ public final class SnapshotCatalog {
      *                     one tree, that tree, and files agreeing on another authority are refused (a second tree is
      *                     opened by naming it); its timestamp may be {@code null}
      *                     and is then the {@code md:Model.scenarioTime} of the steady state file; its version may be
-     *                     {@code null} and is then 1
+     *                     {@code null} and is then the lowest registered name ({@code "1"} for the first root of a
+     *                     scenario without a registry, which creates a permissive one)
      * @param profiles     the profiles to store, or {@code null} or empty for every profile the files carry. The
      *                     boundary is always stored: it belongs to the scenario, not to the projection
      * @param importParams the CGMES import parameters, for the identifier options of the parser
@@ -665,7 +674,6 @@ public final class SnapshotCatalog {
                     roots::keySet, "the instance files");
             refuseSecondRoot(roots, authority);
             Instant timestamp = ref.timestamp() != null ? ref.timestamp() : scenarioTimeOf(headers);
-            String version = ref.version() == null ? "1" : ref.version();
             Set<String> shared = sharedBoundary(headers, roots, authority);
             Map<String, Header> own = new LinkedHashMap<>(headers);
             own.values().removeIf(header -> shared.contains(header.id));
@@ -674,23 +682,34 @@ public final class SnapshotCatalog {
             refuseKnownModels(own.values().stream().map(h -> h.id).toList());
 
             List<String> uploaded = new GraphUploader(connection, scenario).upload(repository, localToRemote);
-            String snapshotIri = RdfDbNames.snapshot(scenario, authority, timestamp, version);
             Map<CgmesSubset, String> state = new EnumMap<>(CgmesSubset.class);
             headers.forEach((context, header) -> state.put(GraphInfo.subsetOf(context), header.id));
+            Map<String, Long> counts = counts(repository, own.keySet());
             if (beforeRootWrite != null) {
                 beforeRootWrite.run();
             }
-            sparql().update(rootWrite(own, localToRemote, parsed, state, roots.isEmpty(),
-                    RdfDbDifferenceSink.SnapshotWrite.root(snapshotIri, authority, version, timestamp, state),
-                    counts(repository, own.keySet())));
-            // A new root is a new set of states, and the decoded parents of the old ones are of no use to anyone
-            connection.forgetParentIndexes(scenario);
-            SnapshotInfo written = info(snapshotIri).orElse(null);
-            if (written == null) {
-                connection.catalog(scenario).dropGraphs(uploaded);
-                throw new RdfDbConflictException("the root snapshot " + snapshotIri + " was not written: another"
-                        + " writer created the root of modelling authority '" + authority + "' of scenario '"
-                        + scenario + "', or its boundary, first");
+            SnapshotInfo written = null;
+            for (int attempt = 1; written == null; attempt++) {
+                // A root has no parent to rank above: its version is any registered name, the lowest when none is
+                // asked, and the first root of a scenario without a registry creates one
+                VersionRegistry.Resolved version = registry.resolve(ref.version(), null,
+                        moment(authority, timestamp));
+                String snapshotIri = RdfDbNames.snapshot(scenario, authority, timestamp, version.name());
+                sparql().update(rootWrite(own, localToRemote, parsed, state, roots.isEmpty(),
+                        RdfDbDifferenceSink.SnapshotWrite.root(snapshotIri, authority, version, timestamp, state),
+                        counts));
+                // A new root is a new set of states, and the decoded parents of the old ones are of no use to anyone
+                connection.forgetParentIndexes(scenario);
+                written = info(snapshotIri).orElse(null);
+                if (written != null && version.bootstraps()) {
+                    registry.bootstrapped(version);
+                } else if (written == null && !(attempt <= REGISTRY_RETRIES && registry.changedSince(version))) {
+                    connection.catalog(scenario).dropGraphs(uploaded);
+                    throw new RdfDbConflictException("the root snapshot " + snapshotIri + " was not written:"
+                            + " another writer created the root of modelling authority '" + authority
+                            + "' of scenario '" + scenario + "', or its boundary, or changed its version registry,"
+                            + " first");
+                }
             }
             LOGGER.info("Stored the root snapshot {} of scenario '{}' with {} model(s), {} of them the shared"
                     + " boundary", written, scenario, headers.size(), shared.size());
@@ -896,8 +915,8 @@ public final class SnapshotCatalog {
      * @param set    the difference models, one per profile at most
      * @param target the address the new snapshot gets
      * @return the new snapshot
-     * @throws RdfDbConflictException if the version does not grow, the chain would fork, or a difference does not
-     *                                supersede the state of its profile at the parent
+     * @throws RdfDbConflictException if the version does not rank above the head's, the chain would fork, or a
+     *                                difference does not supersede the state of its profile at the parent
      */
     public SnapshotInfo putDiff(DifferenceModelSet set, SnapshotRef target) {
         return putDiff(set, target, ReportNode.NO_OP);
@@ -914,8 +933,10 @@ public final class SnapshotCatalog {
      *                   and SSH difference headers agree on, and a set with neither is refused; in a scenario of one
      *                   tree it is that tree, and headers agreeing on another authority are refused; a {@code null}
      *                   timestamp is the base timestamp of that
-     *                   authority's tree; a {@code null} version is the head's plus one (1 for a new timestamp).
-     *                   An explicit version must be greater than the head's; gaps are allowed
+     *                   authority's tree; a {@code null} version is the lowest registered one ranking above the
+     *                   head's (the lowest registered one for a new timestamp). An explicit version must rank above
+     *                   the head's; one that is not registered is appended in a permissive scenario and refused in
+     *                   a strict one (see {@link VersionRegistry})
      * @param reportNode where the write reports
      * @return the new snapshot
      */
@@ -943,18 +964,9 @@ public final class SnapshotCatalog {
         checkScenarioTimes(models, timestamp);
         boolean newTimestamp = existingHead.isEmpty();
         SnapshotInfo parent = newTimestamp ? pin(models, authority, timestamp) : existingHead.get();
-        String version;
-        if (newTimestamp) {
-            version = target.version() == null ? "1" : target.version();
-        } else {
-            if (target.timestamp() != null) {
-                checkNotASecondRoot(models, parent, authority, timestamp);
-            }
-            version = target.version() == null ? String.valueOf(Integer.parseInt(parent.version()) + 1)
-                    : target.version();
-            checkVersionGrows(parent, version);
+        if (!newTimestamp && target.timestamp() != null) {
+            checkNotASecondRoot(models, parent, authority, timestamp);
         }
-        SnapshotRef address = SnapshotRef.of(scenario, authority, timestamp, version);
         checkSupersedes(models, parent);
 
         Map<CgmesSubset, String> state = new EnumMap<>(parent.state());
@@ -966,24 +978,46 @@ public final class SnapshotCatalog {
         }
         // The fast-route capability of the new snapshot is not computed here and not written: the sink records it
         // per difference model as pdb:fastPredicatesOnly, and SnapshotInfo.fast() is the conjunction of those
-        String snapshotIri = RdfDbNames.snapshot(scenario, authority, timestamp, version);
-        RdfDbDifferenceSink.SnapshotWrite write = new RdfDbDifferenceSink.SnapshotWrite(snapshotIri, authority,
-                version, timestamp, parent.iri(),
-                newTimestamp ? RdfDbVocabulary.TIMESTAMP_EDGE : RdfDbVocabulary.VERSION_EDGE,
-                parent.depth() + 1, state, newTimestamp ? snapshotIri : parent.timestampRoot(), parentStates);
-
-        RdfDbDifferenceSink sink = new RdfDbDifferenceSink(connection, scenario, reportNode);
-        sink.writeInto(write);
-        try {
-            sink.accept(new DifferenceModelSet(models));
-        } catch (RdfDbConflictException e) {
-            throw new RdfDbConflictException(diagnose(address, parent, e.getMessage()), e);
+        for (int attempt = 1; ; attempt++) {
+            // The rank rule: a version of the same timestamp ranks above the head it is written on; a new
+            // timestamp's root is not compared with the snapshot it hangs off, which is another timestamp's
+            VersionRegistry.Resolved version = registry.resolve(target.version(),
+                    newTimestamp ? null : parent.version(), moment(authority, timestamp));
+            SnapshotRef address = SnapshotRef.of(scenario, authority, timestamp, version.name());
+            String snapshotIri = RdfDbNames.snapshot(scenario, authority, timestamp, version.name());
+            RdfDbDifferenceSink.SnapshotWrite write = new RdfDbDifferenceSink.SnapshotWrite(snapshotIri, authority,
+                    version, timestamp, parent.iri(),
+                    newTimestamp ? RdfDbVocabulary.TIMESTAMP_EDGE : RdfDbVocabulary.VERSION_EDGE,
+                    parent.depth() + 1, state, newTimestamp ? snapshotIri : parent.timestampRoot(), parentStates);
+            RdfDbDifferenceSink sink = new RdfDbDifferenceSink(connection, scenario, reportNode);
+            sink.writeInto(write);
+            try {
+                sink.accept(new DifferenceModelSet(models));
+            } catch (RdfDbConflictException e) {
+                long seen = version.rev();
+                if (registry.changedSince(version)) {
+                    String changed = "the version registry of scenario '" + scenario + "' changed (rev " + seen
+                            + " → " + registry.rev() + ")";
+                    if (attempt <= REGISTRY_RETRIES) {
+                        LOGGER.info("{} under the write of {}: retrying", changed, address);
+                        continue;
+                    }
+                    throw new RdfDbConflictException(changed + " under every attempt to write " + address
+                            + ": retry", e);
+                }
+                throw new RdfDbConflictException(diagnose(address, parent, version, e.getMessage()), e);
+            }
+            SnapshotInfo written = info(snapshotIri).orElseThrow(() -> new RdfDbConflictException(
+                    diagnose(address, parent, version, "the snapshot node was not written")));
+            LOGGER.info("Stored the snapshot {} of scenario '{}' with {} difference(s)", written, scenario,
+                    models.size());
+            return written;
         }
-        SnapshotInfo written = info(snapshotIri).orElseThrow(() -> new RdfDbConflictException(
-                diagnose(address, parent, "the snapshot node was not written")));
-        LOGGER.info("Stored the snapshot {} of scenario '{}' with {} difference(s)", written, scenario,
-                models.size());
-        return written;
+    }
+
+    /** The moment of a tree a write goes to, as the messages name it. */
+    private String moment(String authority, Instant timestamp) {
+        return "(" + scenario + ", " + authority + ", " + timestamp + ")";
     }
 
     /**
@@ -1100,7 +1134,7 @@ public final class SnapshotCatalog {
      *                     equipment and steady state hypothesis files agree on (in a scenario of one tree: that tree,
      *                     and files agreeing on another authority are refused), a {@code null} timestamp the base
      *                     timestamp of that authority's tree, a
-     *                     {@code null} version the head's plus one
+     *                     {@code null} version the lowest registered one ranking above the head's
      * @param profiles     the profiles to compare, or {@code null} or empty for {@code EQ} and {@code SSH}. A
      *                     listed profile the files do not carry is refused
      * @param importParams the CGMES import parameters
@@ -1388,15 +1422,6 @@ public final class SnapshotCatalog {
         }
     }
 
-    /** A new version is greater than the head it is written on; gaps are allowed. */
-    private void checkVersionGrows(SnapshotInfo head, String version) {
-        if (Integer.parseInt(version) <= Integer.parseInt(head.version())) {
-            throw new RdfDbConflictException("version " + version + " is not greater than the head version "
-                    + head.version() + " of (" + scenario + ", " + head.modellingAuthority() + ", "
-                    + head.timestamp() + "): versions only grow");
-        }
-    }
-
     private void checkSupersedes(List<DifferenceModel> models, SnapshotInfo parent) {
         for (DifferenceModel model : models) {
             CgmesSubset subset = model.header().subset();
@@ -1420,15 +1445,17 @@ public final class SnapshotCatalog {
     }
 
     /** Re-read the chain and say which rule the silent guard refused on. */
-    private String diagnose(SnapshotRef address, SnapshotInfo parent, String detail) {
+    private String diagnose(SnapshotRef address, SnapshotInfo parent, VersionRegistry.Resolved version,
+                            String detail) {
         Optional<SnapshotInfo> nowHead = head(address.modellingAuthority(), address.timestamp());
         if (nowHead.isPresent() && !nowHead.get().iri().equals(parent.iri())) {
             return "snapshot " + parent.ref() + " already has successor " + nowHead.get().ref()
                     + " - the linear scheme allows no forks; update to the head first";
         }
-        if (nowHead.isPresent() && nowHead.get().version().equals(address.version())) {
-            return "version " + address.version() + " is not greater than the head version "
-                    + nowHead.get().version() + " of " + nowHead.get().ref();
+        if (nowHead.isPresent() && nowHead.get().rank() >= version.rank()) {
+            return "version '" + version.name() + "' (rank " + version.rank() + ") is not above the head '"
+                    + nowHead.get().version() + "' (rank " + nowHead.get().rank() + ") of " + nowHead.get().ref()
+                    + ": a new version ranks above the head it is written on";
         }
         return "the snapshot " + address + " was not written: " + detail;
     }
@@ -1495,6 +1522,10 @@ public final class SnapshotCatalog {
             if (!info.iri().equals(RdfDbNames.snapshot(scenario, info.modellingAuthority(), info.timestamp(),
                     info.version())) || !info.iri().startsWith(prefix)) {
                 throw new RdfDbException("snapshot " + info.iri() + " is not named by its address " + info.ref());
+            }
+            if (info.rank() == 0) {
+                throw new RdfDbException("snapshot " + info + " of scenario '" + scenario + "' carries the version '"
+                        + info.version() + "', which its version registry does not hold " + registry);
             }
             if (info.isRoot()) {
                 verifyRoot(info);
@@ -1609,6 +1640,9 @@ public final class SnapshotCatalog {
                 .append(' ').append(SparqlText.integer(RdfDbVocabulary.SCHEMA_VERSION)).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.SCENARIO)).append(' ').append(SparqlText.str(scenario))
                 .append(" . ");
+        if (root.version().bootstraps()) {
+            registry.appendBootstrap(update, root.version(), now);
+        }
         root.appendTo(update, scenario, state.values(), now);
         update.append(" } } WHERE { FILTER NOT EXISTS { GRAPH ").append(meta)
                 .append(" { ?x a pdb:Snapshot ; pdb:depth ").append(SparqlText.integer(0))
@@ -1623,6 +1657,7 @@ public final class SnapshotCatalog {
         own.values().forEach(header -> update.append(" FILTER NOT EXISTS { GRAPH ")
                 .append(meta).append(" { ").append(SparqlText.iri(header.id))
                 .append(" ?p1 ?o1 } }"));
+        registry.appendWriteGuards(update, root.version());
         return update.append(" }").toString();
     }
 

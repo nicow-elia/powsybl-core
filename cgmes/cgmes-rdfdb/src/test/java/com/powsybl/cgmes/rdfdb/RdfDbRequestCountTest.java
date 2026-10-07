@@ -141,7 +141,20 @@ class RdfDbRequestCountTest {
         mark = BenchMeters.FusekiMeter.mark();
         RdfDbExport.export(sender, Changes.record(sender, n -> Changes.moveLoad(n, 4.0)), db,
                 ref(scenario, 2), new CgmesDiffExport.ExportOptions());
-        // The three of the sink, plus resolving the head, refusing a duplicate version and reading the node back
+        // A name the permissive registry does not hold yet is appended first: one guarded request, no read-back,
+        // because the snapshot write itself is guarded on the name at its rank
+        assertAtMost("writing a version under a name the registry does not hold yet", since(mark), 8);
+
+        mark = BenchMeters.FusekiMeter.mark();
+        catalog.registry().add("3");
+        // The guarded edit and the read-back
+        assertAtMost("an edit of the version registry", since(mark), 2);
+
+        mark = BenchMeters.FusekiMeter.mark();
+        RdfDbExport.export(sender, Changes.record(sender, n -> Changes.moveLoad(n, 5.0)), db,
+                ref(scenario, 3), new CgmesDiffExport.ExportOptions());
+        // The three of the sink, plus resolving the head, refusing a duplicate version and reading the node back;
+        // the rank check is local and the revision guard is inside the write
         assertAtMost("writing a version as a snapshot", since(mark), 7);
 
         Network receiver = RdfDbNetworkLoader.load(db, ref(scenario, 1), null, params(),

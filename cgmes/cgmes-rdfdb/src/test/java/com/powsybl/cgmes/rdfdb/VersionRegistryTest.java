@@ -155,7 +155,6 @@ class VersionRegistryTest {
         }
     }
 
-    @Disabled("the write rules on names come with the next commit")
     @ParameterizedTest(name = "{0}")
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void namesSnapshotsCarryAreNeitherRenamedNorDeletedAndRerankKeepsEveryChainOrdered(String backend) {

@@ -252,6 +252,61 @@ class RdfDbSparqlSemanticsTest {
         }
     }
 
+    /**
+     * What the version registry rests on: a rank joined from a version node by name orders the snapshots under
+     * {@code FILTER}, the nested {@code NOT EXISTS} of a read at a version binds exactly the highest rank at or
+     * below it, and a {@code DELETE/INSERT} guarded by an integer equality runs only at that revision.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("backends")
+    void theRankJoinOrdersVersionsOnBothBackends(String backend) {
+        try (RdfDbConnection db = open(backend)) {
+            db.clear(SCENARIO);
+            SparqlAccess sparql = db.sparql(SCENARIO);
+            StringBuilder data = new StringBuilder(RdfDbVocabulary.PREFIXES + "INSERT DATA { GRAPH <" + M + "> { <"
+                    + EX + "schema> pdb:rev " + SparqlText.integer(3) + " . ");
+            String[][] versions = {{"DA", "10"}, {"ID", "20"}, {"RT", "30"}, {"X", "40"}};
+            for (String[] v : versions) {
+                data.append('<').append(EX).append("v/").append(v[0]).append("> a pdb:Version ; pdb:name ")
+                        .append(SparqlText.str(v[0])).append(" ; pdb:rank ")
+                        .append(SparqlText.integer(Long.parseLong(v[1]))).append(" . ");
+            }
+            // One timestamp that carries DA, ID and X, but not RT
+            for (String name : List.of("DA", "ID", "X")) {
+                data.append('<').append(EX).append("s/").append(name).append("> a pdb:Snapshot ; pdb:version ")
+                        .append(SparqlText.str(name)).append(" . ");
+            }
+            sparql.update(data.append("} }").toString());
+
+            String join = " ?s a pdb:Snapshot ; pdb:version ?n . ?vn a pdb:Version ; pdb:name ?n ; pdb:rank ?r ";
+            List<Map<String, Value>> above = sparql.select(RdfDbVocabulary.PREFIXES + "SELECT ?n WHERE { GRAPH <" + M
+                    + "> {" + join + "FILTER(?r >= " + SparqlText.integer(20) + ") } } ORDER BY ?r");
+            assertThat(above).extracting(row -> row.get("n").stringValue()).containsExactly("ID", "X");
+
+            // The highest at or below RT (30) is ID: X ranks above, DA below ID
+            String atOrBelow = RdfDbVocabulary.PREFIXES + "SELECT ?n WHERE { GRAPH <" + M + "> { ?q a pdb:Version ;"
+                    + " pdb:name \"RT\" ; pdb:rank ?bound ." + join + "FILTER(?r <= ?bound) FILTER NOT EXISTS {"
+                    + " ?s2 a pdb:Snapshot ; pdb:version ?n2 . ?vn2 a pdb:Version ; pdb:name ?n2 ; pdb:rank ?r2"
+                    + " FILTER(?r2 <= ?bound && ?r2 > ?r) } } }";
+            assertThat(sparql.select(atOrBelow)).extracting(row -> row.get("n").stringValue()).containsExactly("ID");
+
+            // A revision guard: the edit runs at revision 3 and not again
+            String edit = RdfDbVocabulary.PREFIXES + "DELETE { GRAPH <" + M + "> { <" + EX + "schema> pdb:rev "
+                    + SparqlText.integer(3) + " } } INSERT { GRAPH <" + M + "> { <" + EX + "schema> pdb:rev "
+                    + SparqlText.integer(4) + " . <" + EX + "edited> <" + EX + "p> <" + EX + "o> } } WHERE { GRAPH <"
+                    + M + "> { <" + EX + "schema> pdb:rev " + SparqlText.integer(3) + " } }";
+            sparql.update(edit);
+            sparql.update(edit.replace("<" + EX + "edited>", "<" + EX + "again>"));
+            List<Map<String, Value>> rev = sparql.select(RdfDbVocabulary.PREFIXES + "SELECT ?r WHERE { GRAPH <" + M
+                    + "> { <" + EX + "schema> pdb:rev ?r } }");
+            assertThat(rev).extracting(row -> row.get("r").stringValue()).containsExactly("4");
+            assertThat(sparql.ask("ASK { GRAPH <" + M + "> { <" + EX + "again> ?p ?o } }")).isFalse();
+            assertThat(sparql.ask("ASK { GRAPH <" + M + "> { <" + EX + "edited> ?p ?o } }")).isTrue();
+
+            db.clear(SCENARIO);
+        }
+    }
+
     private static long countOf(SparqlAccess sparql, String graph) {
         List<Map<String, Value>> rows =
                 sparql.select("SELECT (COUNT(*) AS ?n) WHERE { GRAPH <" + graph + "> { ?s ?p ?o } }");
