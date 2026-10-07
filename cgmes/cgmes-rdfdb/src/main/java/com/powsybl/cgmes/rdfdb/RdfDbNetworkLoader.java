@@ -979,28 +979,9 @@ public final class RdfDbNetworkLoader {
         // A path that walks up one branch and down another - which is what a step from one timestamp to the next
         // is - is composed with the upward differences already turned round, and then applied forwards like any
         // other. Only a path that is entirely upward is reverted as a whole
-        boolean mixed = plan.isMixedDirection();
         boolean inverted = plan.isAllInverted();
-        Map<String, DifferenceModel> byId = fetched.byId();
-        Map<String, StoredModel> stateModels = fetched.stateModels();
-
         long composeStart = System.nanoTime();
-        Map<String, List<DifferenceModel>> chains = Profiles.map();
-        Map<String, DifferenceModelHeader> headers = Profiles.map();
-        Map<String, List<String>> appliedIds = Profiles.map();
-        plan.stepsBySubset().forEach((subset, steps) -> {
-            // The path is in application order; composing wants it oldest first, which for an undo is the
-            // reverse of the order the steps are undone in
-            List<UpdatePlan.DiffStep> path = new ArrayList<>(steps);
-            if (inverted) {
-                Collections.reverse(path);
-            }
-            chains.put(subset, composable(path, byId, mixed));
-            headers.put(subset, snapshotHeader(path.stream().map(UpdatePlan.DiffStep::model).toList(), inverted,
-                    steps, plan.targetState().get(subset), stateModels));
-            appliedIds.put(subset, steps.stream().map(step -> step.model().id()).toList());
-        });
-        DifferenceModelSet composed = RdfDbDiffSource.compose(chains, headers);
+        DifferenceModelSet composed = compose(plan, fetched, inverted);
         Duration compose = Duration.ofNanos(System.nanoTime() - composeStart);
 
         long applyStart = System.nanoTime();
@@ -1011,8 +992,78 @@ public final class RdfDbNetworkLoader {
         }
         Duration apply = Duration.ofNanos(System.nanoTime() - applyStart);
 
-        recordSnapshotIdentity(network, db, scenario, plan, stateModels);
+        recordSnapshotIdentity(network, db, scenario, plan, fetched.stateModels());
+        Map<String, List<String>> appliedIds = Profiles.map();
+        plan.stepsBySubset().forEach((subset, steps) -> appliedIds.put(subset,
+                steps.stream().map(step -> step.model().id()).toList()));
         return new AppliedDiffs(appliedIds, compose, apply);
+    }
+
+    /**
+     * Compose the differences of a path into one difference per profile.
+     *
+     * @param plan       the path
+     * @param fetched    what {@link #fetchSteps} returned for it
+     * @param revertable whether the set is to be reverted as a whole: then the steps, all upward, are composed as
+     *                   they were written, oldest first, and the set carries the identity of the model being undone.
+     *                   Otherwise every upward step is turned round here and the set is applied forwards
+     * @return the composed set
+     */
+    private static DifferenceModelSet compose(UpdatePlan plan, FetchedDiffs fetched, boolean revertable) {
+        Map<String, List<DifferenceModel>> chains = Profiles.map();
+        Map<String, DifferenceModelHeader> headers = Profiles.map();
+        plan.stepsBySubset().forEach((subset, steps) -> {
+            // The path is in application order; composing wants it oldest first, which for an undo is the
+            // reverse of the order the steps are undone in
+            List<UpdatePlan.DiffStep> path = new ArrayList<>(steps);
+            if (revertable) {
+                Collections.reverse(path);
+            }
+            chains.put(subset, composable(path, fetched.byId(), !revertable));
+            headers.put(subset, snapshotHeader(path.stream().map(UpdatePlan.DiffStep::model).toList(), revertable,
+                    steps, plan.targetState().get(subset), fetched.stateModels()));
+        });
+        return RdfDbDiffSource.compose(chains, headers);
+    }
+
+    /**
+     * The changes between two snapshots of one tree, as one difference per profile.
+     *
+     * <p>What a network at {@code from} has to apply to be at {@code to}: the path between the two
+     * ({@link VersionGraph}), its differences fetched, and the steps composed as an update composes them &mdash; the
+     * ones up out of {@code from} turned round, the ones down into {@code to} as they are &mdash; into a set that is
+     * applied forwards. It is a statement set, not an in-place update, so it is made whether or not the differences
+     * are fast-route capable and however long the path is. Each composed difference carries the identity of
+     * {@code to}'s model of its profile and supersedes {@code from}'s. A custom profile stored whole is not a
+     * difference and is not in it ({@link SnapshotCatalog#graphsOf}).</p>
+     *
+     * <p>Three requests: the plan, the differences, and the models the path starts and ends at.</p>
+     *
+     * @param db   the open connection
+     * @param from the address of the first snapshot
+     * @param to   the address of the second snapshot, of the same scenario and modelling authority
+     * @return the composed set, empty when the two are the same snapshot
+     * @throws RdfDbException if the two are of different scenarios or modelling authorities, or either is not
+     *                        held
+     */
+    public static DifferenceModelSet changesBetween(RdfDbConnection db, SnapshotRef from, SnapshotRef to) {
+        Objects.requireNonNull(db);
+        Objects.requireNonNull(from);
+        Objects.requireNonNull(to);
+        if (!from.scenario().equals(to.scenario())) {
+            throw new RdfDbException("no difference leads from " + from + " to " + to + ": diffs never cross"
+                    + " scenarios");
+        }
+        UpdatePlan plan = db.versionGraph(from.scenario()).plan(from, to,
+                new RdfDbUpdateOptions().setMaxDiffChain(Integer.MAX_VALUE));
+        if (plan.steps().isEmpty()) {
+            if (plan.kind() == UpdatePlan.Kind.FULL) {
+                throw new RdfDbException("no difference leads from " + from + " to " + to + ": "
+                        + String.join("; ", plan.reasons()));
+            }
+            return new DifferenceModelSet(List.of());
+        }
+        return compose(plan, fetchSteps(db, from.scenario(), plan), false);
     }
 
     private static UpdateResult applySnapshotDifferences(Network network, RdfDbConnection db, SnapshotRef target,
@@ -1049,11 +1100,11 @@ public final class RdfDbNetworkLoader {
      * be undone are inverted here and the composed result is applied forwards like any other difference.</p>
      */
     private static List<DifferenceModel> composable(List<UpdatePlan.DiffStep> path,
-                                                    Map<String, DifferenceModel> byId, boolean mixed) {
+                                                    Map<String, DifferenceModel> byId, boolean turnUpward) {
         return path.stream()
                 .map(step -> {
                     DifferenceModel model = byId.get(step.model().id());
-                    return mixed && step.inverted() ? model.inverted(step.model().toHeader()) : model;
+                    return turnUpward && step.inverted() ? model.inverted(step.model().toHeader()) : model;
                 })
                 .toList();
     }

@@ -34,8 +34,9 @@ import static com.powsybl.cgmes.rdfdb.SnapshotRows.text;
  * <p>Both chains come back in a single request. A {@code UNION} binds the start of each side &mdash; the snapshot
  * the network is at, and the snapshot the caller asked for, resolved by its address in the same
  * query &mdash; and a {@code pdb:parent*} property path walks each of them up to the root. The client then finds
- * the lowest common ancestor, which on a chain that never branches is simply the deepest snapshot both sides
- * reached, and reads the path off the two chains.</p>
+ * the lowest common ancestor, which in a tree is simply the deepest snapshot both sides reached, and reads the path
+ * off the two chains. The tree is the versions of each timestamp, linear, and the timestamps pinned to any snapshot
+ * of another one; a walk from one timestamp to another goes up to their common pin and down again.</p>
  *
  * <p>The cost is bounded by the <em>depth</em> of the two snapshots, not by how much the scenario holds: a
  * database with a thousand snapshots, or with ten other scenarios next to this one, answers the same query in the
@@ -169,6 +170,34 @@ public final class VersionGraph {
     }
 
     /**
+     * Plan the way between two snapshots named by their addresses, both resolved in the one request.
+     *
+     * @param from    the address of the snapshot to start at
+     * @param to      the address of the snapshot to reach
+     * @param options how long a chain the caller allows
+     * @return the plan; {@code FULL} without steps when the two are in different trees
+     * @throws RdfDbException if either address names another scenario or resolves to no snapshot
+     */
+    UpdatePlan plan(SnapshotRef from, SnapshotRef to, RdfDbUpdateOptions options) {
+        catalog.readable(from);
+        catalog.readable(to);
+        if (!from.modellingAuthority().equals(to.modellingAuthority())) {
+            return crossAuthority(null, from.modellingAuthority(), to);
+        }
+        catalog.checkSchema();
+        Map<String, Start> starts = new LinkedHashMap<>();
+        starts.put(SIDE_A, new Start(null, from));
+        starts.put(SIDE_B, new Start(null, to));
+        Chains chains = chains(starts);
+        List<SnapshotInfo> a = chains.bySide().get(SIDE_A);
+        List<SnapshotInfo> b = chains.bySide().get(SIDE_B);
+        if (a.isEmpty() || b.isEmpty()) {
+            throw catalog.noSuchSnapshot(a.isEmpty() ? from : to);
+        }
+        return path(a, b, chains.diffs(), options);
+    }
+
+    /**
      * How to build the data of a snapshot: per profile, the full graph to start from and the differences below it.
      *
      * @param snapshotIri the IRI of the snapshot to materialise
@@ -245,8 +274,8 @@ public final class VersionGraph {
     /**
      * The path from one chain to another, read off two chains that were already queried.
      *
-     * <p>A lowest-common-ancestor walk on a chain that never branches: up from the first chain to the snapshot the
-     * two share, undoing each difference, then down to the second one applying each one forward. It sends nothing:
+     * <p>A lowest-common-ancestor walk on the tree of one modelling authority: up from the first chain to the deepest
+     * snapshot the two share, undoing each difference, then down to the second one applying each one forward. It sends nothing:
      * both chains and every model they name came out of one request, which is what lets a bulk load plan a whole
      * day from a single query.</p>
      *

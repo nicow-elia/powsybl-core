@@ -241,6 +241,12 @@ class RdfDbRequestCountTest {
         BenchMeters.FusekiMeter.Reading rollover = BenchMeters.FusekiMeter.mark();
         catalog.rollover(ref(scenario, 1, Instant.parse("2014-06-01T18:00:00Z")));
         assertAtMost("flagging a rollover of one profile", since(rollover), 8);
+
+        // The changes between two timestamps, across their common pin: the plan, the differences, the end models
+        BenchMeters.FusekiMeter.Reading between = BenchMeters.FusekiMeter.mark();
+        RdfDbNetworkLoader.changesBetween(db, ref(scenario, 1, Instant.parse("2014-06-01T12:00:00Z")),
+                ref(scenario, 1, Instant.parse("2014-06-01T17:00:00Z")));
+        assertAtMost("the changes between two timestamps", since(between), 3);
         Network sender = RdfDbNetworkLoader.load(db, ref(scenario, 1), null, params(),
                 ReportNode.NO_OP);
         RdfDbExport.export(sender, Changes.record(sender, n -> Changes.moveLoad(n, 4.0)), db,

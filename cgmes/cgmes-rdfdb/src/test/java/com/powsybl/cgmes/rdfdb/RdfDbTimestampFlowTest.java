@@ -8,7 +8,13 @@
 
 package com.powsybl.cgmes.rdfdb;
 
+import com.powsybl.cgmes.conversion.diff.CgmesDiffImport;
 import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
+import com.powsybl.cgmes.model.CgmesSubset;
+import com.powsybl.cgmes.model.diff.DifferenceModel;
+import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
+import com.powsybl.cgmes.model.diff.DifferenceModelSet;
+import com.powsybl.cgmes.model.diff.StatementDiff;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Network;
@@ -20,6 +26,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -629,6 +636,93 @@ class RdfDbTimestampFlowTest {
                     .hasMessageContaining("holds no timestamp " + T1);
             assertThat(catalog.snapshots()).hasSize(1);
         }
+    }
+
+    // ------------------------------------------------------------------ the changes between two snapshots
+
+    /**
+     * Three timestamps of a day across a rollover: 11:00 and 11:15 pinned to the root, 11:30 to 11:15. The changes
+     * from 11:00 to 11:30 are one difference per profile, composed from the path up out of 11:00 and down through
+     * 11:15 into 11:30, and they are what comparing the two states statement by statement gives.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void changesBetweenTwoTimestampsEqualsReverseThenForward(String backend) {
+        try (RdfDbConnection db = twoDays(backend)) {
+            SnapshotCatalog catalog = db.snapshots(S);
+            ReadOnlyDataSource at1100 = TimestampFixtures.ssh(2, 7.0, T1, "a");
+            ReadOnlyDataSource at1130 = TimestampFixtures.ssh(1, 11.0, T3, "c");
+            SnapshotInfo t1 = catalog.putAsDiff(at1100, null, ref(S, 1, T1), null, params(), ReportNode.NO_OP);
+            SnapshotInfo t2 = catalog.putAsDiff(TimestampFixtures.ssh(3, 9.0, T2, "b"), null, ref(S, 1, T2), null,
+                    params(), ReportNode.NO_OP);
+            catalog.rollover(t2.ref());
+            SnapshotInfo t3 = catalog.putAsDiff(at1130, null, ref(S, 1, T3), null, params(), ReportNode.NO_OP);
+
+            DifferenceModelSet changes = RdfDbNetworkLoader.changesBetween(db, ref(S, 1, T1), ref(S, 1, T3));
+
+            assertThat(changes.models()).containsOnlyKeys(CgmesSubset.STEADY_STATE_HYPOTHESIS);
+            DifferenceModel composed = changes.models().get(CgmesSubset.STEADY_STATE_HYPOTHESIS);
+            DifferenceModel direct = directDifference(at1100, at1130);
+            assertThat(Set.copyOf(composed.forward())).isEqualTo(Set.copyOf(direct.forward()));
+            assertThat(Set.copyOf(composed.reverse())).isEqualTo(Set.copyOf(direct.reverse()));
+            // It is 11:30's steady state, recorded against 11:00's
+            assertThat(composed.header().id()).isEqualTo(t3.state().get(SSH));
+            assertThat(composed.header().supersedes()).containsExactly(t1.state().get(SSH));
+
+            // Applied to the network at 11:00 it gives the network at 11:30, and the reverse direction undoes it
+            Network network = load(db, S, 1, T1);
+            CgmesDiffImport.apply(network, changes, params(), ReportNode.NO_OP);
+            Networks.assertSameNetworkIgnoringStateVariables(load(db, S, 1, T3), network, IDENTITY, loads(network));
+            CgmesDiffImport.apply(network, RdfDbNetworkLoader.changesBetween(db, ref(S, 1, T3), ref(S, 1, T1)),
+                    params(), ReportNode.NO_OP);
+            Networks.assertSameNetworkIgnoringStateVariables(load(db, S, 1, T1), network, IDENTITY, loads(network));
+
+            // A path that only walks up: from 11:30 to its rollover
+            Network up = load(db, S, 1, T3);
+            CgmesDiffImport.apply(up, RdfDbNetworkLoader.changesBetween(db, ref(S, 1, T3), ref(S, 1, T2)), params(),
+                    ReportNode.NO_OP);
+            Networks.assertSameNetworkIgnoringStateVariables(load(db, S, 1, T2), up, IDENTITY, loads(up));
+
+            assertThat(RdfDbNetworkLoader.changesBetween(db, ref(S, 1, T3), ref(S, 1, T3)).models()).isEmpty();
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void changesBetweenIsRefusedAcrossAuthoritiesAndScenarios(String backend) {
+        try (RdfDbConnection db = twoDays(backend)) {
+            db.snapshots(S).putFull(Backends.microGridNl(), null, SnapshotRef.of(S, Backends.NL, null, "1"), null,
+                    params(), ReportNode.NO_OP);
+
+            assertThatThrownBy(() -> RdfDbNetworkLoader.changesBetween(db, ref(S, 1),
+                    SnapshotRef.of(S, Backends.NL, null, "1")))
+                    .isInstanceOf(RdfDbException.class)
+                    .hasMessageContaining("diffs never cross modelling authorities");
+            assertThatThrownBy(() -> RdfDbNetworkLoader.changesBetween(db, ref(S, 1), ref(OTHER, 1)))
+                    .isInstanceOf(RdfDbException.class)
+                    .hasMessageContaining("diffs never cross scenarios");
+            assertThatThrownBy(() -> RdfDbNetworkLoader.changesBetween(db, ref(S, 1), ref(S, 1, T1)))
+                    .isInstanceOf(RdfDbException.class)
+                    .hasMessageContaining("holds no snapshot");
+        }
+    }
+
+    /** The difference of the steady state hypothesis between two sets of files, statement by statement. */
+    private static DifferenceModel directDifference(ReadOnlyDataSource from, ReadOnlyDataSource to) {
+        IngestParser.Result parsedFrom = IngestParser.read(from, null, ReportNode.NO_OP, Map.of(), Set.of(SSH));
+        IngestParser.Result parsedTo = IngestParser.read(to, null, ReportNode.NO_OP, Map.of(), Set.of(SSH));
+        return TripleDiffCalculator.diff(sshIndex(parsedFrom), sshIndex(parsedTo),
+                DifferenceModelHeader.builder("urn:uuid:direct", CgmesSubset.STEADY_STATE_HYPOTHESIS,
+                        parsedTo.cimNamespace()).build());
+    }
+
+    private static StatementDiff.Index sshIndex(IngestParser.Result parsed) {
+        return parsed.files().stream().filter(file -> SSH.equals(file.profile())).findFirst().orElseThrow()
+                .index();
+    }
+
+    private static Set<String> loads(Network network) {
+        return network.getLoadStream().map(load -> load.getId()).collect(Collectors.toSet());
     }
 
     // ------------------------------------------------------------------ the parent index cache
