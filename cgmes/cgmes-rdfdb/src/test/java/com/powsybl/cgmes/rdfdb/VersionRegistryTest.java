@@ -10,7 +10,6 @@ package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.report.ReportNode;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
@@ -185,7 +184,6 @@ class VersionRegistryTest {
         }
     }
 
-    @Disabled("dropping snapshots comes later in this change")
     @ParameterizedTest(name = "{0}")
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aTransientVersionIsDeletedWithItsLeafSnapshots(String backend) {
@@ -217,7 +215,6 @@ class VersionRegistryTest {
         }
     }
 
-    @Disabled("dropping snapshots comes later in this change")
     @ParameterizedTest(name = "{0}")
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aTransientVersionWithAChildIsRefusedNamingIt(String backend) {

@@ -466,7 +466,8 @@ public final class RdfDbConnection implements AutoCloseable {
         }
     }
 
-    private void invalidateCache(String scenario) {
+    /** Forget every cached graph of one scenario, because graphs of it were dropped. */
+    void invalidateCache(String scenario) {
         GraphCache cache = database.cache();
         if (cache != null) {
             cache.invalidatePrefix(cacheKeyPrefix(scenario));

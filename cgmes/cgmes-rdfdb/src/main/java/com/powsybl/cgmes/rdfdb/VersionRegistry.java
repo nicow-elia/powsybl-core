@@ -463,7 +463,11 @@ public final class VersionRegistry {
      */
     public void delete(String name) {
         State before = existing();
-        registered(before, name);
+        if (registered(before, name).isTransient()) {
+            List<SnapshotInfo> carriers = catalog.snapshots().stream().filter(s -> s.version().equals(name))
+                    .toList();
+            catalog.dropSnapshots(carriers);
+        }
         String update = RdfDbVocabulary.PREFIXES + "DELETE { GRAPH " + meta + " { " + schemaNode + " pdb:rev "
                 + SparqlText.integer(before.rev()) + " . " + nodeOf(name) + " ?vp ?vo } } INSERT { GRAPH " + meta
                 + " { " + schemaNode + " pdb:rev " + SparqlText.integer(before.rev() + 1) + " } } WHERE { GRAPH "

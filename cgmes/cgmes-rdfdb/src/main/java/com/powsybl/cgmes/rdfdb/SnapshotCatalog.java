@@ -1518,6 +1518,66 @@ public final class SnapshotCatalog {
     }
 
     /**
+     * Drop snapshots nothing was built on: their nodes, their difference members and checkpoint copies, and the
+     * graphs those name.
+     *
+     * <p>The one primitive that removes snapshots, for {@link VersionRegistry#delete} of a transient version. Every
+     * snapshot must be a leaf &mdash; no snapshot outside the list names it as its parent, by either edge &mdash;
+     * and none may be the root of its tree, whose full graphs are the tree's base. After the check one request
+     * drops the graphs and the nodes; the decoded parent states and the cached graphs of the scenario are
+     * forgotten.</p>
+     *
+     * @param leaves the snapshots to drop
+     * @throws RdfDbException naming the first snapshot that is a root or has a child outside the list; nothing is
+     *                        dropped then
+     */
+    void dropSnapshots(List<SnapshotInfo> leaves) {
+        if (leaves.isEmpty()) {
+            return;
+        }
+        Set<String> dropped = new LinkedHashSet<>();
+        leaves.forEach(leaf -> {
+            check(leaf.ref());
+            dropped.add(leaf.iri());
+        });
+        for (SnapshotInfo info : snapshots()) {
+            if (info.isRoot() && dropped.contains(info.iri())) {
+                throw new RdfDbException("snapshot " + info + " of scenario '" + scenario + "' is the root of its"
+                        + " tree and is not dropped: nothing was dropped");
+            }
+            if (info.parent() != null && dropped.contains(info.parent()) && !dropped.contains(info.iri())) {
+                throw new RdfDbException("snapshot " + info.parent() + " of scenario '" + scenario + "' has the child "
+                        + info.iri() + ", and only a snapshot nothing was built on is dropped: nothing was dropped");
+            }
+        }
+        String values = dropped.stream().map(SparqlText::iri).collect(Collectors.joining(" "));
+        // The member differences and the checkpoint copies of the dropped snapshots, and the graphs they name
+        List<Map<String, Value>> rows = select("SELECT DISTINCT ?node ?g WHERE {" + graphClause() + "{ VALUES ?s { "
+                + values + " } { ?s pdb:member ?node . ?node pdb:kind pdb:Diff } UNION { ?node a pdb:Materialized ;"
+                + " pdb:snapshot ?s } OPTIONAL { { ?node pdb:forwardGraph ?g } UNION { ?node pdb:reverseGraph ?g }"
+                + " UNION { ?node a pdb:Materialized ; pdb:graph ?g } } } }");
+        Set<String> nodes = new LinkedHashSet<>(dropped);
+        Set<String> graphs = new LinkedHashSet<>();
+        rows.forEach(row -> {
+            nodes.add(SnapshotRows.text(row, "node"));
+            String graph = SnapshotRows.text(row, "g");
+            if (graph != null) {
+                graphs.add(graph);
+            }
+        });
+        StringBuilder update = new StringBuilder(RdfDbVocabulary.PREFIXES);
+        graphs.forEach(graph -> update.append("DROP SILENT GRAPH ").append(SparqlText.iri(graph)).append(" ; "));
+        String meta = SparqlText.iri(metaGraph);
+        update.append(nodes.stream().map(node -> "DELETE WHERE { GRAPH " + meta + " { " + SparqlText.iri(node)
+                + " ?p ?o } }").collect(Collectors.joining(" ; ")));
+        sparql().update(update.toString());
+        connection.forgetParentIndexes(scenario);
+        connection.invalidateCache(scenario);
+        LOGGER.info("Dropped the snapshot(s) {} of scenario '{}' with {} graph(s)", dropped, scenario,
+                graphs.size());
+    }
+
+    /**
      * Check the invariants of the snapshot trees of this scenario.
      *
      * <p>Depth, state and the edge kinds are derived when a snapshot is written, so this is not how correctness is
