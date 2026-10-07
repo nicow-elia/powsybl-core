@@ -433,7 +433,7 @@ public final class FastRouteCapabilities {
      * The first twelve hexadecimal digits of the SHA-256 of {@link #canonicalText()}: what the table declares,
      * nothing of how this class evaluates it.
      */
-    public static String tableHash() {
+    static String tableHash() {
         return TABLE_HASH;
     }
 

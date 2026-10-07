@@ -157,7 +157,7 @@ public final class RdfDbNames {
      * @param name     the version name
      * @return the node IRI
      */
-    public static String versionNode(String scenario, String name) {
+    static String versionNode(String scenario, String name) {
         return BASE + safe(scenario) + "/version/" + ScenarioGraphNames.encode(name);
     }
 

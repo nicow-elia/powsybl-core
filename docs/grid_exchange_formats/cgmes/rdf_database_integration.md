@@ -131,9 +131,11 @@ travels back as the same `CgmesDiffNotApplicableException`, its reasons reading 
 &lt;iri&gt; was written by capability version &lt;writer&gt; and this reader (&lt;reader&gt;) cannot apply it in place:
 …"*, so the update falls back to `FULL_RELOAD` (or `FULL_REQUIRED`), and a variant update or a bulk load answers
 `VARIANT_REFUSED` for that variant. It costs no request (the statements are in hand on the diff route); a stored
-`false` of a newer writer stays a full route, as the planner reads it. `UpdatePlan.DiffStep.recheck()` shows which
-steps will be re-checked. The apply-time check of `FastRoutePlan` runs on every path anyway, so a wrong flag never
-corrupts a network — the re-check makes the reason name the versions and refuses before composing.
+`false` of a newer writer stays a full route, as the planner reads it. The apply-time check of `FastRoutePlan` runs
+on every path anyway, so a wrong flag never corrupts a network — the re-check makes the reason name the versions and
+refuses before composing. That is also why "older is trusted" is safe although it assumes a table only grows: were
+a capability ever removed, an older writer's `true` would promise more than the newer reader can apply, and the
+apply-time document check would refuse it and the full route would be taken.
 
 | What crosses | Type | Decided by |
 |---|---|---|

@@ -98,7 +98,7 @@ public final class RdfDbNetworkLoader {
          * @param network    the network
          * @param statistics the timings of the load
          */
-        public LoadResult(Network network, LoadStatistics statistics) {
+        LoadResult(Network network, LoadStatistics statistics) {
             this(network, statistics, Map.of());
         }
     }

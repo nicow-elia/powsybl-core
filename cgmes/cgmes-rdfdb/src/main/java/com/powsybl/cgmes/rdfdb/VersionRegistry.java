@@ -142,13 +142,6 @@ public final class VersionRegistry {
     // ------------------------------------------------------------------ reading
 
     /**
-     * @return the scenario this registry belongs to
-     */
-    public String scenario() {
-        return scenario;
-    }
-
-    /**
      * @return the registered names, lowest rank first
      */
     public List<String> names() {

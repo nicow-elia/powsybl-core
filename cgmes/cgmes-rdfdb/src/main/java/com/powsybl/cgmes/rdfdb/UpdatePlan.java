@@ -72,7 +72,7 @@ public record UpdatePlan(Kind kind, String from, String to, List<DiffStep> steps
          *
          * @return whether the difference is re-checked once fetched
          */
-        public boolean recheck() {
+        boolean recheck() {
             return !model.isTrustedBy(FastRouteCapabilities.version());
         }
     }

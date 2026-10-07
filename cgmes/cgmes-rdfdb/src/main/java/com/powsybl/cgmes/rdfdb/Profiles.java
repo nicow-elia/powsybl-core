@@ -68,7 +68,7 @@ public final class Profiles {
                     .toList()));
 
     /** The two profiles of the boundary a scenario shares. */
-    public static final Set<String> BOUNDARY = Set.of(EQ_BD, TP_BD);
+    private static final Set<String> BOUNDARY = Set.of(EQ_BD, TP_BD);
 
     /**
      * The order profiles are listed and written in: the standard ones in the order of {@link CgmesSubset}, then the
@@ -175,7 +175,7 @@ public final class Profiles {
      * @return the profile
      * @throws RdfDbException if the name says no profile
      */
-    public static String ofContextName(String contextName) {
+    static String ofContextName(String contextName) {
         return find(contextName).orElseThrow(() -> new RdfDbException("cannot tell the profile of '" + contextName
                 + "': name the file <base>_<PROFILE>.xml, the profile being one of " + STANDARD
                 + " or a custom name [A-Z][A-Z0-9]* that is not a version (V2)"));
