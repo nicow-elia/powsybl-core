@@ -115,6 +115,8 @@ public final class SnapshotCatalog {
      * cleared through another connection while this catalogue lives.
      */
     private final Map<String, SnapshotInfo> rootByAuthority = new ConcurrentHashMap<>();
+    /** The version registry of the scenario, read with the schema check and cached; see {@link VersionRegistry}. */
+    private final VersionRegistry registry;
     private volatile IngestStatistics lastIngest;
     /** Runs between the parse of a root and its guarded write, so that a test can make a concurrent writer win. */
     private Runnable beforeRootWrite;
@@ -127,6 +129,16 @@ public final class SnapshotCatalog {
         this.scenario = RdfDbNames.checkScenario(scenario);
         this.metaGraph = RdfDbNames.metaGraph(scenario);
         this.schemaNode = RdfDbNames.schemaNode(scenario);
+        this.registry = new VersionRegistry(connection, this);
+    }
+
+    /**
+     * The version registry of the scenario: the registered version names and their ranks.
+     *
+     * @return the registry, as last read through this connection
+     */
+    public VersionRegistry registry() {
+        return registry;
     }
 
     /**
@@ -190,7 +202,7 @@ public final class SnapshotCatalog {
      *
      * <p>One request the first time a catalogue reads, none afterwards: a graph this release has accepted is only
      * ever written by this release. Called by every listing, so no read decodes a node of an older schema into a
-     * wrong address.</p>
+     * wrong address. The same request reads the version registry ({@link #readSchema}).</p>
      *
      * @throws RdfDbException if the graph holds snapshots but not {@code pdb:schema 4}, or a node of the earlier
      *                        {@code (scenario, timestep, version)} schema
@@ -199,11 +211,18 @@ public final class SnapshotCatalog {
         if (schemaChecked) {
             return;
         }
-        List<Map<String, Value>> rows = select("SELECT DISTINCT ?k ?v WHERE {" + graphClause() + "{"
+        readSchema();
+    }
+
+    /**
+     * Check the schema and read the version registry, in one request, whether or not this was done before.
+     */
+    void readSchema() {
+        List<Map<String, Value>> rows = select("SELECT DISTINCT ?k ?v ?n ?r ?t WHERE {" + graphClause() + "{"
                 + " { " + SparqlText.iri(schemaNode) + " pdb:schema ?v BIND(\"schema\" AS ?k) }"
                 + " UNION { ?x a " + SparqlText.iri(SnapshotRows.LEGACY_CATALOG) + " BIND(\"catalog\" AS ?k) }"
-                + " UNION { ?x " + SparqlText.iri(SnapshotRows.LEGACY_TIMESTEP) + " ?t BIND(\"timestep\" AS ?k) }"
-                + " UNION { ?x a pdb:Snapshot BIND(\"snapshot\" AS ?k) } } }");
+                + " UNION { ?x " + SparqlText.iri(SnapshotRows.LEGACY_TIMESTEP) + " ?ts BIND(\"timestep\" AS ?k) }"
+                + " UNION { ?x a pdb:Snapshot BIND(\"snapshot\" AS ?k) }" + registry.readBranches() + " } }");
         Map<String, Value> found = new LinkedHashMap<>();
         rows.forEach(row -> found.put(SnapshotRows.text(row, "k"), row.get("v")));
         if (found.containsKey("catalog")) {
@@ -221,6 +240,7 @@ public final class SnapshotCatalog {
         if (schema == null && found.containsKey("snapshot")) {
             throw SnapshotRows.legacySchema(scenario, "snapshots without a pdb:schema marker");
         }
+        registry.load(rows);
         schemaChecked = true;
     }
 
@@ -586,7 +606,7 @@ public final class SnapshotCatalog {
         return byAuthority;
     }
 
-    private List<Map<String, Value>> select(String body) {
+    List<Map<String, Value>> select(String body) {
         return sparql().select(RdfDbVocabulary.PREFIXES + body);
     }
 
@@ -1431,6 +1451,7 @@ public final class SnapshotCatalog {
         }
         connection.catalog(scenario).dropGraphs(graphs);
         schemaChecked = false;
+        registry.invalidate();
         rootByAuthority.clear();
         connection.forgetParentIndexes(scenario);
     }

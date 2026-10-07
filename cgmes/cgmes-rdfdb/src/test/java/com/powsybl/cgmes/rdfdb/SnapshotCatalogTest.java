@@ -69,7 +69,7 @@ class SnapshotCatalogTest {
     }
 
     /** A difference of one profile superseding what the given snapshot states for it. */
-    private static DifferenceModelSet change(SnapshotInfo parent, CgmesSubset subset, String id, String value) {
+    static DifferenceModelSet change(SnapshotInfo parent, CgmesSubset subset, String id, String value) {
         DifferenceModelHeader header = DifferenceModelHeader.builder(id, subset, CIM16)
                 .supersedes(List.of(parent.state().get(subset)))
                 .profiles(List.of("http://entsoe.eu/CIM/SteadyStateHypothesis/1/1"))
