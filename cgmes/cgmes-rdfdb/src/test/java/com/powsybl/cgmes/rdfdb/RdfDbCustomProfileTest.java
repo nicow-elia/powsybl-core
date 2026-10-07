@@ -178,6 +178,29 @@ class RdfDbCustomProfileTest {
         }
     }
 
+    /**
+     * A custom profile a timestamp introduces was parsed with the base of <em>its</em> data source, and the network
+     * of that timestamp still speaks the base of the tree: a custom profile never decides the subject base of a
+     * materialisation.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void aCustomProfileFirstShippedByATimestampDoesNotDecideTheSubjectBase(String backend) {
+        try (RdfDbConnection db = RdfDbConnection.open(Backends.database(backend, "custom-profile"))) {
+            db.clear(S);
+            db.snapshots(S).putFull(microGridBe(), null, ref(S, 1), null, params(), ReportNode.NO_OP);
+            db.snapshots(S).putAsDiff(t1(CFG_2), null, ref(S, 1, T1), Set.of(Profiles.EQ, Profiles.SSH, CFG),
+                    params(), ReportNode.NO_OP);
+
+            RdfDbNetworkLoader.LoadResult result = RdfDbNetworkLoader.loadWithStatistics(db, ref(S, 1, T1), null,
+                    null, params(), ReportNode.NO_OP);
+
+            assertThat(result.extraProfiles()).containsOnlyKeys(CFG);
+            Networks.assertSameNetwork(Network.read(TimestampFixtures.ssh(3, T1, "1100"), params()),
+                    result.network(), IDENTITY);
+        }
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void anUnlistedOrUnchangedCustomProfileIsInherited(String backend) {

@@ -333,9 +333,11 @@ final class RdfDbMaterializer {
      */
     static String subjectBase(MaterializationPlan plan, Map<String, StoredModel> models) {
         // The boundary last: a scenario shares it among its modelling authorities, and it speaks the subject
-        // base of the first root, which is not the one of the others
-        return plan.targetState().values().stream()
-                .map(models::get).filter(Objects::nonNull)
+        // base of the first root, which is not the one of the others. A custom profile never: it is not in the
+        // store, and one a timestamp shipped first was parsed with the base of that timestamp's files
+        return plan.targetState().entrySet().stream()
+                .filter(entry -> Profiles.isStandard(entry.getKey()))
+                .map(entry -> models.get(entry.getValue())).filter(Objects::nonNull)
                 .sorted(Comparator.comparing(StoredModel::isBoundary))
                 .map(StoredModel::subjectBase).filter(base -> !base.isEmpty())
                 .findFirst().orElse("");
