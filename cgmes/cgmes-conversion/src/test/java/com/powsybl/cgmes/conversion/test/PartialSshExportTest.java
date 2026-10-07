@@ -1039,6 +1039,36 @@ class PartialSshExportTest extends AbstractSerDeTest {
         assertTrue(sshXml.contains("<cim:RegulatingControl.enabled>true</cim:RegulatingControl.enabled>"));
     }
 
+    /**
+     * The reverse of {@link #remoteReactivePowerControlOnVoltageRegulatingGeneratorIsRejected}: a generator whose
+     * CGMES control regulates reactive power cannot be switched to voltage regulation from a steady state hypothesis
+     * file, because the receiver reads the single target of that control as a reactive power (the {@code cgmes-mode}
+     * refusal of the mapping). Ported from the owner's 2026-09-28 test onto the voltage regulation of 7.5.
+     */
+    @Test
+    void voltageRegulationOfAReactivePowerControlledGeneratorIsRejected() {
+        Network sender = readCgmesResources(GENERATOR_DIR, "generator_EQ.xml", "generator_SSH.xml");
+        Generator generator = sender.getGenerator("SynchronousMachine");
+        generator.setProperty(Conversion.PROPERTY_MODE, "RegulatingControlModeKind.reactivePower");
+        VoltageRegulation regulation = generator.newVoltageRegulation()
+                .withMode(RegulationMode.VOLTAGE)
+                .withTargetValue(400.0)
+                .withTerminal(generator.getTerminal())
+                .withRegulating(false)
+                .build();
+
+        // Switching the voltage regulation on, the change of the owner's test (setVoltageRegulatorOn(true)); a
+        // change of the mode itself is refused earlier, as an EQ change (mode-eq)
+        NetworkEventRecorder recorder = new NetworkEventRecorder();
+        sender.addListener(recorder);
+        regulation.setRegulating(true);
+
+        PowsyblException exception = assertThrows(PowsyblException.class,
+                () -> PartialSshExport.toString(sender, recorder.getEvents(), UnsupportedChangeBehavior.FAIL));
+        assertTrue(exception.getMessage().contains("is in mode VOLTAGE, but the CGMES update reads its RegulatingControl"
+                + " in the mode RegulatingControlModeKind.reactivePower"), exception.getMessage());
+    }
+
     @Test
     void staticVarCompensatorSetpointsRoundTrip() throws IOException {
         RoundTripResult result = roundTrip(STATIC_VAR_COMPENSATOR_DIR, sender -> {
