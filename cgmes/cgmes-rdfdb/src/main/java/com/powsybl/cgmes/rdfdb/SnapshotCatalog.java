@@ -1793,8 +1793,8 @@ public final class SnapshotCatalog {
      * first. The base timestamp is the tree itself and is never dropped; another day is another scenario, cleared
      * as a whole ({@link RdfDbConnection#clear}).</p>
      *
-     * <p>Two requests: the listing the checks are made on, and the one that drops the graphs and the nodes
-     * ({@link #dropSnapshots}).</p>
+     * <p>Three requests: the listing the checks are made on, the members and checkpoint copies to drop, and the one
+     * that drops the graphs and the nodes ({@link #dropSnapshots}).</p>
      *
      * @param modellingAuthority the modelling authority set of the tree
      * @param timestamp          the moment

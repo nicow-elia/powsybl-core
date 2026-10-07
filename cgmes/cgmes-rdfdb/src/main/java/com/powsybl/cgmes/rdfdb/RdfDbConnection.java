@@ -88,8 +88,8 @@ public final class RdfDbConnection implements AutoCloseable {
      * <p><strong>Key.</strong> {@code scenario | stateModelId | tripleCount | subjectBase | cimNamespace}
      * ({@link #parentIndexKey}): the stored model whose state the index holds, the size the catalogue records for
      * it, and the two things the decoding depends on. A stored model is written once and never changed &mdash; a
-     * new state of a profile is a new identifier &mdash; so an entry does not go stale; a version written on the
-     * base chain between two timestamps is a new identifier, misses, and is materialised. The triple count is a
+     * new state of a profile is a new identifier &mdash; so an entry does not go stale; a rollover flagged between two
+     * timestamps is a new pin with a new state identifier, misses, and is materialised once. The triple count is a
      * cheap second guard for a scenario dropped and re-created with re-used identifiers by another client.</p>
      *
      * <p><strong>Bound.</strong> Four entries in access order <em>for the whole connection</em>, not per

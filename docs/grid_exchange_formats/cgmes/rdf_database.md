@@ -672,8 +672,9 @@ with the first-root guard behind it):
    rewritten. A direct SPARQL query on the server (or the `REMOTE` query mode) that joins a later authority's graphs
    with the boundary therefore has to apply the same rewrite: the two do not meet by IRI;
 3. a graph of `…/<scenario>/graph/` is written once and never overwritten;
-4. a difference must supersede exactly what the parent snapshot states for its profile, otherwise the writer is
-   told where the head is: *"update the network to the head and re-record"*;
+4. a difference must supersede exactly what the parent snapshot states for its profile — the head of its
+   timestamp, or the pin of a new one — otherwise the writer is told where that is: *"update the network to the
+   head and re-record"*;
 5. the chain is linear — a second child along a `pdb:VersionEdge` is refused with *"the linear scheme allows no
    forks"*;
 6. versions only grow, by rank: *"version '20' (rank 20) is not above the parent '30' (rank 30) of (…): a new
@@ -683,7 +684,11 @@ with the first-root guard behind it):
    state other modelling authorities: the snapshot is stored under the one its address names);
 8. nothing crosses a scenario, and nothing but the shared boundary crosses a modelling authority: every
    `pdb:parent`, `pdb:member`, `pdb:state` and `pdb:full` of a snapshot points inside its scenario, and a parent is
-   always of the same authority.
+   always of the same authority;
+9. a new timestamp hangs off its **pin**, any snapshot of another timestamp of its tree: by default the latest
+   rollover at or before it for an ingestion and the deepest snapshot stating what the differences supersede for a
+   recorded change ([Timestamps](#timestamps-and-one-tree-per-modelling-authority)); a pin is refused for a
+   timestamp that exists.
 
 Concurrent writers: the guard decides, the loser gets a `RdfDbConflictException` naming the rule, and there is no
 retry. Writers of two authorities never conflict — every guard is scoped by the authority — with one exception:
@@ -771,8 +776,9 @@ versions, or once per timestamp. It is idempotent and is not on any hot path.
 
 Schema v1 above, plus the snapshot nodes, the version registry and the schema marker. Every v1 model node stays
 valid and is read unchanged. Schema 4 differs from schema 3 in the version: a snapshot's `pdb:version` is a
-registered name (a plain string) where it was an `xsd:integer`, and the `pdb:Version` nodes and `pdb:rev` /
-`pdb:permissive` on the schema node are new.
+registered name (a plain string) where it was an `xsd:integer`, the `pdb:Version` nodes and `pdb:rev` /
+`pdb:permissive` on the schema node are new, a snapshot may carry `pdb:rollover true`, and a `pdb:TimestampEdge`
+may point at any snapshot of the tree instead of one of the base chain.
 
 ```turtle
 @prefix pdb: <http://powsybl.org/ns/rdfdb#> .
@@ -791,7 +797,7 @@ registered name (a plain string) where it was an `xsd:integer`, and the `pdb:Ver
 
 be:1 a pdb:Snapshot ; pdb:scenario "2016-01-01" ; pdb:modellingAuthority "http://elia.be/CGMES/2.4.15" ;
     pdb:timestamp "2016-01-01T00:00:00Z"^^xsd:dateTime ; pdb:version "1" ; pdb:kind pdb:Full ; pdb:depth 0 ;
-    pdb:timestampRoot be:1 ;
+    pdb:timestampRoot be:1 ; pdb:rollover true ;   # every root is a rollover
     pdb:member <urn:uuid:eq-1>, <urn:uuid:ssh-1>, <urn:uuid:eqbd> ;   # what this snapshot adds
     pdb:state  <urn:uuid:eq-1>, <urn:uuid:ssh-1>, <urn:uuid:eqbd> ;   # what a reader is at once it reaches it
     pdb:full   <urn:uuid:eq-1>, <urn:uuid:ssh-1>, <urn:uuid:eqbd> .   # where a materialisation may start
@@ -815,6 +821,12 @@ be:3 a pdb:Snapshot ; pdb:version "3" ; pdb:kind pdb:Diff ; pdb:parent be:2 ; �
     pdb:full <urn:uuid:cfg-3> .                     # the custom profile's state, no checkpoint
 <urn:uuid:cfg-3> a md:FullModel ; pdb:kind pdb:Full ; pdb:subset "CFG" ; pdb:snapshot be:3 ;
     pdb:graph "http://powsybl.org/rdfdb/2016-01-01/graph/urn%3Auuid%3Acfg-3" .   # + the v1 terms
+
+# a timestamp root: pdb:TimestampEdge to its pin, here a version of the base flagged by rollover(…)
+<http://powsybl.org/rdfdb/2016-01-01/http%3A%2F%2Felia.be%2FCGMES%2F2.4.15/snapshot/2016-01-01T12%3A15%3A00Z/1>
+    a pdb:Snapshot ; pdb:timestamp "2016-01-01T12:15:00Z"^^xsd:dateTime ; pdb:version "1" ; pdb:kind pdb:Diff ;
+    pdb:parent be:2 ; pdb:edge pdb:TimestampEdge ; pdb:depth 2 ; … .
+be:2 pdb:rollover true .
 
 # the root of a second authority links the same boundary model and uploads nothing of it
 <http://powsybl.org/rdfdb/2016-01-01/http%3A%2F%2Ftennet.nl%2FCGMES%2F2.4.15/snapshot/2016-01-01T00%3A00%3A00Z/1>
@@ -899,6 +911,9 @@ is between two medians of the same warm state.
   Fuseki, measured in the module build — the level of the exact addresses before the registry (0.8 / 9.3 ms and
   3.9 / 100 ms). An earlier form that joined the registry node of every snapshot of the moment took 8.6 / 81 ms
   and 10 / 136 ms.
+* **Timestamps.** Ingesting a new timestamp from files is at most nine requests (the default pin is one query and
+  replaced the second head lookup); a rollover of a one-profile timestamp eight (its checkpoint, the flag and the
+  read-back); `changesBetween` three; `dropTimestamp` three. Asserted by `RdfDbRequestCountTest`.
 * Planning, fetching and composing a fifty-difference chain stays well under 100 ms on both backends (40 ms on
   Fuseki, 4 ms in process), which is the bound the build asserts.
 * **Target missed: the plan query at chain depth fifty.** It was budgeted at 10 ms and takes 31 ms on loopback
@@ -922,43 +937,113 @@ A day is not one grid state but ninety-six of them, and a study run is another d
 inside the tree of one modelling authority, and they are not the same kind of key:
 
 ```
-scenario "2016-01-01"   (one metadata graph, one boundary)          scenario "2016-01-02"
-  authority BE                         authority NL                   ...no edge of any kind...
-  00:00  1 ──── 2 ──── 3               00:00  1 ──── 2                 the same structure again
-         │      │                             │
-         │      └── 08:30  1 ── 2             └── 08:30  1
-         └── 08:15  1                  pdb:TimestampEdge down, pdb:VersionEdge across
+scenario "2016-01-01"   (one metadata graph, one boundary)               scenario "2016-01-02"
+  authority BE                                     authority NL             ...no edge of any kind...
+  00:00 *1 ──── 2 ──── 3                           00:00 *1 ──── 2           the same structure again
+         │      │                                         │
+         │      └── 08:30  1 ── 2                         └── 08:30  1
+         ├── 08:15  1
+         └── 12:00 *1 ── 2         (a rollover: the equipment of the day moved at noon)
+                │
+                ├── 12:15  1
+                └── 12:30  1
+
+  *  a rollover (pdb:rollover true), checkpointed: every root, and what a writer flags
+  │  pdb:TimestampEdge from a timestamp root down to its pin; ── pdb:VersionEdge across
 
   assembly(08:30, null) = { BE: (BE, 08:30, 2), NL: (NL, 08:30, 1) }   — the CGM of that moment, one query
 ```
 
 **Versions are the inner dimension** because they change more often — every study run adds one — while the
-timestamps of a day are fixed by its schedule. So a timestamp is a *root* snapshot pinned to a version of the
-**base chain of its own authority** by a `pdb:TimestampEdge`, with a version chain of its own below it. Three
-things follow:
+timestamps of a day are fixed by its schedule. So a timestamp is a *root* snapshot linked by a `pdb:TimestampEdge`
+to its **pin**, with a version chain of its own below it. A pin is any snapshot of another timestamp of the **same
+tree** — the authority's base, a version of the base, or another timestamp — and it is chosen once, when the
+timestamp is created:
 
-* every timestamp is "the base plus a handful of differences", however many study versions the other timestamps
+* an **ingested** timestamp (`putAsDiff`) is compared against and hangs off the **latest rollover at or before
+  it** — the root until a later snapshot is flagged — or the pin the caller names;
+* a **recorded** change (`putDiff`, `RdfDbExport.export`) hangs off the **deepest snapshot of the tree that states
+  what its differences supersede** — where the recording network was — or the pin the caller names, which must
+  state them (*"supersedes … but the pin (…) is at …"*);
+* a pin is refused for a timestamp that exists: its new versions grow on its head (*"… already exists, and a pin is
+  chosen when a timestamp is created"*).
+
+Three things follow:
+
+* every timestamp is "its pin plus a handful of differences", however many study versions the other timestamps
   accumulate, which is what keeps a fetch of any timestamp cheap;
 * a walk from one timestamp to another of the same authority is the ordinary lowest-common-ancestor plan: up the
-  first timestamp's versions, up to the pin, then down into the second. Two fast differences, one composed update;
-* a timestamp root may only derive from the **base** chain. A client sitting at 08:30 that wants to write 08:45
-  first brings itself back to the base head — which is fast when its own differences are fast — and is told so:
-  *"timestamp roots derive from the base timestamp of modelling authority 'A' of scenario 'S'; update the network
-  to the base head first"*.
+  first timestamp's versions to their common pin, then down into the second. Two fast differences, one composed
+  update — between two timestamps of one rollover's afternoon the path never touches the morning;
+* `verify()` checks the shape: a timestamp root hangs off a snapshot of its own tree at another timestamp, and a
+  version off one of its own timestamp.
 
-Writing one is the ordinary export, with the timestamp in the address:
+### Rollovers: roll over when the equipment drifts, not on churn
+
+A day drifts. In the morning every timestamp is "the base plus a handful of differences"; by the evening the
+equipment of the day may have moved so far from the base that every ingestion stores the same drift again, as a
+slow equipment difference no in-place update reads. A **rollover** moves the default pin forward:
+
+```java
+SnapshotCatalog catalog = db.snapshots("2016-01-01");
+catalog.putAsDiff(filesOf1200, null, SnapshotRef.latestAt("2016-01-01", mas, at1200), null, params, rn);
+catalog.lastIngestStatistics().forwardStatements().get(Profiles.EQ);   // the equipment delta against its pin
+catalog.rollover(SnapshotRef.latestAt("2016-01-01", mas, at1200));     // flag it, and checkpoint it at once
+catalog.putAsDiff(filesOf1215, null, SnapshotRef.latestAt("2016-01-01", mas, at1215), null, params, rn);
+// 12:15 is compared against 12:00: its difference is the change since noon, a fast one when only the schedule moved
+catalog.putAsDiff(filesOf1230, null, SnapshotRef.latestAt("2016-01-01", mas, at1230), null,
+        SnapshotRef.latestAt("2016-01-01", mas, at0830), params, rn);   // or name the pin
+```
+
+`rollover(ref)` writes `pdb:rollover true` on the snapshot and runs `Checkpoint.create` on it in the same call:
+every timestamp pinned to it starts its materialisation there, so the chain above it — the slow drift included —
+is folded once, on the server. A load of 12:15 then fetches 12:00's full graphs and applies one difference; an
+update from 12:00 to 12:15 applies one. The call is idempotent, and it changes nothing that was written before: a
+pin is chosen when a timestamp is written, so 08:15, ingested before the rollover, stays pinned to the root, and so
+does a timestamp before noon ingested afterwards.
+
+**The drift rule: roll over when the equipment delta against the pin grows, not on churn.** A schedule — the
+steady state hypothesis — changes every timestamp, and its differences are small and fast whatever the pin; rolling
+over for it only lengthens the tree. The equipment is what drifts: watch
+`lastIngestStatistics().forwardStatements().get(EQ)` (or `fast().get(EQ)`) of the ingestions, and roll over at the
+first timestamp of a run whose equipment delta against the pin keeps growing — typically a few times a day, at a
+topology change. The layer does not roll over by itself; the rule is the caller's loop over those statistics.
+
+### Dropping a timestamp, and the changes between two
+
+```java
+catalog.dropTimestamp(mas, at1230);   // the root and every version of 12:30, with their graphs
+DifferenceModelSet changes = RdfDbNetworkLoader.changesBetween(db,
+        SnapshotRef.latestAt("2016-01-01", mas, at1215), SnapshotRef.latestAt("2016-01-01", mas, at0830));
+```
+
+`dropTimestamp` deletes a timestamp's root and its versions — their nodes, their differences, their whole custom
+graphs and their checkpoint copies — when nothing depends on them. A timestamp another one is pinned to is refused,
+naming every dependant, and nothing is dropped: there is no cascade, because dropping a pin would take every
+timestamp ingested against it along. The base timestamp is the tree itself and is never dropped; another day is
+another scenario, cleared as a whole.
+
+`changesBetween(db, from, to)` answers what a network at `from` has to apply to be at `to`, as one
+`DifferenceModelSet`: the path between the two, its differences fetched, the ones up out of `from` turned round
+and the ones down into `to` as they are, composed exactly as an update composes them. Each composed difference
+carries the identity of `to`'s model and supersedes `from`'s, so `CgmesDiffImport.apply` takes the network from
+one to the other. It is a statement set, not an in-place update: it is made whether or not the differences are
+fast-route capable and however long the path. Three requests (the plan, the differences, the end models); two
+snapshots of different authorities or scenarios are refused with the planner's reason.
+
+Writing a timestamp from a network is the ordinary export, with the timestamp in the address:
 
 ```java
 String mas = "http://elia.be/CGMES/2.4.15";
 Instant at0830 = Instant.parse("2016-01-01T08:30:00Z");
-// a recorder at the base head writes the 08:30 timestamp of that day: version 1 of it
+// a recorder at the base head writes the 08:30 timestamp of that day: version 1 of it, pinned to the base head
 RdfDbExport.export(network, events, db, SnapshotRef.latestAt("2016-01-01", mas, at0830), options, reportNode);
 // a study on top of it: version 2
 RdfDbExport.export(network, events, db, SnapshotRef.latestAt("2016-01-01", mas, at0830), options, reportNode);
 
-db.snapshots("2016-01-01").timestamps(mas);           // one row per timestamp: root, head, how many versions
+db.snapshots("2016-01-01").timestamps(mas);           // one row per timestamp: root, head, versions, pin
 db.snapshots("2016-01-01").versions(mas, at0830);     // the chain inside one timestamp
-Network n = RdfDbNetworkLoader.load(db, SnapshotRef.of("2016-01-01", mas, at0830, 2), null, params, rn);
+Network n = RdfDbNetworkLoader.load(db, SnapshotRef.of("2016-01-01", mas, at0830, "2"), null, params, rn);
 ```
 
 ### Ingesting a day from its files
@@ -971,8 +1056,9 @@ db.snapshots("2016-01-01").putAsDiff(filesOf0830, null, SnapshotRef.latestAt("20
         null, importParams, reportNode);   // authority from the files, EQ and SSH compared
 ```
 
-It materialises the parent state as triples (the first half of an ordinary materialisation, from the cache after
-the first timestamp of the day), parses the new files, and compares the two graphs profile by profile. What comes
+It materialises the state of its pin as triples — the latest rollover at or before the timestamp, or the pin the
+caller names (above); the first half of an ordinary materialisation, from the cache after the first timestamp of a
+rollover — parses the new files, and compares the two graphs profile by profile. What comes
 out is an ordinary difference model, so every rule, guard and message of a recorded difference applies to an
 ingested one.
 
@@ -1009,8 +1095,8 @@ Two rules of the timestamp dimension, both enforced by the guard of the write:
    timestamp of its snapshot, which is the ordinary case for a change recorded on a network.
 
 Inside one timestamp the version chain stays linear, exactly as on the base chain. What is *not* linear any more is
-`md:Model.Supersedes` of a base model: every timestamp of a day supersedes the same base steady-state model, which
-is the fan in the picture above. That is deliberate — it is what "base plus differences per timestamp" means — and
+`md:Model.Supersedes` of a pinned model: every timestamp pinned to one rollover supersedes the same steady-state
+model, which is the fan in the picture above. That is deliberate — it is what "base plus differences per timestamp" means — and
 the linearity that matters is guarded on the snapshot (one root per timestamp, one version successor per snapshot)
 rather than on the model.
 
@@ -1290,6 +1376,11 @@ be reproduced: the same build measured 319, 354 and 763 ms for the warm thin day
 and 10, while `lv : sep` stayed between 9 and 11 throughout.
 
 ## Limitations of this work package
+
+* **Rollovers are explicit.** The layer never flags a rollover by itself: the drift rule
+  ([Rollovers](#rollovers-roll-over-when-the-equipment-drifts-not-on-churn)) is the caller's loop over
+  `lastIngestStatistics()`. A rollover changes the default pin of timestamps written afterwards only; nothing is
+  re-pinned, and `dropTimestamp` never cascades.
 
 * **A CGM is a query and several loads; one network per IGM.** The IGMs of one day are the trees of the modelling
   authorities of one scenario, and `SnapshotCatalog.assembly(timestamp, version)` names the snapshot of each at one

@@ -165,7 +165,10 @@ public final class RdfDbVocabulary {
     /** Value of {@link #EDGE} for the link from a snapshot to the previous version of the same timestamp. */
     public static final String VERSION_EDGE = NS + "VersionEdge";
 
-    /** Value of {@link #EDGE} for the link from a timestamp root to the base-chain snapshot it derives from. */
+    /**
+     * Value of {@link #EDGE} for the link from a timestamp root to its pin: any snapshot of another timestamp of the
+     * same tree.
+     */
     public static final String TIMESTAMP_EDGE = NS + "TimestampEdge";
 
     /**
@@ -228,8 +231,9 @@ public final class RdfDbVocabulary {
     public static final String ARCHIVE_LOCATION = NS + "archiveLocation";
 
     /**
-     * Whether a snapshot is a rollover, an {@code xsd:boolean}; absent means {@code false}: a snapshot later
-     * timestamps of its tree may be ingested against.
+     * Whether a snapshot is a rollover, an {@code xsd:boolean}; absent means {@code false}: the snapshot later
+     * timestamps of its tree are ingested against by default, written on every root and by
+     * {@code SnapshotCatalog.rollover}.
      */
     public static final String ROLLOVER = NS + "rollover";
 

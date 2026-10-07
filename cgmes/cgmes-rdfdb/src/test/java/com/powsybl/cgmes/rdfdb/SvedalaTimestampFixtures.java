@@ -359,8 +359,8 @@ final class SvedalaTimestampFixtures {
      * <p>A window rather than a random draw, so that every line is out for a few quarter hours and back
      * afterwards &mdash; which is what a maintenance schedule looks like from the outside, and which means the
      * day as a whole both removes and re-adds objects. Every single timestamp is nonetheless a difference against
-     * the <em>anchor</em>, because a timestamp root pins to the base chain, so a removal is a removal in every one
-     * of them.</p>
+     * the <em>anchor</em>, because an ingested timestamp is pinned to the latest rollover, here the root, so a
+     * removal is a removal in every one of them.</p>
      */
     private static List<String> omittedLines(int index) {
         List<String> all = lines();

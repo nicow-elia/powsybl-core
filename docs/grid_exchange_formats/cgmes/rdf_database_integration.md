@@ -150,7 +150,8 @@ change could not be *written*, not a difference could not be *applied*.
 ```{mermaid}
 flowchart TD
     A["instance files of one timestamp"] --> H["header-only pass: the modelling authority<br/>(address, or EQ and SSH headers)"]
-    H --> PL["MaterializationPlan of the parent<br/>(VersionGraph.materialization)"]
+    H --> PN["the pin: the head of an existing timestamp, else the one named,<br/>else the latest rollover at or before it (one query)"]
+    PN --> PL["MaterializationPlan of the pin<br/>(VersionGraph.materialization)"]
     PL --> P["IngestParser: compared profiles in full,<br/>the others and unchanged ones header only"]
     PL --> PS["parent state as StatementDiff.Index<br/>(RdfDbMaterializer.materializeStore, cached per day)"]
     P --> B{"boundary is the scenario's?"}
@@ -161,7 +162,8 @@ flowchart TD
     DM --> PD["putDiff: the export path from RdfDbDifferenceSink on,<br/>FastRouteCapabilities.check / checkVariantSafe on the statements"]
 ```
 
-`SnapshotCatalog.putAsDiff` is the only writer that reads instance files and compares them. The comparison is
+`SnapshotCatalog.putAsDiff` is the only writer that reads instance files and compares them, against the snapshot
+the new timestamp is pinned to (the latest rollover, checkpointed when it was flagged, unless the caller names one). The comparison is
 rdfdb's (`TripleDiffCalculator`, on `StatementDiff.Index`es of the conversion's statement model); the fast-route
 verdict of an ingested timestamp is then computed on the *statements* exactly as for a recorded change, never on
 the files.

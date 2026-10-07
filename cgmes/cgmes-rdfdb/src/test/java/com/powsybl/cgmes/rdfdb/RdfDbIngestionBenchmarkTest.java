@@ -45,9 +45,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * com.powsybl.commons.datasource.ReadOnlyDataSource, SnapshotRef, Properties, ReportNode)}, which is what a TSO
  * actually has: not a network it changed, but ninety-five sets of exported files.</p>
  *
- * <p>Every timestamp is a difference against the <em>anchor</em>, not against its predecessor &mdash; a timestamp
- * root pins to the base chain &mdash; so the parent state is the same one ninety-five times over, which is the
- * whole reason the graph cache is there and the reason the first timestamp is reported apart from the rest.</p>
+ * <p>Every timestamp is a difference against the <em>anchor</em>, not against its predecessor &mdash; an ingested
+ * timestamp is pinned to the latest rollover, here the root &mdash; so the parent state is the same one
+ * ninety-five times over, which is the whole reason the graph cache is there and the reason the first timestamp is
+ * reported apart from the rest.</p>
  *
  * <h2>The three shapes of a day</h2>
  * <ul>
