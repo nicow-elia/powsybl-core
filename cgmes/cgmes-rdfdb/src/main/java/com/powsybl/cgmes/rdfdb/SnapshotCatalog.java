@@ -479,7 +479,8 @@ public final class SnapshotCatalog {
      *
      * <p>A custom profile ({@link Profiles}) is always stored whole, so every one the snapshot holds is here; so is
      * a standard profile whose state is still the instance file it started from. A profile whose state is a
-     * difference has no single graph and is not. Read a graph with {@link RdfDbConnection#fetchGraph}.</p>
+     * difference has no single graph and is not; nor is a checkpoint copy of the snapshot, which is no state model
+     * but a cache of one. Read a graph with {@link RdfDbConnection#fetchGraph}.</p>
      *
      * @param ref the address of the snapshot
      * @return the graph IRI per profile, as the metadata graph records it

@@ -258,7 +258,7 @@ network.removeListener(recorder);
 
 RdfDbExport.Result result = RdfDbExport.export(network, recorder.getEvents(), db, "2026-09-18",
         new CgmesDiffExport.ExportOptions());
-StoredModel stored = result.get(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow();
+StoredModel stored = result.get(Profiles.SSH).orElseThrow();
 ```
 
 `RdfDbExport.export` translates the recorded changes exactly as a file export does and hands the result to
@@ -278,7 +278,7 @@ metadata, so a reader sees either nothing or a complete, referenced difference, 
 base gets an `RdfDbConflictException` naming the rule it broke. There is no locking and no retry: the loser loads
 the head and records its change again.
 
-A difference larger than `RdfDbDifferenceSink.SINGLE_REQUEST_MAX_STATEMENTS` (20 000 statements) uploads its data
+A difference larger than `RdfDbDifferenceSink.SINGLE_REQUEST_MAX_STATEMENTS` (1 000 statements) uploads its data
 graphs first and then sends the guarded request with the metadata alone. That is safe for the same reason the
 design is: a data graph no node refers to is invisible to every reader, and it is dropped again when the guard
 refuses. `ModelCatalog.orphanGraphs()` lists the ones a crash left behind.
@@ -539,7 +539,7 @@ one metadata graph and **share its boundary**.
 
 A profile is a **name**, `[A-Z][A-Z0-9_]*`. The nine CGMES subsets are constants of `Profiles` (`Profiles.EQ`,
 `SSH`, `TP`, `SV`, `DY`, `DL`, `GL`, `EQ_BD`, `TP_BD`; `Profiles.STANDARD` in the order of `CgmesSubset`,
-`Profiles.BOUNDARY` the two boundary ones), and every map and projection of the API is keyed by the name
+`Profiles.isBoundary` for the two boundary ones), and every map and projection of the API is keyed by the name
 (`Set<String>`, `Map<String, …>`, listed in `Profiles.ORDER`: the nine first, then the custom ones by name). A
 projection with a malformed name is refused (`Profiles.check`).
 
@@ -642,7 +642,7 @@ stale cache costs a request, never a wrong snapshot. The listings join the rank 
 ### Writing snapshots
 
 ```java
-try (RdfDbConnection db = RdfDbConnection.open(RdfDatabase.sparql("http://localhost:3030/ds"))) {
+try (RdfDbConnection db = RdfDbConnection.open(RdfDatabase.fuseki("http://localhost:3030/ds"))) {
     SnapshotCatalog catalog = db.snapshots("2016-01-01");
 
     // The root of one TSO's tree: authority and timestamp from the files, version "1" of a permissive registry
@@ -746,6 +746,10 @@ LoadResult cgm = RdfDbNetworkLoader.loadComposed(db,
   graphs whose subject and property an earlier authority's graphs state
   (`DELETE { GRAPH ?gi { ?s ?p ?o } } WHERE { VALUES ?ge { … } VALUES ?gi { … } GRAPH ?ge { ?s ?p ?x }
   GRAPH ?gi { ?s ?p ?o } }`). The order of `authorities` is the only composition rule; there is no other.
+  First wins per (subject, property): for a property with several values the earlier authority's whole value set
+  wins, and statements only the later one makes are kept. Two **different objects** stating something about one
+  thing — each IGM's `SvVoltage` of a shared boundary `TopologicalNode`, say — are both kept, exactly as in a flat
+  import of the assembled files; the conversion decides between them.
 * **The flat conversion.** The store is handed to the unchanged conversion, which pairs the tie lines on the boundary
   nodes exactly as for the assembled files: MicroGrid BE + NL compose into the network of the assembled CGM files,
   XIIDM-identical but for the network identifier (one of the EQ model identifiers, as for the files). Every
@@ -762,7 +766,7 @@ LoadResult cgm = RdfDbNetworkLoader.loadComposed(db,
   chains. The result is the first written tree's; `composition()` names every written snapshot. A change on an
   object of a tree the network does not own refuses the whole export before anything is written: *"the change on
   <mRID> belongs to modelling authority 'NL…', which this composed network does not own (owned: [BE…]); nothing was
-  written"*. The two writes are two requests, not one transaction: every address is resolved before the first one,
+  written"*. The two writes are two guarded writes, not one transaction: every address is resolved before the first one,
   so only a write conflict on the second tree can leave the first written.
 * **Read-only for the in-place routes.** `update` (every form, with or without a target variant), `exportVariant`,
   `exportPerVariant` and the appending `export(…, scenario, …)` refuse a composed network: *"network … is a
@@ -776,7 +780,7 @@ LoadResult cgm = RdfDbNetworkLoader.loadComposed(db,
 
 ```java
 Network n = RdfDbNetworkLoader.load(db, SnapshotRef.of("2016-01-01", mas, null, "ID"), null, params, reportNode);
-Network ssh = RdfDbNetworkLoader.load(db, ref, Set.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS),
+Network ssh = RdfDbNetworkLoader.load(db, ref, Set.of(Profiles.EQ, Profiles.SSH),
         null, params, reportNode);                                       // a profile projection
 UpdateResult r = RdfDbNetworkLoader.update(n, db, SnapshotRef.of("2016-01-01", mas, null, "RT"), options, params, rn);
 ```
@@ -1081,7 +1085,8 @@ does a timestamp before noon ingested afterwards.
 steady state hypothesis — changes every timestamp, and its differences are small and fast whatever the pin; rolling
 over for it only lengthens the tree. The equipment is what drifts: watch
 `lastIngestStatistics().forwardStatements().get(EQ)` (or `fast().get(EQ)`) of the ingestions, and roll over at the
-first timestamp of a run whose equipment delta against the pin keeps growing — typically a few times a day, at a
+first timestamp of a run whose equipment delta against the pin is large, or has grown for the second timestamp in
+a row (noticing growth takes two ingestions) — typically a few times a day, at a
 topology change. The layer does not roll over by itself; the rule is the caller's loop over those statistics.
 
 ### Archiving the states before a cutoff
@@ -1249,7 +1254,7 @@ possible &mdash; whether a `FULL_RELOAD` with a new network object can still hap
 ```java
 // A day of 96 timestamps in one network, version 1 of each
 List<VariantRequest> requests = day.stream()
-        .map(instant -> VariantRequest.of(SnapshotRef.of("2016-01-01", mas, instant, 1))).toList();
+        .map(instant -> VariantRequest.of(SnapshotRef.of("2016-01-01", mas, instant, "1"))).toList();
 VariantLoadResult loaded = RdfDbNetworkLoader.loadVariants(db, "2016-01-01", requests,
         new RdfDbVariantLoadOptions(), null, params, reportNode);
 Network network = loaded.network();
@@ -1257,7 +1262,7 @@ network.getVariantManager().setWorkingVariant("2016-01-01T08:30:00Z");
 LoadFlow.run(network);                       // the state of 08:30, the other variants untouched
 
 // One more variant, created on demand
-RdfDbNetworkLoader.update(network, db, SnapshotRef.of("2016-01-01", mas, at0830, 2),
+RdfDbNetworkLoader.update(network, db, SnapshotRef.of("2016-01-01", mas, at0830, "2"),
         new RdfDbUpdateOptions().setTargetVariant("study@08:30"), params, reportNode);
 ```
 
