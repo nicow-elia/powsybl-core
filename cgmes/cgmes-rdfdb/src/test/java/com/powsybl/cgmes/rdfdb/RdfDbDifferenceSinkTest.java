@@ -9,6 +9,7 @@
 package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
+import com.powsybl.cgmes.conversion.diff.FastRouteCapabilities;
 import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
@@ -165,6 +166,7 @@ class RdfDbDifferenceSinkTest {
             assertThat(read.header().version()).isEqualTo(written.header().version());
             assertThat(read.header().supersedes()).isEqualTo(written.header().supersedes());
             assertThat(read.header().cimNamespace()).isEqualTo(written.header().cimNamespace());
+            assertThat(node.capabilities()).isEqualTo(FastRouteCapabilities.version());
         }
     }
 

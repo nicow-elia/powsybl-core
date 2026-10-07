@@ -716,7 +716,8 @@ public final class ModelCatalog {
                     string(RdfDbVocabulary.SUBJECT_BASE),
                     string(RdfDbVocabulary.CIM_NAMESPACE),
                     depth == null ? 0 : (int) longOf(depth, 0),
-                    variantSafeOf(one(RdfDbVocabulary.VARIANT_SAFE))));
+                    variantSafeOf(one(RdfDbVocabulary.VARIANT_SAFE)),
+                    string(RdfDbVocabulary.CAPABILITIES)));
         }
     }
 }

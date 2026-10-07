@@ -564,6 +564,8 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
                 .append(SparqlText.bool(p.fast)).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.VARIANT_SAFE)).append(' ')
                 .append(SparqlText.bool(p.variantSafe)).append(" ; ")
+                .append(SparqlText.iri(RdfDbVocabulary.CAPABILITIES)).append(' ')
+                .append(SparqlText.str(FastRouteCapabilities.version())).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.TRIPLE_COUNT)).append(' ')
                 .append(SparqlText.integer((long) p.forward.size() + p.reverse.size())).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.CHAIN_DEPTH)).append(' ')

@@ -8,6 +8,7 @@
 
 package com.powsybl.cgmes.rdfdb;
 
+import com.powsybl.cgmes.conversion.diff.FastRouteCapabilities;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
@@ -349,6 +350,8 @@ class VersionGraphTest {
             assertThat(safe.steps()).isNotEmpty();
             assertThat(safe.steps()).allMatch(step -> Boolean.TRUE.equals(step.model().variantSafe()));
             assertThat(safe.variantUnsafeSteps()).isEmpty();
+            // ...and the capability version of the writer, which decides whether a reader trusts the two flags
+            assertThat(safe.steps()).allMatch(step -> FastRouteCapabilities.version().equals(step.model().capabilities()));
         }
     }
 }

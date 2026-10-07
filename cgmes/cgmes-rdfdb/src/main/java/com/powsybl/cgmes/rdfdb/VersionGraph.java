@@ -378,7 +378,7 @@ public final class VersionGraph {
                 row.get("mfast") != null && SnapshotRows.booleanOf(row.get("mfast")),
                 longOf(row.get("n"), -1L), text(row, "sbase"), text(row, "cim"),
                 (int) longOf(row.get("cdepth"), -1L),
-                row.get("vsafe") == null ? null : SnapshotRows.booleanOf(row.get("vsafe")));
+                row.get("vsafe") == null ? null : SnapshotRows.booleanOf(row.get("vsafe")), text(row, "cap"));
     }
 
     /**
@@ -480,7 +480,7 @@ public final class VersionGraph {
         // branch does not describe is dropped below. The type made the in-process engine join it first and
         // evaluate the start of every side once per snapshot of the scenario
         String query = RdfDbVocabulary.PREFIXES
-                + "SELECT ?side ?snap ?p ?o ?sub ?graph ?fwd ?rev ?mfast ?vsafe ?n ?sbase ?cim ?cdepth ?rank"
+                + "SELECT ?side ?snap ?p ?o ?sub ?graph ?fwd ?rev ?mfast ?vsafe ?cap ?n ?sbase ?cim ?cdepth ?rank"
                 + " WHERE { GRAPH " + SparqlText.iri(metaGraph) + " {"
                 + " {" + starting + " ?start pdb:parent* ?snap }"
                 + " UNION"
@@ -491,7 +491,7 @@ public final class VersionGraph {
                 + "     OPTIONAL { ?o pdb:forwardGraph ?fwd ; pdb:reverseGraph ?rev ;"
                 + "       pdb:fastPredicatesOnly ?mfast ; pdb:subjectBase ?sbase ; pdb:cimNamespace ?cim ;"
                 + "       pdb:chainDepth ?cdepth . OPTIONAL { ?o pdb:tripleCount ?n }"
-                + "       OPTIONAL { ?o pdb:variantSafe ?vsafe } } }" + SnapshotRows.RANK_CLAUSE + "} } }";
+                + "       OPTIONAL { ?o pdb:variantSafe ?vsafe } OPTIONAL { ?o pdb:capabilities ?cap } } }" + SnapshotRows.RANK_CLAUSE + "} } }";
 
         List<Map<String, Value>> rows = connection.sparql(scenario).select(query);
         List<Map<String, Value>> detailRows = new ArrayList<>();

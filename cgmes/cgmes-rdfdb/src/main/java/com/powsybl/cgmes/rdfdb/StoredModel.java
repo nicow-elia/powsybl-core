@@ -57,6 +57,9 @@ import java.util.Objects;
  *                             difference was written. {@code null} means <em>unknown</em>: a store written before
  *                             this flag existed says nothing, and a planner then proceeds optimistically and lets
  *                             the network aware check at apply time decide. Correctness never depends on it
+ * @param capabilities         the capability version of the writer of a difference,
+ *                             {@code FastRouteCapabilities.version()} when it was written: the table that reached
+ *                             {@code fastPredicatesOnly} and {@code variantSafe}. {@code null} for a full model
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
@@ -65,7 +68,7 @@ public record StoredModel(String scenario, String id, String subset, StoredModel
                           ZonedDateTime scenarioTime, ZonedDateTime created, String modelingAuthoritySet,
                           List<String> profiles, List<String> dependentOn, List<String> supersedes,
                           boolean fastPredicatesOnly, long tripleCount, String subjectBase, String cimNamespace,
-                          int chainDepth, Boolean variantSafe) {
+                          int chainDepth, Boolean variantSafe, String capabilities) {
 
     /** What a stored model is. */
     public enum Kind {

@@ -9,6 +9,7 @@
 package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conversion.diff.CgmesDiffImport;
+import com.powsybl.cgmes.conversion.diff.FastRouteCapabilities;
 import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
@@ -178,6 +179,9 @@ class RdfDbTimestampFlowTest {
                     Set.of(EQ), t1.ref(), params(), ReportNode.NO_OP);
             assertThat(deeper.state().get(SSH)).isEqualTo(t1.state().get(SSH));
             assertThat(deeper.depth()).isGreaterThan(t1.depth());
+            // An ingested difference names the capability version of its writer, as a recorded one does
+            assertThat(db.catalog(S).models(deeper.members()).values()).isNotEmpty()
+                    .allMatch(model -> FastRouteCapabilities.version().equals(model.capabilities()));
 
             // The sender is at 11:00 and never had 11:15's equipment: its change is filed under 11:00
             SnapshotInfo t3 = Changes.export(sender, db, ref(S, 1, T3), n -> Changes.moveLoad(n, 16.0)).snapshot();
