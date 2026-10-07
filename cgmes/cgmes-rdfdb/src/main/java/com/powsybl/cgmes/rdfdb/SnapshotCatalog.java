@@ -296,7 +296,10 @@ public final class SnapshotCatalog {
     /**
      * Resolve an address to the snapshot it names.
      *
-     * <p>One request: an open timestamp is resolved to the root's of that modelling authority inside it.</p>
+     * <p>One request: an open timestamp is resolved to the root's of that modelling authority inside it, and a named
+     * version to the snapshot of that moment ranking highest at or below it &mdash; {@code "RT"} reads
+     * {@code "ID"} where the timestamp did not reach {@code "RT"} &mdash; unless the address is
+     * {@linkplain SnapshotRef#exactly() exact}.</p>
      *
      * @param ref the address; a {@code null} version means the head of the chain, a {@code null} timestamp the base
      *            timestamp of the modelling authority's tree
@@ -343,10 +346,14 @@ public final class SnapshotCatalog {
      *
      * <p>Shared by {@link #find} and the plan query of {@link VersionGraph}, so that an address means the same in
      * both. An open timestamp joins the root of the authority's tree, which is what "the base timestamp" is; an
-     * open version excludes every snapshot that has a version successor, which on a linear chain is the head.</p>
+     * open version excludes every snapshot that has a version successor, which on a linear chain is the head; an
+     * exact version is the snapshot carrying that name. A named version is the snapshot of the moment whose
+     * version ranks highest at or below the name's rank: a sub-select over the {@link #versionCandidates candidates},
+     * ordered by rank, limited to one &mdash; which also makes the engine resolve the address before the plan query
+     * walks {@code pdb:parent*} from it, instead of walking from every snapshot of the moment.</p>
      *
      * @param var the variable, with its {@code ?}; the pattern also uses {@code var} plus {@code Base},
-     *            {@code Root} and {@code Child}
+     *            {@code Root}, {@code Child} and the suffixes of {@link #versionCandidates}
      * @param ref the address, with a modelling authority
      * @return the pattern, ending with a space
      */
@@ -354,21 +361,45 @@ public final class SnapshotCatalog {
         String authority = SparqlText.str(ref.modellingAuthority());
         StringBuilder pattern = new StringBuilder(var).append(" a pdb:Snapshot ; pdb:modellingAuthority ")
                 .append(authority).append(" ; pdb:timestamp ")
-                .append(ref.timestamp() == null ? var + "Base" : SparqlText.dateTime(ref.timestamp()));
-        if (ref.version() != null) {
-            pattern.append(" ; pdb:version ").append(SparqlText.str(ref.version()));
-        }
-        pattern.append(" . ");
+                .append(ref.timestamp() == null ? var + "Base" : SparqlText.dateTime(ref.timestamp()))
+                .append(" . ");
         if (ref.timestamp() == null) {
             pattern.append(var).append("Root pdb:depth ").append(SparqlText.integer(0))
                     .append(" ; pdb:modellingAuthority ").append(authority)
                     .append(" ; pdb:timestamp ").append(var).append("Base . ");
         }
         if (ref.version() == null) {
-            pattern.append("FILTER NOT EXISTS { ").append(var).append("Child pdb:parent ").append(var)
-                    .append(" ; pdb:edge pdb:VersionEdge } ");
+            return pattern.append("FILTER NOT EXISTS { ").append(var).append("Child pdb:parent ").append(var)
+                    .append(" ; pdb:edge pdb:VersionEdge } ").toString();
         }
-        return pattern.toString();
+        if (ref.exact()) {
+            return pattern.append(var).append(" pdb:version ").append(SparqlText.str(ref.version())).append(" . ")
+                    .toString();
+        }
+        return "{ SELECT " + var + " WHERE { " + pattern + versionCandidates(var, ref.version()) + "} ORDER BY DESC("
+                + var + "R) LIMIT 1 } ";
+    }
+
+    /**
+     * The graph pattern that keeps a bound snapshot only when its version ranks at or below a named one.
+     *
+     * <p>The rank of the snapshot's version and the bound are both joined from the registry nodes, in the same
+     * query: a read never uses the cached registry. A name the registry does not hold binds nothing. The snapshot a
+     * named version means is the candidate ranking highest at its moment ({@link #addressPattern}), which on the
+     * linear chain of a moment &mdash; ranks grow along it, every write and every rerank keeps it so &mdash; is also
+     * the deepest one ({@link #assembly}).</p>
+     *
+     * @param var     the snapshot variable; the pattern also uses {@code var} plus {@code N}, {@code Vn},
+     *                {@code R}, {@code Named} and {@code Max}
+     * @param version the version name
+     * @return the pattern, ending with a space
+     */
+    static String versionCandidates(String var, String version) {
+        // No rdf:type on the registry nodes: only they carry pdb:name, and a type pattern made the in-process
+        // engine join every registry node before the name
+        return var + " pdb:version " + var + "N . " + var + "Vn pdb:name " + var + "N ; pdb:rank " + var + "R . "
+                + var + "Named pdb:name " + SparqlText.str(version) + " ; pdb:rank " + var + "Max . FILTER(" + var
+                + "R <= " + var + "Max) ";
     }
 
     /**
@@ -593,21 +624,24 @@ public final class SnapshotCatalog {
      * Every modelling authority of the scenario at one moment: what a CGM is assembled from.
      *
      * <p>A query, not a stored assembly: one request over the scenario's metadata graph, where the trees of all its
-     * authorities live. An authority with no snapshot at that moment (or at that version) is absent from the
-     * answer, never refused: compare the keys with {@link #modellingAuthorities()} to see which. The shared boundary
+     * authorities live. An authority with no snapshot at that moment (or none whose version ranks at or below the
+     * one asked) is absent from the answer, never refused: compare the keys with {@link #modellingAuthorities()} to
+     * see which. The shared boundary
      * is in the {@link SnapshotInfo#state()} of every entry ({@code EQ_BD}, {@code TP_BD}), the same in all of them.
      * Loading the result as one network stays the caller's: load each entry by its {@link SnapshotInfo#ref()} and
      * merge.</p>
      *
      * @param timestamp the moment
-     * @param version   the version name every authority is taken at, or {@code null} for the head of each
+     * @param version   the version name every authority is taken at &mdash; for each, its snapshot of that moment
+     *                  ranking highest at or below it &mdash; or {@code null} for the head of each
      * @return the snapshot per modelling authority, sorted by authority
      */
     public Map<String, SnapshotInfo> assembly(Instant timestamp, String version) {
         Objects.requireNonNull(timestamp);
         SnapshotRef moment = SnapshotRef.of(scenario, null, timestamp, version);
-        String restriction = "?s pdb:timestamp " + SparqlText.dateTime(moment.timestamp())
-                + (version == null ? "" : " ; pdb:version " + SparqlText.str(version)) + " . ";
+        // Every snapshot of the moment, or every one at or below the version; the deepest of each authority wins
+        String restriction = "?s pdb:timestamp " + SparqlText.dateTime(moment.timestamp()) + " . "
+                + (version == null ? "" : versionCandidates("?s", version));
         Map<String, SnapshotInfo> byAuthority = new TreeMap<>();
         snapshotsWhere(restriction, "").values().forEach(info -> byAuthority.merge(info.modellingAuthority(), info,
                 (a, b) -> a.depth() >= b.depth() ? a : b));

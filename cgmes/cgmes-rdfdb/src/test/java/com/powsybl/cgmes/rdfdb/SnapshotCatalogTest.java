@@ -365,7 +365,8 @@ class SnapshotCatalogTest {
             assertThat(heads.get(BE)).isEqualTo(be2);
             assertThat(heads.get(NL)).isEqualTo(nl);
             assertThat(catalog.assembly(BASE, "1")).containsExactlyInAnyOrderEntriesOf(Map.of(BE, be, NL, nl));
-            assertThat(catalog.assembly(BASE, "2")).containsOnlyKeys(BE);
+            // NL never reached "2": at or below it, NL is at "1"
+            assertThat(catalog.assembly(BASE, "2")).containsExactlyInAnyOrderEntriesOf(Map.of(BE, be2, NL, nl));
             assertThat(catalog.assembly(NOON, null)).isEmpty();
         }
     }
@@ -397,6 +398,60 @@ class SnapshotCatalogTest {
             assertThat(catalog.find(SnapshotRef.latest(S, BE))).contains(v2);
             assertThat(catalog.nextVersionName(SnapshotRef.latest(S, BE))).isEqualTo("3");
             assertThat(db.catalog(S).model("urn:uuid:ssh-d2")).isPresent();
+            catalog.verify();
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void aNamedVersionMeansTheHighestRankAtOrBelowIt(String backend) {
+        try (RdfDbConnection db = open(backend)) {
+            SnapshotCatalog catalog = db.snapshots(S);
+            catalog.registry().create(List.of("DA", "ID", "RT", "X"), false);
+            SnapshotInfo base = catalog.putFull(microGridBe(), null, at(S, "DA"), null, params(), ReportNode.NO_OP);
+            SnapshotInfo da = catalog.putDiff(change(base, SSH, "urn:uuid:ssh-da", "11.0"),
+                    SnapshotRef.of(S, BE, NOON, "DA"));
+            SnapshotInfo id = catalog.putDiff(change(da, SSH, "urn:uuid:ssh-id", "12.0"),
+                    SnapshotRef.of(S, BE, NOON, "ID"));
+            SnapshotInfo x = catalog.putDiff(change(id, SSH, "urn:uuid:ssh-x", "13.0"),
+                    SnapshotRef.of(S, BE, NOON, "X"));
+
+            // The moment never reached RT: RT means ID, the highest at or below it; X is above
+            assertThat(catalog.find(SnapshotRef.of(S, BE, NOON, "RT"))).contains(id);
+            assertThat(catalog.find(SnapshotRef.of(S, BE, NOON, "RT").exactly())).isEmpty();
+            assertThatThrownBy(() -> catalog.require(SnapshotRef.of(S, BE, NOON, "RT").exactly()))
+                    .isInstanceOf(RdfDbException.class).hasMessageContaining("holds no snapshot (" + S + ", " + BE
+                            + ", " + NOON + ", =RT)");
+            assertThat(catalog.find(SnapshotRef.of(S, BE, NOON, "DA"))).contains(da);
+            assertThat(catalog.find(SnapshotRef.of(S, BE, NOON, "ID").exactly())).contains(id);
+            assertThat(catalog.find(SnapshotRef.of(S, BE, NOON, "X"))).contains(x);
+            // The base timestamp only carries DA
+            assertThat(catalog.find(at(S, "RT"))).contains(base);
+            // A name the registry does not hold names nothing
+            assertThat(catalog.find(SnapshotRef.of(S, BE, NOON, "nope"))).isEmpty();
+            // The plan query resolves an address the same way
+            UpdatePlan plan = db.versionGraph(S).plan(da.iri(), SnapshotRef.of(S, BE, NOON, "RT"),
+                    new RdfDbUpdateOptions());
+            assertThat(plan.to()).isEqualTo(id.iri());
+            catalog.verify();
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void anAssemblyTakesEachAuthorityAtOrBelowTheVersion(String backend) {
+        try (RdfDbConnection db = open(backend)) {
+            SnapshotCatalog catalog = db.snapshots(S);
+            catalog.registry().create(List.of("DA", "ID", "RT"), false);
+            SnapshotInfo be = catalog.putFull(microGridBe(), null, at(S, "DA"), null, params(), ReportNode.NO_OP);
+            SnapshotInfo nl = catalog.putFull(microGridNl(), null, SnapshotRef.of(S, NL, null, "DA"), null,
+                    params(), ReportNode.NO_OP);
+            SnapshotInfo beId = catalog.putDiff(change(be, SSH, "urn:uuid:ssh-be-id", "12.0"), at(S, "ID"));
+
+            assertThat(catalog.assembly(BASE, "ID")).containsExactlyInAnyOrderEntriesOf(Map.of(BE, beId, NL, nl));
+            assertThat(catalog.assembly(BASE, "RT")).containsExactlyInAnyOrderEntriesOf(Map.of(BE, beId, NL, nl));
+            assertThat(catalog.assembly(BASE, "DA")).containsExactlyInAnyOrderEntriesOf(Map.of(BE, be, NL, nl));
+            assertThat(catalog.assembly(NOON, "ID")).isEmpty();
             catalog.verify();
         }
     }

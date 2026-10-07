@@ -97,6 +97,16 @@ class RdfDbVersionedFlowTest {
             assertThat(provenance.snapshot()).contains(RdfDbNames.snapshot(S, BE, Instant.parse("2014-06-01T10:30:00Z"), "1"));
             assertThat(db.snapshots(S).snapshotOf(fromDb)).isPresent();
             assertThat(db.snapshots(OTHER).snapshotOf(fromDb)).isEmpty();
+
+            // A version the base timestamp never reached reads the highest one at or below it, unless exact
+            db.snapshots(S).registry().add("RT");
+            Network atOrBelow = RdfDbNetworkLoader.load(db, SnapshotRef.of(S, BE, null, "RT"), null, params(),
+                    ReportNode.NO_OP);
+            Networks.assertSameNetwork(fromFiles, atOrBelow, IDENTITY);
+            assertThat(atOrBelow.getExtension(RdfDbProvenance.class).snapshot()).isEqualTo(provenance.snapshot());
+            assertThatThrownBy(() -> RdfDbNetworkLoader.load(db, SnapshotRef.of(S, BE, null, "RT").exactly(), null,
+                    params(), ReportNode.NO_OP)).isInstanceOf(RdfDbException.class)
+                    .hasMessageContaining("holds no snapshot");
         }
     }
 

@@ -254,8 +254,8 @@ class RdfDbSparqlSemanticsTest {
 
     /**
      * What the version registry rests on: a rank joined from a version node by name orders the snapshots under
-     * {@code FILTER}, the nested {@code NOT EXISTS} of a read at a version binds exactly the highest rank at or
-     * below it, and a {@code DELETE/INSERT} guarded by an integer equality runs only at that revision.
+     * {@code FILTER}, a sub-select ordered by that rank and limited to one binds exactly the highest rank at or below
+     * a version, and a {@code DELETE/INSERT} guarded by an integer equality runs only at that revision.
      */
     @ParameterizedTest(name = "{0}")
     @MethodSource("backends")
@@ -271,10 +271,17 @@ class RdfDbSparqlSemanticsTest {
                         .append(SparqlText.str(v[0])).append(" ; pdb:rank ")
                         .append(SparqlText.integer(Long.parseLong(v[1]))).append(" . ");
             }
-            // One timestamp that carries DA, ID and X, but not RT
+            // One chain that carries DA, ID and X, but not RT
+            String parent = null;
             for (String name : List.of("DA", "ID", "X")) {
                 data.append('<').append(EX).append("s/").append(name).append("> a pdb:Snapshot ; pdb:version ")
-                        .append(SparqlText.str(name)).append(" . ");
+                        .append(SparqlText.str(name));
+                if (parent != null) {
+                    data.append(" ; pdb:parent <").append(EX).append("s/").append(parent)
+                            .append("> ; pdb:edge pdb:VersionEdge");
+                }
+                data.append(" . ");
+                parent = name;
             }
             sparql.update(data.append("} }").toString());
 
@@ -283,11 +290,10 @@ class RdfDbSparqlSemanticsTest {
                     + "> {" + join + "FILTER(?r >= " + SparqlText.integer(20) + ") } } ORDER BY ?r");
             assertThat(above).extracting(row -> row.get("n").stringValue()).containsExactly("ID", "X");
 
-            // The highest at or below RT (30) is ID: X ranks above, DA below ID
-            String atOrBelow = RdfDbVocabulary.PREFIXES + "SELECT ?n WHERE { GRAPH <" + M + "> { ?q a pdb:Version ;"
-                    + " pdb:name \"RT\" ; pdb:rank ?bound ." + join + "FILTER(?r <= ?bound) FILTER NOT EXISTS {"
-                    + " ?s2 a pdb:Snapshot ; pdb:version ?n2 . ?vn2 a pdb:Version ; pdb:name ?n2 ; pdb:rank ?r2"
-                    + " FILTER(?r2 <= ?bound && ?r2 > ?r) } } }";
+            // The highest at or below RT (30) is ID: X ranks above, DA below; a sub-select ordered by the joined rank
+            String atOrBelow = RdfDbVocabulary.PREFIXES + "SELECT ?n WHERE { GRAPH <" + M + "> { { SELECT ?s ?n"
+                    + " WHERE { ?q pdb:name \"RT\" ; pdb:rank ?bound ." + join + "FILTER(?r <= ?bound) }"
+                    + " ORDER BY DESC(?r) LIMIT 1 } } }";
             assertThat(sparql.select(atOrBelow)).extracting(row -> row.get("n").stringValue()).containsExactly("ID");
 
             // A revision guard: the edit runs at revision 3 and not again
