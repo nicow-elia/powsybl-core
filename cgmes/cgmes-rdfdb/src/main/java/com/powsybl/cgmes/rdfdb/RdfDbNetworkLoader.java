@@ -315,6 +315,7 @@ public final class RdfDbNetworkLoader {
                               Properties params, ReportNode reportNode) {
         Objects.requireNonNull(network);
         Objects.requireNonNull(db);
+        checkNotComposed(network);
         RdfDbLoadOptions effective = options == null ? RdfDbLoadOptions.forUpdate() : options;
         ReportNode rn = reportNode == null ? ReportNode.NO_OP : reportNode;
         checkNotVariantMode(network, new RdfDbUpdateOptions(), "a whole-profile replacement");
@@ -412,6 +413,7 @@ public final class RdfDbNetworkLoader {
         Objects.requireNonNull(db);
         Objects.requireNonNull(target);
         RdfDbNames.checkScenario(scenario);
+        checkNotComposed(network);
         RdfDbUpdateOptions effective = options == null ? new RdfDbUpdateOptions() : options;
         ReportNode rn = reportNode == null ? ReportNode.NO_OP : reportNode;
 
@@ -895,6 +897,7 @@ public final class RdfDbNetworkLoader {
         Objects.requireNonNull(network);
         Objects.requireNonNull(db);
         Objects.requireNonNull(target);
+        checkNotComposed(network);
         RdfDbUpdateOptions effective = options == null ? new RdfDbUpdateOptions() : options;
         ReportNode rn = reportNode == null ? ReportNode.NO_OP : reportNode;
         String scenario = target.scenario();
@@ -953,6 +956,27 @@ public final class RdfDbNetworkLoader {
         NetworkFactory factory = networkFactory == null ? NetworkFactory.findDefault() : networkFactory;
         ReportNode rn = reportNode == null ? ReportNode.NO_OP : reportNode;
         return VariantBulkLoader.load(db, scenario, requests, options, factory, params, rn);
+    }
+
+    /**
+     * Refuse an in-place operation on a composed network.
+     *
+     * <p>A composition is a load-time argument: the network is several trees at one moment, with no single
+     * snapshot to walk from and no variant that could stand for one. Reaching another moment means composing
+     * again; only a recorded change is written back, routed to the trees the network owns.</p>
+     *
+     * @param network the network
+     * @throws RdfDbException if the network was loaded by {@link #loadComposed}
+     */
+    static void checkNotComposed(Network network) {
+        List<SnapshotInfo> composition = network.getExtension(RdfDbProvenance.class) instanceof RdfDbProvenance p
+                ? p.composition() : List.of();
+        if (!composition.isEmpty()) {
+            throw new RdfDbException("network " + network.getId() + " is a composition of "
+                    + composition.stream().map(SnapshotInfo::modellingAuthority).toList()
+                    + ": composed networks are read-only for the diff and variant routes; reload it with"
+                    + " RdfDbNetworkLoader.loadComposed");
+        }
     }
 
     /**

@@ -9,13 +9,16 @@
 package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
+import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
 import com.powsybl.commons.report.ReportNode;
+import com.powsybl.iidm.network.Load;
 import com.powsybl.iidm.network.Network;
+import com.powsybl.iidm.network.events.NetworkEvent;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
@@ -23,6 +26,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Consumer;
 
 import static com.powsybl.cgmes.rdfdb.Backends.BASE;
 import static com.powsybl.cgmes.rdfdb.Backends.BE;
@@ -162,6 +166,150 @@ class RdfDbComposedLoadTest {
             assertThatThrownBy(() -> RdfDbNetworkLoader.loadComposed(db, SnapshotRef.latest(S, BE), List.of(BE),
                     null, null, null, params(), ReportNode.NO_OP)).isInstanceOf(RdfDbException.class)
                     .hasMessageContaining("names no modelling authority");
+        }
+    }
+    // ------------------------------------------------------------------ write-back
+
+    private static final String READ_ONLY = "composed networks are read-only for the diff and variant routes;"
+            + " reload";
+
+    /** The first load of the NL tree, as the composed network names it. */
+    private static String nlLoad(Network network) {
+        RdfDbProvenance provenance = network.getExtension(RdfDbProvenance.class);
+        return network.getLoadStream().map(Load::getId)
+                .filter(id -> provenance.ownerOf(id).equals(Optional.of(NL))).sorted().findFirst().orElseThrow();
+    }
+
+    private static RdfDbExport.SnapshotResult writeBack(Network network, RdfDbConnection db,
+                                                        Consumer<Network> change) {
+        return RdfDbExport.export(network, Changes.record(network, change), db, SnapshotRef.of(S, null, null, null),
+                new CgmesDiffExport.ExportOptions(), ReportNode.NO_OP);
+    }
+
+    private static double p0(RdfDbConnection db, String authority, String load) {
+        return RdfDbNetworkLoader.load(db, SnapshotRef.latest(S, authority), null, params(), ReportNode.NO_OP)
+                .getLoad(load).getP0();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void aChangeOnTheOwnedAuthorityIsWrittenIntoItsTree(String backend) {
+        try (RdfDbConnection db = day(backend)) {
+            SnapshotCatalog catalog = db.snapshots(S);
+            SnapshotInfo be = catalog.require(SnapshotRef.latest(S, BE));
+            SnapshotInfo nl = catalog.require(SnapshotRef.latest(S, NL));
+            Network network = composed(db, null, List.of(BE, NL)).network();
+
+            double moved = network.getLoad(Changes.LOAD_ID).getP0();
+            SnapshotInfo written = writeBack(network, db, n -> Changes.moveLoad(n, 7.0)).snapshot();
+
+            assertThat(written.modellingAuthority()).isEqualTo(BE);
+            assertThat(written.parent()).isEqualTo(be.iri());
+            assertThat(catalog.require(SnapshotRef.latest(S, NL)).iri()).isEqualTo(nl.iri());
+            assertThat(p0(db, BE, Changes.LOAD_ID)).isEqualTo(moved + 7.0);
+            RdfDbProvenance provenance = network.getExtension(RdfDbProvenance.class);
+            assertThat(provenance.composition()).extracting(SnapshotInfo::iri).containsExactly(written.iri(), nl.iri());
+
+            // The composition was advanced: a second change grows the same chain
+            SnapshotInfo second = writeBack(network, db, n -> Changes.moveLoad(n, 1.0)).snapshot();
+            assertThat(second.parent()).isEqualTo(written.iri());
+            assertThat(p0(db, BE, Changes.LOAD_ID)).isEqualTo(moved + 8.0);
+            catalog.verify();
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void aChangeOnAnAuthorityNotOwnedIsRefusedBeforeAnythingIsWritten(String backend) {
+        try (RdfDbConnection db = day(backend)) {
+            SnapshotCatalog catalog = db.snapshots(S);
+            List<SnapshotInfo> before = catalog.snapshots();
+            Network network = composed(db, null, List.of(BE, NL)).network();
+            String load = nlLoad(network);
+
+            // One change on each side: the owned one is not written either
+            assertThatThrownBy(() -> writeBack(network, db, n -> {
+                Changes.moveLoad(n, 3.0);
+                n.getLoad(load).setP0(n.getLoad(load).getP0() + 5.0);
+            })).isInstanceOf(RdfDbException.class).hasMessage("the change on " + load
+                    + " belongs to modelling authority '" + NL + "', which this composed network does not own"
+                    + " (owned: [" + BE + "]); nothing was written");
+            assertThat(catalog.snapshots()).isEqualTo(before);
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void withTwoOwnersTwoSnapshotsAreWritten(String backend) {
+        try (RdfDbConnection db = day(backend)) {
+            SnapshotCatalog catalog = db.snapshots(S);
+            SnapshotInfo nl = catalog.require(SnapshotRef.latest(S, NL));
+            Network network = RdfDbNetworkLoader.loadComposed(db, SnapshotRef.of(S, null, null, null),
+                    List.of(BE, NL), List.of(BE, NL), null, null, params(), ReportNode.NO_OP).network();
+            String load = nlLoad(network);
+            double beP0 = network.getLoad(Changes.LOAD_ID).getP0();
+            double nlP0 = network.getLoad(load).getP0();
+
+            RdfDbExport.SnapshotResult result = writeBack(network, db, n -> {
+                Changes.moveLoad(n, 3.0);
+                n.getLoad(load).setP0(nlP0 + 5.0);
+            });
+
+            // The result is the first owner's; the composition names both written snapshots
+            assertThat(result.snapshot().modellingAuthority()).isEqualTo(BE);
+            SnapshotInfo nlWritten = catalog.require(SnapshotRef.latest(S, NL));
+            assertThat(nlWritten.parent()).isEqualTo(nl.iri());
+            assertThat(network.getExtension(RdfDbProvenance.class).composition()).extracting(SnapshotInfo::iri)
+                    .containsExactly(result.snapshot().iri(), nlWritten.iri());
+            assertThat(p0(db, BE, Changes.LOAD_ID)).isEqualTo(beP0 + 3.0);
+            assertThat(p0(db, NL, load)).isEqualTo(nlP0 + 5.0);
+            // ...and composing again gives the network that wrote them
+            Network again = composed(db, null, List.of(BE, NL)).network();
+            assertThat(again.getLoad(Changes.LOAD_ID).getP0()).isEqualTo(beP0 + 3.0);
+            assertThat(again.getLoad(load).getP0()).isEqualTo(nlP0 + 5.0);
+            catalog.verify();
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void aComposedNetworkIsNotUpdatedInPlace(String backend) {
+        try (RdfDbConnection db = day(backend)) {
+            Network network = composed(db, null, List.of(BE, NL)).network();
+
+            assertThatThrownBy(() -> RdfDbNetworkLoader.update(network, db, SnapshotRef.latest(S, BE),
+                    new RdfDbUpdateOptions(), params(), ReportNode.NO_OP))
+                    .isInstanceOf(RdfDbException.class).hasMessageContaining(READ_ONLY);
+            assertThatThrownBy(() -> RdfDbNetworkLoader.update(network, db, SnapshotRef.latest(S, BE),
+                    new RdfDbUpdateOptions().setTargetVariant("v"), params(), ReportNode.NO_OP))
+                    .isInstanceOf(RdfDbException.class).hasMessageContaining(READ_ONLY);
+            assertThatThrownBy(() -> RdfDbNetworkLoader.update(network, db, S, DiffTarget.head(),
+                    new RdfDbUpdateOptions(), params(), ReportNode.NO_OP))
+                    .isInstanceOf(RdfDbException.class).hasMessageContaining(READ_ONLY);
+            assertThatThrownBy(() -> RdfDbNetworkLoader.update(network, db, S, null, params(), ReportNode.NO_OP))
+                    .isInstanceOf(RdfDbException.class).hasMessageContaining(READ_ONLY);
+            assertThat(network.getVariantManager().getVariantIds()).containsExactly(RdfDbProvenance.PRIMARY_VARIANT);
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void aComposedNetworkIsNotAVariantHolder(String backend) {
+        try (RdfDbConnection db = day(backend)) {
+            SnapshotCatalog catalog = db.snapshots(S);
+            List<SnapshotInfo> before = catalog.snapshots();
+            Network network = composed(db, null, List.of(BE, NL)).network();
+            List<NetworkEvent> events = Changes.record(network, n -> Changes.moveLoad(n, 1.0));
+
+            assertThatThrownBy(() -> RdfDbExport.exportVariant(network, events, db,
+                    RdfDbProvenance.PRIMARY_VARIANT, null, new CgmesDiffExport.ExportOptions(), ReportNode.NO_OP))
+                    .isInstanceOf(RdfDbException.class).hasMessageContaining(READ_ONLY);
+            assertThatThrownBy(() -> RdfDbExport.exportPerVariant(network, events, db, null,
+                    new CgmesDiffExport.ExportOptions(), ReportNode.NO_OP))
+                    .isInstanceOf(RdfDbException.class).hasMessageContaining(READ_ONLY);
+            assertThatThrownBy(() -> RdfDbExport.export(network, events, db, S, new CgmesDiffExport.ExportOptions()))
+                    .isInstanceOf(RdfDbException.class).hasMessageContaining(READ_ONLY);
+            assertThat(catalog.snapshots()).isEqualTo(before);
         }
     }
 }

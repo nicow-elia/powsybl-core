@@ -10,6 +10,10 @@ package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
 import com.powsybl.cgmes.conversion.export.PartialSshExport;
+import com.powsybl.cgmes.model.diff.CgmesStatement;
+import com.powsybl.cgmes.model.diff.DifferenceModel;
+import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
+import com.powsybl.cgmes.model.diff.DifferenceModelSet;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.events.NetworkEvent;
@@ -26,6 +30,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.function.Function;
 
 /**
@@ -48,6 +53,12 @@ import java.util.function.Function;
  * &mdash; a merged model with two modelling authorities, or one imported with
  * {@code iidm.import.cgmes.cgm-with-subnetworks} &mdash; cannot be the sender of a difference: there is no single
  * model for it to supersede. Such a network is refused before anything is translated.</p>
+ *
+ * <h2>A composed network writes into the trees it owns</h2>
+ * <p>A network of {@code RdfDbNetworkLoader.loadComposed} is the exception: it knows which tree each of its objects
+ * came from. Its versioned export splits the translated differences by the owner of each subject and writes one
+ * snapshot into each owned tree it touches, superseding that tree's composed state; a change on an object of a tree
+ * it does not own refuses the whole export. The appending and the variant routes refuse a composed network.</p>
  *
  * <h2>Differences never cross scenarios</h2>
  * <p>A network that was loaded from one scenario cannot be exported into another: its model identifiers name
@@ -129,6 +140,7 @@ public final class RdfDbExport {
         Objects.requireNonNull(db);
         RdfDbNames.checkScenario(scenario);
         checkSameScenario(network, scenario);
+        RdfDbNetworkLoader.checkNotComposed(network);
         // In variant mode the whole export - the sender check included - describes the working variant and
         // supersedes the model that variant is at. Outside it, nothing changes
         return inVariantOrClassic(network, options,
@@ -229,6 +241,10 @@ public final class RdfDbExport {
         SnapshotCatalog catalog = db.snapshots(target.scenario());
         catalog.check(target);
         checkSameScenario(network, target.scenario());
+        if (network.getExtension(RdfDbProvenance.class) instanceof RdfDbProvenanceImpl composed
+                && !composed.composition().isEmpty()) {
+            return exportComposed(network, events, db, catalog, composed, target, pin, options, reportNode);
+        }
 
         String authority = target.modellingAuthority() != null ? target.modellingAuthority()
                 : authorityOf(network);
@@ -297,6 +313,155 @@ public final class RdfDbExport {
             impl.setSnapshot(snapshot.iri());
         }
         return new SnapshotResult(exported.exportedEvents(), stored, snapshot);
+    }
+
+    // ------------------------------------------------------------------ composed networks
+
+    /**
+     * Write the changes recorded on a composed network into the trees of the objects they are on.
+     *
+     * <p>Translated once; every statement then goes to the authority that owns its subject
+     * ({@link RdfDbProvenance#ownerOf}), one difference model per profile and authority, each superseding that
+     * authority's state in the composition rather than {@code CgmesMetadataModels}, which holds a model per
+     * authority of the same profile. A statement on an object of an authority the network does not own refuses the
+     * whole export before anything is resolved or written. Each touched tree gets one snapshot through
+     * {@link SnapshotCatalog#putDiff}, hanging off its composed snapshot, and its composition entry is advanced to
+     * it.</p>
+     *
+     * @return the result of the first tree written to, in composition order; the provenance names the others
+     */
+    private static SnapshotResult exportComposed(Network network, Collection<NetworkEvent> events,
+                                                 RdfDbConnection db, SnapshotCatalog catalog,
+                                                 RdfDbProvenanceImpl provenance, SnapshotRef target, SnapshotRef pin,
+                                                 CgmesDiffExport.ExportOptions options, ReportNode reportNode) {
+        if (pin != null) {
+            throw new RdfDbException("the changes of a composed network hang off the snapshots it is composed of,"
+                    + " so it takes no pin (" + pin + ")");
+        }
+        // Every address first, all of them reads: a refusal of one tree must not follow a write into another
+        Map<String, SnapshotRef> targets = new LinkedHashMap<>();
+        for (SnapshotInfo composed : provenance.composition()) {
+            String authority = composed.modellingAuthority();
+            if (provenance.owned().contains(authority)) {
+                targets.put(authority, SnapshotRef.latestAt(target.scenario(), authority,
+                        target.timestamp() == null ? catalog.baseTimestamp(authority) : target.timestamp()));
+            }
+        }
+        Instant first = targets.values().iterator().next().timestamp();
+        CgmesDiffExport.Result exported = translate(network, events, first, options);
+        Map<String, List<DifferenceModel>> byAuthority = route(exported.differences(), provenance, targets);
+        if (byAuthority.isEmpty()) {
+            throw new RdfDbException("no difference to store from composed network " + network.getId()
+                    + " into scenario '" + target.scenario() + "'");
+        }
+        Map<String, SnapshotRef> effective = new LinkedHashMap<>();
+        byAuthority.keySet().forEach(authority -> {
+            SnapshotRef located = targets.get(authority);
+            effective.put(authority, located.withVersion(target.isLatest() ? catalog.nextVersionName(located)
+                    : target.version()));
+        });
+        SnapshotResult result = null;
+        for (Map.Entry<String, List<DifferenceModel>> entry : byAuthority.entrySet()) {
+            String sender = provenance.composition().stream()
+                    .filter(composed -> composed.modellingAuthority().equals(entry.getKey()))
+                    .map(SnapshotInfo::iri).findFirst().orElseThrow();
+            SnapshotInfo written = catalog.putDiff(new DifferenceModelSet(entry.getValue()),
+                    effective.get(entry.getKey()), null, sender, reportNode == null ? ReportNode.NO_OP : reportNode);
+            provenance.advanceComposition(written);
+            if (result == null) {
+                List<StoredModel> stored = db.catalog(target.scenario()).models(written.members()).values()
+                        .stream().toList();
+                result = new SnapshotResult(exported.exportedEvents(), stored, written);
+            }
+        }
+        // The network-level identity is the first composed snapshot's, as after the load
+        Map<String, String> modelIds = Profiles.map();
+        provenance.composition().get(0).state().forEach((profile, id) -> {
+            if (Profiles.isStandard(profile)) {
+                modelIds.put(profile, id);
+            }
+        });
+        provenance.setModelIds(modelIds);
+        return result;
+    }
+
+    /**
+     * Split each difference model of a composed network by the owner of its subjects.
+     *
+     * @return the difference models per owning authority, in composition order
+     * @throws RdfDbException if a statement is on an object no owned authority owns
+     */
+    private static Map<String, List<DifferenceModel>> route(DifferenceModelSet differences,
+                                                            RdfDbProvenanceImpl provenance,
+                                                            Map<String, SnapshotRef> targets) {
+        Map<String, Map<String, String>> states = new LinkedHashMap<>();
+        provenance.composition().forEach(composed -> states.put(composed.modellingAuthority(), composed.state()));
+        Map<String, List<DifferenceModel>> byAuthority = new LinkedHashMap<>();
+        targets.keySet().forEach(authority -> byAuthority.put(authority, new ArrayList<>()));
+        for (DifferenceModel model : differences.models().values()) {
+            Map<String, DifferenceModel> split = new LinkedHashMap<>();
+            for (String authority : targets.keySet()) {
+                DifferenceModel part = new DifferenceModel(model.header(),
+                        ownedBy(model.forward(), authority, provenance),
+                        ownedBy(model.reverse(), authority, provenance),
+                        ownedBy(model.preconditions(), authority, provenance));
+                if (!part.isEmpty()) {
+                    split.put(authority, part);
+                }
+            }
+            for (Map.Entry<String, DifferenceModel> entry : split.entrySet()) {
+                String authority = entry.getKey();
+                String profile = Profiles.of(model.header().subset());
+                Map<String, String> state = states.get(authority);
+                // A new identifier per part: the translated one is derived from the network's identity, which a
+                // composed network does not advance, so a second write-back would repeat it
+                DifferenceModelHeader original = model.header();
+                DifferenceModelHeader header = DifferenceModelHeader.builder("urn:uuid:" + UUID.randomUUID(),
+                                original.subset(), original.cimNamespace())
+                        .created(original.created()).description(original.description())
+                        .version(original.version()).profiles(original.profiles())
+                        .modelingAuthoritySet(authority)
+                        .scenarioTime(targets.get(authority).timestamp().atZone(ZoneOffset.UTC))
+                        .supersedes(List.of(state.get(profile)))
+                        .dependentOn(original.dependentOn().stream()
+                                .map(id -> sameProfileIn(id, states, state)).toList())
+                        .build();
+                byAuthority.get(authority).add(new DifferenceModel(header, entry.getValue().forward(),
+                        entry.getValue().reverse(), entry.getValue().preconditions()));
+            }
+        }
+        byAuthority.values().removeIf(List::isEmpty);
+        return byAuthority;
+    }
+
+    /**
+     * The statements of one owned authority; a statement on an object of an authority the network does not own,
+     * or of none, refuses the export.
+     */
+    private static List<CgmesStatement> ownedBy(List<CgmesStatement> statements, String authority,
+                                                RdfDbProvenanceImpl provenance) {
+        List<CgmesStatement> mine = new ArrayList<>();
+        for (CgmesStatement statement : statements) {
+            String owner = provenance.ownerOf(statement.subjectId()).orElse(null);
+            if (owner == null || !provenance.owned().contains(owner)) {
+                throw new RdfDbException("the change on " + statement.subjectId() + " belongs to "
+                        + (owner == null ? "no modelling authority of the composition "
+                        + provenance.composition().stream().map(SnapshotInfo::modellingAuthority).toList()
+                        : "modelling authority '" + owner + "', which this composed network does not own (owned: "
+                        + provenance.owned() + ")") + "; nothing was written");
+            }
+            if (owner.equals(authority)) {
+                mine.add(statement);
+            }
+        }
+        return mine;
+    }
+
+    /** A model identifier one authority's state names, as the model of the same profile another one's names. */
+    private static String sameProfileIn(String id, Map<String, Map<String, String>> states, Map<String, String> state) {
+        return states.values().stream().flatMap(other -> other.entrySet().stream())
+                .filter(entry -> entry.getValue().equals(id)).map(Map.Entry::getKey).findFirst()
+                .map(profile -> state.getOrDefault(profile, id)).orElse(id);
     }
 
     /**
@@ -376,6 +541,7 @@ public final class RdfDbExport {
         Objects.requireNonNull(network);
         Objects.requireNonNull(db);
         Objects.requireNonNull(variantId);
+        RdfDbNetworkLoader.checkNotComposed(network);
         RdfDbProvenanceImpl provenance = boundProvenance(network, variantId);
         // Naming a variant is the opt-in here exactly as it is for an update: from now on every in-place
         // operation of this module is a variant operation, so nothing can quietly write across the variants
@@ -437,6 +603,7 @@ public final class RdfDbExport {
                                                               ReportNode reportNode) {
         Objects.requireNonNull(network);
         Objects.requireNonNull(db);
+        RdfDbNetworkLoader.checkNotComposed(network);
         RdfDbProvenance provenance = network.getExtension(RdfDbProvenance.class);
         if (!(provenance instanceof RdfDbProvenanceImpl impl)) {
             throw new RdfDbException("network " + network.getId() + " was not loaded from an RDF database, so"
