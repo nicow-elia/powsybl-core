@@ -36,8 +36,9 @@ flowchart LR
 `powsybl-cgmes-rdfdb` calls a small, marked set of public types of the conversion (the table at the
 [end of this page](#what-the-database-knows-about-powsybl-internals)); nothing in the conversion knows the database
 exists. The two verdicts the database stores about a difference &mdash; `pdb:fastPredicatesOnly` and
-`pdb:variantSafe` &mdash; are computed by the conversion from the document alone, written once, and read back by the
-planner without a network.
+`pdb:variantSafe` &mdash; are computed by the conversion from the document alone, written once together with the
+**capability version** of the table that reached them (`pdb:capabilities`), and read back by the planner without a
+network.
 
 ## Export: from a recorded change to a stored snapshot
 
@@ -59,7 +60,8 @@ sequenceDiagram
     C->>S: accept(set) with the snapshot node
     S->>F: per difference model, in a one-member set:<br/>check(set).route() == FAST
     S->>F: checkVariantSafe(model).route() == FAST
-    S->>D: one guarded INSERT ... WHERE<br/>(model nodes, forward/reverse graphs, snapshot node;<br/>guards: chain, rank join, name at its rank, pdb:rev)
+    S->>F: version(): "<12 hex of the table>/<core version>"
+    S->>D: one guarded INSERT ... WHERE<br/>(model nodes with the two verdicts and pdb:capabilities,<br/>forward/reverse graphs, snapshot node;<br/>guards: chain, rank join, name at its rank, pdb:rev)
     D-->>C: written, or nothing (guard failed)
     C-->>X: SnapshotInfo
     Note over X: NetworkIdentity.advance rebuilds CgmesMetadataModels,<br/>RdfDbProvenance points at the new snapshot
@@ -71,6 +73,7 @@ sequenceDiagram
 | the statements of one profile, forward and reverse | `DifferenceModel` in a `DifferenceModelSet` | cgmes-conversion |
 | "every statement is in a block an in-place update reads" | `FastRouteCapabilities.check(set).route() == FAST`, per difference model wrapped in a one-member set → `pdb:fastPredicatesOnly` on the difference model node | cgmes-conversion decides, rdfdb stores |
 | "every property is per-variant state" (the network-dependent cases are left to apply time) | `FastRouteCapabilities.checkVariantSafe(set).route() == FAST` → `pdb:variantSafe` on the difference model node | cgmes-conversion decides, rdfdb stores |
+| which table reached the two verdicts | `FastRouteCapabilities.version()` = `<first 12 hex of the SHA-256 of the canonical table>/<core version>` → `pdb:capabilities` on the difference model node | cgmes-conversion names it, rdfdb stores |
 | the address of the new snapshot (its version a name of the scenario's version registry), the rank rule, the chain and registry guards | `SnapshotRef`, `VersionRegistry`, the guarded `INSERT` | rdfdb; the conversion never sees a version |
 | where the sending network now stands | `CgmesMetadataModels`, `RdfDbProvenance` | rdfdb writes the extension the conversion defines |
 
@@ -89,9 +92,10 @@ sequenceDiagram
     participant M as RdfDbMaterializer
     participant T as TripleStoreNetworkLoader<br/>(cgmes-conversion)
     P->>L: update(network, db, SnapshotRef, RdfDbUpdateOptions)
-    L->>V: plan: one query, both ends, every pdb:fastPredicatesOnly on the path, maxDiffChain
+    L->>V: plan: one query, both ends, every pdb:fastPredicatesOnly and pdb:capabilities on the path, maxDiffChain
     alt DIFF
         L->>G: fetchById: forward / reverse graphs of the path<br/>(Graph Store GET per graph, or one SELECT ... VALUES ?g)
+        Note over L: a difference whose pdb:capabilities is neither the reader's<br/>nor of an older core version (DiffStep.recheck):<br/>FastRouteCapabilities.check on its statements;<br/>SLOW_REQUIRED → CgmesDiffNotApplicableException naming both versions
         Note over L: DifferenceModel.compose per profile
         L->>I: apply(network, composed, Conversion.Config, Options, reportNode)
         alt applied in place
@@ -116,6 +120,20 @@ that is not longer than `maxDiffChain` is `DIFF`; a target in another scenario o
 network: the subjects must exist and the groups of a block must be completable from the network (`FastRoutePlan`).
 When they are not, it throws `CgmesDiffNotApplicableException` **before anything is written**, and the loader falls
 back to the full route with the importer's reasons.
+
+**Capability versions.** The stored verdicts are trusted only when they were reached by a table the reader agrees
+with: `pdb:capabilities` equal to the reader's `FastRouteCapabilities.version()`, or naming a strictly older core
+version (numerically by major, minor, patch; `7.5.0-SNAPSHOT` before `7.5.0`) — a table only grows what it can
+apply. Anything else — a newer writer, another table of the same core version (two development builds), a node
+without a version — is **re-checked**: after the fetch and before the composition, the loader runs the reader's
+`FastRouteCapabilities.check` (and `checkVariantSafe` on a variant route) on that difference's statements. A refusal
+travels back as the same `CgmesDiffNotApplicableException`, its reasons reading *"difference &lt;id&gt; of snapshot
+&lt;iri&gt; was written by capability version &lt;writer&gt; and this reader (&lt;reader&gt;) cannot apply it in place:
+…"*, so the update falls back to `FULL_RELOAD` (or `FULL_REQUIRED`), and a variant update or a bulk load answers
+`VARIANT_REFUSED` for that variant. It costs no request (the statements are in hand on the diff route); a stored
+`false` of a newer writer stays a full route, as the planner reads it. `UpdatePlan.DiffStep.recheck()` shows which
+steps will be re-checked. The apply-time check of `FastRoutePlan` runs on every path anyway, so a wrong flag never
+corrupts a network — the re-check makes the reason name the versions and refuses before composing.
 
 | What crosses | Type | Decided by |
 |---|---|---|
@@ -242,7 +260,7 @@ surface (block 1 of the list), grouped by purpose:
 |---|---|---|---|
 | conversion entry | `CgmesImport` (`tripleStoreOptions`, `config`), `TripleStoreNetworkLoader` (`importer`, `describe`, `load`, `update`), `CgmesTripleStoreLoader` (`load`, `contextName`) | parse files into a store, convert a store to a network with the parameters of a file import | how the conversion queries the store |
 | difference import | `CgmesDiffImport` (`apply`, `revert`, `applyToGraph`, `Options`, `Decision`, `Route`), `CgmesDiffNotApplicableException` | apply a composed difference to a network or to a graph; the reasons of a refusal | which block or group made it refuse |
-| capability verdicts | `FastRouteCapabilities` (`check`, `checkVariantSafe`) | one `Route` per difference, stored as a boolean | `Family`, `FamilySpec`, blocks, update queries |
+| capability verdicts | `FastRouteCapabilities` (`check`, `checkVariantSafe`, `version`) | one `Route` per difference, stored as a boolean, and the version string of the table, stored and compared | `Family`, `FamilySpec`, blocks, update queries; the hash is compared for equality only |
 | export translation | `CgmesDiffExport` (`toDifferences`, `export`, `toString`, `variantOf`, `ExportOptions`, `Result`) | the statements of recorded changes | the mapping that produced them |
 | statement model | `StatementDiff` (`Index`, `diff`, `readOnly`), `DifferenceSink` | keyed statements to compare, a sink to receive an export | — |
 | triple-store transport | `TripleStoreRDF4JSparql`, `SparqlEndpoint`, `GraphStoreClient`, `ScenarioGraphNames` | talk to the endpoint, name scenario graphs | — (moves out together with rdfdb) |
