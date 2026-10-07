@@ -533,6 +533,104 @@ class RdfDbTimestampFlowTest {
         }
     }
 
+    // ------------------------------------------------------------------ dropping a timestamp
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void aTimestampNothingDependsOnIsDropped(String backend) {
+        try (RdfDbConnection db = twoDays(backend)) {
+            SnapshotCatalog catalog = db.snapshots(S);
+            catalog.putAsDiff(TimestampFixtures.ssh(3, T1, "kept"), null, ref(S, 1, T1), null, params(),
+                    ReportNode.NO_OP);
+            // 11:15: a difference with a whole custom graph, a second version, and a checkpoint of it
+            SnapshotInfo first = catalog.putAsDiff(TimestampFixtures.with(TimestampFixtures.ssh(2, T2, "gone"),
+                            TimestampFixtures.CFG, TimestampFixtures.cfg("urn:uuid:cfg-gone", T2, "45")), null,
+                    ref(S, 1, T2), Set.of(EQ, SSH, "CFG"), params(), ReportNode.NO_OP);
+            Network sender = load(db, S, 1, T2);
+            SnapshotInfo second = Changes.export(sender, db, ref(S, 2, T2), n -> Changes.moveLoad(n, 3.0))
+                    .snapshot();
+            Checkpoint.create(db, second.ref());
+            List<String> graphs = new java.util.ArrayList<>();
+            db.catalog(S).models(List.of(first.state().get(SSH), second.state().get(SSH))).values()
+                    .forEach(model -> graphs.addAll(List.of(model.forwardGraph(), model.reverseGraph())));
+            graphs.add(catalog.graphsOf(second.ref()).get("CFG"));
+            graphs.add(RdfDbNames.materialized(S, BE, T2, second.version(), SSH) + "/graph");
+            assertThat(graphs).hasSizeGreaterThan(5).allMatch(graph -> hasGraph(db, graph));
+
+            List<SnapshotInfo> dropped = catalog.dropTimestamp(BE, T2);
+
+            assertThat(dropped).extracting(SnapshotInfo::iri).containsExactlyInAnyOrder(first.iri(), second.iri());
+            assertThat(catalog.timestamps(BE)).extracting(SnapshotCatalog.TimestampInfo::timestamp)
+                    .containsExactly(BASE, T1);
+            assertThat(catalog.versions(BE, T2)).isEmpty();
+            assertThat(graphs).noneMatch(graph -> hasGraph(db, graph));
+            // Nothing of it is left in the metadata graph either: no snapshot, model or checkpoint node names it
+            for (String node : List.of(first.iri(), second.iri(), "urn:uuid:cfg-gone", first.state().get(SSH))) {
+                assertThat(Backends.count(db, S, catalog.metaGraph(), "<" + node + "> ?p ?o")).isZero();
+            }
+            assertThat(Backends.count(db, S, catalog.metaGraph(), "?x pdb:snapshot <" + second.iri() + ">"))
+                    .isZero();
+            catalog.verify();
+            Networks.assertSameNetwork(Network.read(TimestampFixtures.ssh(3, T1, "kept"), params()),
+                    load(db, S, 1, T1), IDENTITY);
+
+            // ...and the moment can be written again
+            catalog.putAsDiff(TimestampFixtures.ssh(1, T2, "again"), null, ref(S, 1, T2), null, params(),
+                    ReportNode.NO_OP);
+            catalog.verify();
+        }
+    }
+
+    private static boolean hasGraph(RdfDbConnection db, String graph) {
+        return db.sparql(S).ask("ASK { GRAPH <" + graph + "> { ?s ?p ?o } }");
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void aTimestampAnotherOneIsPinnedToIsRefusedNamingIt(String backend) {
+        try (RdfDbConnection db = twoDays(backend)) {
+            SnapshotCatalog catalog = db.snapshots(S);
+            SnapshotInfo t1 = catalog.putAsDiff(TimestampFixtures.ssh(1, T1, "a"), null, ref(S, 1, T1), null,
+                    params(), ReportNode.NO_OP);
+            catalog.rollover(t1.ref());
+            SnapshotInfo t2 = catalog.putAsDiff(TimestampFixtures.ssh(2, T2, "b"), null, ref(S, 1, T2), null,
+                    params(), ReportNode.NO_OP);
+            SnapshotInfo t3 = catalog.putAsDiff(TimestampFixtures.ssh(3, T3, "c"), null, ref(S, 1, T3), null,
+                    params(), ReportNode.NO_OP);
+
+            // No cascade: both timestamps pinned to 11:00 are named, and nothing is dropped
+            assertThatThrownBy(() -> catalog.dropTimestamp(BE, T1))
+                    .isInstanceOf(RdfDbException.class)
+                    .hasMessageContaining(t2.ref().toString())
+                    .hasMessageContaining(t3.ref().toString())
+                    .hasMessageContaining("nothing was dropped");
+            assertThat(catalog.timestamps(BE)).hasSize(4);
+            catalog.verify();
+
+            // Dropped from the leaves up, it goes
+            catalog.dropTimestamp(BE, T3);
+            catalog.dropTimestamp(BE, T2);
+            catalog.dropTimestamp(BE, T1);
+            assertThat(catalog.timestamps(BE)).hasSize(1);
+            catalog.verify();
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void theBaseTimestampCannotBeDropped(String backend) {
+        try (RdfDbConnection db = twoDays(backend)) {
+            SnapshotCatalog catalog = db.snapshots(S);
+            assertThatThrownBy(() -> catalog.dropTimestamp(BE, BASE))
+                    .isInstanceOf(RdfDbException.class)
+                    .hasMessageContaining("base timestamp");
+            assertThatThrownBy(() -> catalog.dropTimestamp(BE, T1))
+                    .isInstanceOf(RdfDbException.class)
+                    .hasMessageContaining("holds no timestamp " + T1);
+            assertThat(catalog.snapshots()).hasSize(1);
+        }
+    }
+
     // ------------------------------------------------------------------ the parent index cache
 
     /**

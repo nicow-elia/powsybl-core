@@ -1785,29 +1785,82 @@ public final class SnapshotCatalog {
     }
 
     /**
-     * Drop snapshots nothing was built on: their nodes, their difference members and checkpoint copies, and the
-     * graphs those name.
+     * Drop one timestamp of a tree: its root and every version of it, with their graphs.
      *
-     * <p>The one primitive that removes snapshots, for {@link VersionRegistry#delete} of a transient version. Every
-     * snapshot must be a leaf &mdash; no snapshot outside the list names it as its parent, by either edge &mdash;
-     * and none may be the root of its tree, whose full graphs are the tree's base. After the check one request
-     * drops the graphs and the nodes; the decoded parent states and the cached graphs of the scenario are
-     * forgotten.</p>
+     * <p>Only a timestamp nothing depends on: no other timestamp may be pinned to one of its snapshots. A
+     * dependant is named in the refusal and nothing is dropped &mdash; there is no cascade, because dropping a
+     * pin would silently take every timestamp ingested against it along. Drop the dependants first, newest pins
+     * first. The base timestamp is the tree itself and is never dropped; another day is another scenario, cleared
+     * as a whole ({@link RdfDbConnection#clear}).</p>
+     *
+     * <p>Two requests: the listing the checks are made on, and the one that drops the graphs and the nodes
+     * ({@link #dropSnapshots}).</p>
+     *
+     * @param modellingAuthority the modelling authority set of the tree
+     * @param timestamp          the moment
+     * @return the snapshots that were dropped, oldest first
+     * @throws RdfDbException if the timestamp is the base one, if the tree holds no such timestamp, or if another
+     *                        timestamp is pinned to one of its snapshots (each such snapshot named); nothing is
+     *                        dropped then
+     */
+    public List<SnapshotInfo> dropTimestamp(String modellingAuthority, Instant timestamp) {
+        Objects.requireNonNull(modellingAuthority);
+        Instant moment = Objects.requireNonNull(timestamp).truncatedTo(ChronoUnit.SECONDS);
+        List<SnapshotInfo> all = snapshots();
+        List<SnapshotInfo> tree = all.stream().filter(info -> info.modellingAuthority().equals(modellingAuthority))
+                .toList();
+        SnapshotInfo root = tree.stream().filter(SnapshotInfo::isRoot).findFirst()
+                .orElseThrow(() -> noRoot(modellingAuthority));
+        if (root.timestamp().equals(moment)) {
+            throw new RdfDbException(moment + " is the base timestamp of the tree of modelling authority '"
+                    + modellingAuthority + "' of scenario '" + scenario + "', and the base is the tree itself: it is"
+                    + " not dropped. Another day is another scenario, cleared as a whole");
+        }
+        List<SnapshotInfo> chain = tree.stream().filter(info -> info.timestamp().equals(moment)).toList();
+        if (chain.isEmpty()) {
+            throw new RdfDbException("the tree of modelling authority '" + modellingAuthority + "' of scenario '"
+                    + scenario + "' holds no timestamp " + moment + "; it holds " + tree.stream()
+                    .map(SnapshotInfo::timestamp).distinct().toList());
+        }
+        Set<String> iris = chain.stream().map(SnapshotInfo::iri).collect(Collectors.toSet());
+        List<String> dependants = tree.stream().filter(info -> iris.contains(info.parent())
+                && !iris.contains(info.iri())).map(info -> info.ref() + " (pinned to " + info.parent() + ")").toList();
+        if (!dependants.isEmpty()) {
+            throw new RdfDbException("timestamp " + moment + " of modelling authority '" + modellingAuthority
+                    + "' of scenario '" + scenario + "' is the pin of " + dependants + ", and only a timestamp"
+                    + " nothing depends on is dropped (no cascade): drop those first; nothing was dropped");
+        }
+        dropSnapshots(chain, all);
+        return chain;
+    }
+
+    /**
+     * Drop snapshots nothing was built on: their nodes, their members other than the full models of a root
+     * &mdash; differences and whole custom graphs &mdash; and checkpoint copies, and the graphs those name.
+     *
+     * <p>The one primitive that removes snapshots, for {@link VersionRegistry#delete} of a transient version and
+     * {@link #dropTimestamp}. Every snapshot must be a leaf &mdash; no snapshot outside the list names it as its
+     * parent, by either edge &mdash; and none may be the root of its tree, whose full graphs are the tree's base.
+     * After the check one request drops the graphs and the nodes; the decoded parent states and the cached graphs
+     * of the scenario are forgotten.</p>
      *
      * @param leaves the snapshots to drop
      * @throws RdfDbException naming the first snapshot that is a root or has a child outside the list; nothing is
      *                        dropped then
      */
     void dropSnapshots(List<SnapshotInfo> leaves) {
-        if (leaves.isEmpty()) {
-            return;
+        if (!leaves.isEmpty()) {
+            dropSnapshots(leaves, snapshots());
         }
+    }
+
+    private void dropSnapshots(List<SnapshotInfo> leaves, List<SnapshotInfo> all) {
         Set<String> dropped = new LinkedHashSet<>();
         leaves.forEach(leaf -> {
             check(leaf.ref());
             dropped.add(leaf.iri());
         });
-        for (SnapshotInfo info : snapshots()) {
+        for (SnapshotInfo info : all) {
             if (info.isRoot() && dropped.contains(info.iri())) {
                 throw new RdfDbException("snapshot " + info + " of scenario '" + scenario + "' is the root of its"
                         + " tree and is not dropped: nothing was dropped");
@@ -1818,11 +1871,12 @@ public final class SnapshotCatalog {
             }
         }
         String values = dropped.stream().map(SparqlText::iri).collect(Collectors.joining(" "));
-        // The member differences and the checkpoint copies of the dropped snapshots, and the graphs they name
+        // The members of the dropped snapshots - no root among them, so differences and whole custom graphs, each
+        // written for its snapshot alone - and their checkpoint copies, and the graphs they name
         List<Map<String, Value>> rows = select("SELECT DISTINCT ?node ?g WHERE {" + graphClause() + "{ VALUES ?s { "
-                + values + " } { ?s pdb:member ?node . ?node pdb:kind pdb:Diff } UNION { ?node a pdb:Materialized ;"
-                + " pdb:snapshot ?s } OPTIONAL { { ?node pdb:forwardGraph ?g } UNION { ?node pdb:reverseGraph ?g }"
-                + " UNION { ?node a pdb:Materialized ; pdb:graph ?g } } } }");
+                + values + " } { ?s pdb:member ?node } UNION { ?node a pdb:Materialized ; pdb:snapshot ?s }"
+                + " OPTIONAL { { ?node pdb:forwardGraph ?g } UNION { ?node pdb:reverseGraph ?g }"
+                + " UNION { ?node pdb:graph ?g } } } }");
         Set<String> nodes = new LinkedHashSet<>(dropped);
         Set<String> graphs = new LinkedHashSet<>();
         rows.forEach(row -> {
