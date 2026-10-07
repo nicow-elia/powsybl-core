@@ -55,6 +55,10 @@ public final class CgmesLimitIndex {
 
     /** The attribute name prefix of the limits of side 1 of a branch, as {@code OperationalLimitsGroupsImpl} spells it. */
     public static final String LIMITS_PREFIX = "limits";
+    /** What IIDM appends to the attribute of a side's loading limits for a change of the permanent limit. */
+    static final String PERMANENT_LIMIT_SUFFIX = ".permanentLimit";
+    /** What IIDM appends to the attribute of a side's loading limits for a change of a temporary limit value. */
+    static final String TEMPORARY_LIMIT_VALUE_SUFFIX = ".temporaryLimit.value";
 
     private static final String OPERATIONAL_LIMIT_PROPERTY_PREFIX =
             Conversion.CGMES_PREFIX_ALIAS_PROPERTIES + CgmesNames.OPERATIONAL_LIMIT + "_";
@@ -82,10 +86,19 @@ public final class CgmesLimitIndex {
 
         /** The attribute key of a change of this very limit value. */
         public String memberKey() {
-            return duration < 0
-                    ? prefix + "_" + type + ".permanentLimit" + EventCompactor.KEY_SEPARATOR + groupId
-                    : prefix + "_" + type + ".temporaryLimit.value" + EventCompactor.KEY_SEPARATOR + groupId
-                            + EventCompactor.KEY_SEPARATOR + duration;
+            return memberKey(duration);
+        }
+
+        /**
+         * The attribute key of a change of a limit value of the same {@code LoadingLimits} object.
+         *
+         * @param acceptableDuration the acceptable duration of the temporary limit, or {@code -1} for the permanent one
+         */
+        public String memberKey(int acceptableDuration) {
+            return acceptableDuration < 0
+                    ? prefix + "_" + type + PERMANENT_LIMIT_SUFFIX + EventCompactor.KEY_SEPARATOR + groupId
+                    : prefix + "_" + type + TEMPORARY_LIMIT_VALUE_SUFFIX + EventCompactor.KEY_SEPARATOR + groupId
+                            + EventCompactor.KEY_SEPARATOR + acceptableDuration;
         }
 
         /** The CIM class of the OperationalLimit, which is also the prefix of the property naming its value. */

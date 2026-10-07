@@ -8,24 +8,20 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
-import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
-import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.List;
-import java.util.Properties;
-import java.util.stream.Stream;
 
+import static com.powsybl.cgmes.rdfdb.Backends.microGridBe;
+import static com.powsybl.cgmes.rdfdb.Backends.params;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -47,20 +43,6 @@ class SnapshotCatalogTest {
     private static final CgmesSubset EQ = CgmesSubset.EQUIPMENT;
     private static final String BASE_TIMESTEP = "2014-06-01T10:30:00Z";
 
-    static Stream<Arguments> backends() {
-        return Backends.backends();
-    }
-
-    private static Properties params() {
-        Properties p = new Properties();
-        p.put(CgmesImport.IMPORT_CGM_WITH_SUBNETWORKS, "false");
-        return p;
-    }
-
-    private static ReadOnlyDataSource be() {
-        return CgmesConformity1Catalog.microGridBaseCaseBE().dataSource();
-    }
-
     private static RdfDbConnection open(String backend) {
         RdfDbConnection db = RdfDbConnection.open(Backends.database(backend, "snapshots"));
         db.clear(S);
@@ -69,7 +51,7 @@ class SnapshotCatalogTest {
     }
 
     private static SnapshotInfo root(RdfDbConnection db, String scenario, String version) {
-        return db.snapshots(scenario).putFull(be(), null, SnapshotRef.of(scenario, version), params(),
+        return db.snapshots(scenario).putFull(microGridBe(), null, SnapshotRef.of(scenario, version), params(),
                 ReportNode.NO_OP);
     }
 
@@ -88,7 +70,7 @@ class SnapshotCatalogTest {
     // ------------------------------------------------------------------ the root
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void putFullCreatesRoot(String backend) {
         try (RdfDbConnection db = open(backend)) {
             SnapshotInfo root = root(db, S, "1.0");
@@ -121,7 +103,7 @@ class SnapshotCatalogTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void putFullTwiceRejected(String backend) {
         try (RdfDbConnection db = open(backend)) {
             root(db, S, "1.0");
@@ -132,7 +114,7 @@ class SnapshotCatalogTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void rootPerScenario(String backend) {
         try (RdfDbConnection db = open(backend)) {
             SnapshotInfo here = root(db, S, "1.0");
@@ -154,7 +136,7 @@ class SnapshotCatalogTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void refOfOtherScenarioRejected(String backend) {
         try (RdfDbConnection db = open(backend)) {
             root(db, S, "1.0");
@@ -167,7 +149,7 @@ class SnapshotCatalogTest {
     // ------------------------------------------------------------------ the version chain
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void putDiffCreatesChild(String backend) {
         try (RdfDbConnection db = open(backend)) {
             SnapshotInfo base = root(db, S, "1.0");
@@ -196,7 +178,7 @@ class SnapshotCatalogTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void putDiffRejectsFork(String backend) {
         try (RdfDbConnection db = open(backend)) {
             SnapshotInfo base = root(db, S, "1.0");
@@ -213,7 +195,7 @@ class SnapshotCatalogTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void putDiffRejectsDuplicateVersion(String backend) {
         try (RdfDbConnection db = open(backend)) {
             SnapshotInfo base = root(db, S, "1.0");
@@ -229,7 +211,7 @@ class SnapshotCatalogTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void putDiffRejectsWrongSupersedes(String backend) {
         try (RdfDbConnection db = open(backend)) {
             SnapshotInfo base = root(db, S, "1.0");
@@ -244,7 +226,7 @@ class SnapshotCatalogTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void putDiffOfOtherScenarioRejected(String backend) {
         try (RdfDbConnection db = open(backend)) {
             SnapshotInfo base = root(db, S, "1.0");
@@ -257,7 +239,7 @@ class SnapshotCatalogTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void putDiffAtAnUnknownTimestepCreatesItsRoot(String backend) {
         try (RdfDbConnection db = open(backend)) {
             SnapshotInfo base = root(db, S, "1.0");
@@ -277,7 +259,7 @@ class SnapshotCatalogTest {
     // ------------------------------------------------------------------ isolation and housekeeping
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void identicalChainsInTwoScenariosDoNotInterfere(String backend) {
         try (RdfDbConnection db = open(backend)) {
             SnapshotInfo here = root(db, S, "1.0");
@@ -298,7 +280,7 @@ class SnapshotCatalogTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void dropAllRemovesOnlyThisScenario(String backend) {
         try (RdfDbConnection db = open(backend)) {
             SnapshotInfo here = root(db, S, "1.0");
@@ -315,10 +297,10 @@ class SnapshotCatalogTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void migrateImplicitRootMakesAnUnversionedScenarioVersionZero(String backend) {
         try (RdfDbConnection db = open(backend)) {
-            db.loadCgmes(S, be(), null, params(), ReportNode.NO_OP);
+            db.loadCgmes(S, microGridBe(), null, params(), ReportNode.NO_OP);
             assertThat(db.snapshots(S).isVersioned()).isFalse();
 
             SnapshotInfo migrated = db.snapshots(S).migrateImplicitRoot().orElseThrow();
@@ -335,7 +317,7 @@ class SnapshotCatalogTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void blankScenarioRejected(String backend) {
         try (RdfDbConnection db = open(backend)) {
             assertThatThrownBy(() -> db.snapshots("")).isInstanceOf(RdfDbException.class)

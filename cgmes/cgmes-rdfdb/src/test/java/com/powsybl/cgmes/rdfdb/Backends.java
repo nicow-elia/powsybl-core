@@ -8,8 +8,15 @@
 
 package com.powsybl.cgmes.rdfdb;
 
+import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
+import com.powsybl.cgmes.conversion.CgmesImport;
+import com.powsybl.commons.datasource.ReadOnlyDataSource;
+import org.eclipse.rdf4j.model.Value;
 import org.junit.jupiter.params.provider.Arguments;
 
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
@@ -70,5 +77,32 @@ final class Backends {
         return MEMORY.equals(backend)
                 ? RdfDatabase.inMemory(name + "-" + COUNTER.incrementAndGet())
                 : fuseki().database();
+    }
+
+    /** The CGMES import parameters every test loads with: one network per CGM, no subnetworks. */
+    static Properties params() {
+        Properties p = new Properties();
+        p.put(CgmesImport.IMPORT_CGM_WITH_SUBNETWORKS, "false");
+        return p;
+    }
+
+    /**
+     * How many solutions a graph pattern has inside one named graph of a scenario.
+     *
+     * @param db       the open connection
+     * @param scenario the scenario to ask
+     * @param graph    the IRI of the named graph
+     * @param pattern  the graph pattern, with the {@code pdb:} prefix available
+     * @return the count, 0 when the database answers no row
+     */
+    static long count(RdfDbConnection db, String scenario, String graph, String pattern) {
+        List<Map<String, Value>> rows = db.sparql(scenario).select(RdfDbVocabulary.PREFIXES
+                + "SELECT (COUNT(*) AS ?n) WHERE { GRAPH <" + graph + "> { " + pattern + " } }");
+        return rows.isEmpty() ? 0 : Long.parseLong(rows.get(0).get("n").stringValue());
+    }
+
+    /** The MicroGrid BE base case, the fixture most tests of this package store. */
+    static ReadOnlyDataSource microGridBe() {
+        return CgmesConformity1Catalog.microGridBaseCaseBE().dataSource();
     }
 }

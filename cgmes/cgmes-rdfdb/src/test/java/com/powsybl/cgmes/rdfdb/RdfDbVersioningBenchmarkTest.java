@@ -8,28 +8,25 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
-import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
-import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Network;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Properties;
 import java.util.function.Supplier;
-import java.util.stream.Stream;
 
+import static com.powsybl.cgmes.rdfdb.Backends.microGridBe;
+import static com.powsybl.cgmes.rdfdb.Backends.params;
+import static com.powsybl.cgmes.rdfdb.BenchMeters.millis;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -65,20 +62,6 @@ class RdfDbVersioningBenchmarkTest {
     private static final int WARMUPS = 3;
     private static final int RUNS = 10;
 
-    static Stream<Arguments> backends() {
-        return Backends.backends();
-    }
-
-    private static Properties params() {
-        Properties p = new Properties();
-        p.put(CgmesImport.IMPORT_CGM_WITH_SUBNETWORKS, "false");
-        return p;
-    }
-
-    private static ReadOnlyDataSource be() {
-        return CgmesConformity1Catalog.microGridBaseCaseBE().dataSource();
-    }
-
     private static DifferenceModelSet step(SnapshotInfo parent, int index) {
         DifferenceModelHeader header = DifferenceModelHeader.builder("urn:uuid:bench-ssh-" + index, SSH, CIM16)
                 .supersedes(List.of(parent.state().get(SSH)))
@@ -92,12 +75,12 @@ class RdfDbVersioningBenchmarkTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void benchmark(String backend) {
         try (RdfDbConnection db = RdfDbConnection.open(Backends.database(backend, "versioning-bench"))) {
             db.clear(S);
             SnapshotCatalog catalog = db.snapshots(S);
-            SnapshotInfo head = catalog.putFull(be(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
+            SnapshotInfo head = catalog.putFull(microGridBe(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
             List<SnapshotRef> refs = new ArrayList<>();
             refs.add(head.ref());
             for (int i = 1; i <= DEPTH; i++) {
@@ -125,7 +108,7 @@ class RdfDbVersioningBenchmarkTest {
             long cold = millis(() -> RdfDbNetworkLoader.load(db, top, null, params(), ReportNode.NO_OP));
             long warm = median(3, () -> millis(() ->
                     RdfDbNetworkLoader.load(db, top, null, params(), ReportNode.NO_OP)));
-            long file = median(3, () -> millis(() -> Network.read(be(), params())));
+            long file = median(3, () -> millis(() -> Network.read(microGridBe(), params())));
 
             // (c) folding the chain on the database, reported only
             long checkpoint = millis(() -> Checkpoint.create(db, top));
@@ -210,7 +193,7 @@ class RdfDbVersioningBenchmarkTest {
      * <p>What it is for is to make the database big without making the test slow: the plan query has to prove that
      * it does not look at any of it.</p>
      */
-    private static void syntheticScenario(RdfDbConnection db, String scenario, int snapshots) {
+    static void syntheticScenario(RdfDbConnection db, String scenario, int snapshots) {
         db.clear(scenario);
         String meta = SparqlText.iri(RdfDbNames.metaGraph(scenario));
         StringBuilder update = new StringBuilder(RdfDbVocabulary.PREFIXES)
@@ -240,25 +223,11 @@ class RdfDbVersioningBenchmarkTest {
         db.sparql(scenario).update(update.append(filler).append("} }").toString());
     }
 
-    private static long millis(Runnable runnable) {
-        long start = System.nanoTime();
-        runnable.run();
-        return (System.nanoTime() - start) / 1_000_000;
-    }
-
     private static long median(Supplier<Long> measurement) {
         return median(RUNS, measurement);
     }
 
     private static long median(int runs, Supplier<Long> measurement) {
-        for (int i = 0; i < WARMUPS; i++) {
-            measurement.get();
-        }
-        List<Long> values = new ArrayList<>();
-        for (int i = 0; i < runs; i++) {
-            values.add(measurement.get());
-        }
-        values.sort(Long::compare);
-        return values.get(values.size() / 2);
+        return BenchMeters.median(WARMUPS, runs, measurement);
     }
 }

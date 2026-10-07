@@ -35,8 +35,6 @@ import com.powsybl.iidm.network.ThreeWindingsTransformer;
 import com.powsybl.iidm.network.VoltageLevel;
 import com.powsybl.iidm.network.VoltageSourceConverter;
 import com.powsybl.iidm.network.VscConverterStation;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -68,8 +66,6 @@ import java.util.Set;
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 final class DiffSubjectResolver {
-
-    private static final Logger LOGGER = LoggerFactory.getLogger(DiffSubjectResolver.class);
 
     private static final String URN_UUID = "urn:uuid:";
     private static final String TERMINAL_ALIAS_PREFIX = "CGMES.Terminal";
@@ -198,11 +194,11 @@ final class DiffSubjectResolver {
         Set<String> ids = Set.of(identifiable.getId());
         return switch (identifiable) {
             case Switch sw -> isBranchModelledAsSwitch(sw) ? Optional.empty()
-                    : Optional.of(of(Family.SWITCH, typeOf(Family.SWITCH, originalClass, null), about, identifiable, ids));
+                    : Optional.of(of(Family.SWITCH, typeOf(Family.SWITCH, originalClass), about, identifiable, ids));
             case Load load -> loadFamily(load, originalClass)
-                    .map(family -> of(family, typeOf(family, originalClass, null), about, identifiable, ids));
-            case Generator generator -> generatorFamily(generator, originalClass)
-                    .map(family -> of(family, typeOf(family, originalClass, null), about, identifiable, ids));
+                    .map(family -> of(family, typeOf(family, originalClass), about, identifiable, ids));
+            case Generator generator -> generatorFamily(originalClass)
+                    .map(family -> of(family, typeOf(family, originalClass), about, identifiable, ids));
             case ShuntCompensator shunt -> Optional.of(of(Family.SHUNT_COMPENSATOR,
                     shunt.getModelType() == ShuntCompensatorModelType.LINEAR
                             ? "LinearShuntCompensator" : "NonlinearShuntCompensator",
@@ -289,8 +285,7 @@ final class DiffSubjectResolver {
         });
     }
 
-    private static Optional<Family> generatorFamily(Generator generator, String originalClass) {
-        Objects.requireNonNull(generator);
+    private static Optional<Family> generatorFamily(String originalClass) {
         return Optional.ofNullable(switch (originalClass == null ? "" : originalClass) {
             case CgmesNames.SYNCHRONOUS_MACHINE -> Family.SYNCHRONOUS_MACHINE;
             case CgmesNames.EXTERNAL_NETWORK_INJECTION -> Family.EXTERNAL_NETWORK_INJECTION;
@@ -380,12 +375,9 @@ final class DiffSubjectResolver {
     }
 
     /** The CIM class of an equipment subject: what the importer recorded, when the family accepts it. */
-    private static String typeOf(Family family, String originalClass, String fallback) {
+    private static String typeOf(Family family, String originalClass) {
         FastRouteCapabilities.FamilySpec spec = FastRouteCapabilities.spec(family);
-        if (originalClass != null && spec.rdfTypes().contains(originalClass)) {
-            return originalClass;
-        }
-        return fallback != null ? fallback : spec.canonicalType();
+        return originalClass != null && spec.rdfTypes().contains(originalClass) ? originalClass : spec.canonicalType();
     }
 
     /**
@@ -477,11 +469,6 @@ final class DiffSubjectResolver {
         }
     }
 
-    private static void addProperty(Map<String, ResolvedSubject> index, Identifiable<?> owner, String property,
-                                    Family family, String rdfType) {
-        addIndexed(index, owner.getProperty(property), family, rdfType, owner, "");
-    }
-
     /**
      * Index one CGMES object that IIDM does not model, under the identifier a difference model states it by.
      *
@@ -491,13 +478,13 @@ final class DiffSubjectResolver {
      * written back in the shape the network uses, so that the synthetic update document resolves to the same
      * object.</p>
      */
-    private static void addIndexed(Map<String, ResolvedSubject> index, String id, Family family, String rdfType,
-                                   Identifiable<?> owner, String attributePrefix) {
+    private static void addProperty(Map<String, ResolvedSubject> index, Identifiable<?> owner, String property,
+                                    Family family, String rdfType) {
+        String id = owner.getProperty(property);
         if (id == null) {
             return;
         }
-        ResolvedSubject subject = new ResolvedSubject(family, rdfType, about(id), owner, attributePrefix,
-                attributePrefix.isEmpty() ? ProbeKind.NONE : ProbeKind.TAP_CHANGER_PREFIX, Set.of(owner.getId()));
+        ResolvedSubject subject = of(family, rdfType, about(id), owner, Set.of(owner.getId()));
         index.merge(DifferenceModelParser.normalizeId(id), subject, (existing, added) -> withUser(existing, owner));
     }
 
@@ -555,11 +542,5 @@ final class DiffSubjectResolver {
     /** The index of the CGMES limit identifiers this resolver built, or {@code null} when it never needed one. */
     CgmesLimitIndex limitIndex() {
         return limitIndex;
-    }
-
-    /** Only for the logging of a class hint the network overruled. */
-    static void logIgnoredHint(String subjectId, String hint, String used) {
-        LOGGER.debug("Ignoring the class {} the difference model gives {}: the network says it is a {}",
-                hint, subjectId, used);
     }
 }

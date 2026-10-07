@@ -45,8 +45,9 @@ import static com.powsybl.cgmes.model.CgmesNamespace.RDF_NAMESPACE;
  * content is a list of statements about objects that exist elsewhere rather than a description of new objects.</p>
  *
  * <p>Inside a container every subject is described by exactly one {@code rdf:Description rdf:about="#_<id>"},
- * placed where the subject is first mentioned, and carries no {@code rdf:type}: a difference states properties of
- * objects the receiver already holds, it never introduces one.</p>
+ * placed where the subject is first mentioned. A difference states properties of objects the receiver already holds,
+ * it never introduces one; an {@code rdf:type} is only written when the model carries a type statement for the
+ * subject.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
@@ -63,7 +64,6 @@ public final class DifferenceModelWriter {
     private static final String STATEMENTS = "Statements";
     private static final String DESCRIPTION = "Description";
     private static final String TYPE = "type";
-    private static final String RDF_TYPE = CgmesStatement.RDF_TYPE;
     /** The prefix given to a namespace this writer does not know, declared on the property element itself. */
     private static final String FOREIGN_PREFIX = "ns0";
 
@@ -74,8 +74,7 @@ public final class DifferenceModelWriter {
      * Write a difference model as an XML document.
      *
      * @param model        the model to write
-     * @param outputStream the stream to write to. It is neither flushed nor closed by this method, exactly as the
-     *                     partial SSH export leaves it
+     * @param outputStream the stream to write to. It is neither flushed nor closed by this method
      * @throws UncheckedXmlStreamException if the document cannot be written
      */
     public static void write(DifferenceModel model, OutputStream outputStream) {
@@ -83,7 +82,7 @@ public final class DifferenceModelWriter {
         Objects.requireNonNull(outputStream);
         try {
             // Buffered UTF-8 under the StAX writer: over a bare OutputStream the JDK writer emits one byte per call.
-            // The same bytes; the StAX flush below reaches the stream through the buffer as it did before
+            // The StAX flush below pushes the buffered bytes through to the stream
             XMLStreamWriter writer = XmlUtil.initializeWriter(true, "    ",
                     new BufferedWriter(new OutputStreamWriter(outputStream, StandardCharsets.UTF_8)));
             writeDocument(model, writer);
@@ -115,15 +114,11 @@ public final class DifferenceModelWriter {
         Objects.requireNonNull(set);
         Objects.requireNonNull(dataSource);
         Objects.requireNonNull(baseName);
+        DifferenceSink sink = sink(dataSource, baseName);
         List<String> fileNames = new ArrayList<>(set.models().size());
         for (DifferenceModel model : set.models().values()) {
-            String fileName = fileName(baseName, model.header().subset());
-            try (OutputStream outputStream = dataSource.newOutputStream(fileName, false)) {
-                write(model, outputStream);
-            } catch (IOException e) {
-                throw new UncheckedIOException(e);
-            }
-            fileNames.add(fileName);
+            sink.accept(model);
+            fileNames.add(fileName(baseName, model.header().subset()));
         }
         return fileNames;
     }
@@ -264,7 +259,7 @@ public final class DifferenceModelWriter {
     }
 
     private static void writeStatement(CgmesStatement statement, String cimNamespace, XMLStreamWriter writer) throws XMLStreamException {
-        if (RDF_TYPE.equals(statement.property())) {
+        if (statement.isType()) {
             // The type of the subject, which a parser produces for a typed node element and which the fast route
             // needs in the synthetic update document. It is written back as an explicit rdf:type property so that
             // parse -> write -> parse is stable whatever shape the producer chose.

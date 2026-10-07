@@ -19,11 +19,9 @@ import com.powsybl.triplestore.impl.rdf4j.sparql.ScenarioGraphNames;
  * makes the naming here an implementation detail the versioning layer could change without touching a
  * caller.</p>
  *
- * <p>The scheme is {@code http://powsybl.org/rdfdb/<scenario>/…} rather than the {@code urn:powsybl:rdfdb:…} of
- * the original design. Two reasons. Apache Jena validates URNs against RFC 8141 and {@code urn:uuid:} against RFC
- * 4122, and a CGMES model identifier is not always a UUID, so {@code urn:uuid:<not a uuid>/forward} is rejected by
- * the server rather than by us. And an http hierarchy gives each scenario one namespace, which makes "everything
- * of this scenario" a prefix question on every backend.</p>
+ * <p>The scheme is {@code http://powsybl.org/rdfdb/<scenario>/…}, not a URN: servers validate URNs (a CGMES model
+ * identifier is not always a UUID), and an http hierarchy makes "everything of this scenario" a prefix question
+ * on every backend.</p>
  *
  * <p>Full-model graphs keep the naming of the loading layer ({@code contexts:<scenario>/<file name>}): they are
  * written by the upload, which knows nothing about versions, and they are referenced from the metadata graph like

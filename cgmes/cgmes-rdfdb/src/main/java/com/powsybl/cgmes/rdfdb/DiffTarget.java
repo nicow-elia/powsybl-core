@@ -13,7 +13,6 @@ import com.powsybl.cgmes.model.CgmesSubset;
 import java.util.EnumMap;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 
 /**
  * Which stored state of a scenario a network is to be brought to.
@@ -72,13 +71,6 @@ public final class DiffTarget {
      */
     public Map<CgmesSubset, String> modelIds() {
         return modelIds == null ? Map.of() : Map.copyOf(modelIds);
-    }
-
-    /**
-     * @return the profiles this target names, empty for {@link #head()}, which names whatever the scenario holds
-     */
-    public Set<CgmesSubset> subsets() {
-        return modelIds == null ? Set.of() : Set.copyOf(modelIds.keySet());
     }
 
     @Override

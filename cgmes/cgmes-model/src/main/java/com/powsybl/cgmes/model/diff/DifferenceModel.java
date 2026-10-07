@@ -46,9 +46,8 @@ public final class DifferenceModel {
      * @param header        the model description of this difference
      * @param forward       the statements describing the state after the change
      * @param reverse       the statements describing the state before the change
-     * @param preconditions the statements a receiver has to find in the model before applying the difference. Not
-     *                      produced by the exporters of this release, but part of the difference model and therefore
-     *                      carried through
+     * @param preconditions the statements a receiver has to find in the model before applying the difference. The
+     *                      exporters of this library write none; a model read from a document carries them through
      */
     public DifferenceModel(DifferenceModelHeader header, List<CgmesStatement> forward, List<CgmesStatement> reverse,
                            List<CgmesStatement> preconditions) {
@@ -143,9 +142,10 @@ public final class DifferenceModel {
 
         Map<CgmesStatement.Key, CgmesStatement> reverseByKey = new LinkedHashMap<>();
         Map<CgmesStatement.Key, CgmesStatement> forwardByKey = new LinkedHashMap<>();
-        Set<CgmesStatement.Key> mentioned = new HashSet<>();
+        // Insertion ordered: the keys in the order in which the chain first mentions them, reverse before forward
+        Set<CgmesStatement.Key> mentioned = new LinkedHashSet<>();
         for (DifferenceModel model : chain) {
-            Set<CgmesStatement.Key> mentionedHere = new HashSet<>();
+            Set<CgmesStatement.Key> mentionedHere = new LinkedHashSet<>();
             model.reverse().forEach(s -> mentionedHere.add(s.key()));
             model.forward().forEach(s -> mentionedHere.add(s.key()));
             // The state the chain started from is what the first model mentioning a key says it reversed
@@ -163,10 +163,9 @@ public final class DifferenceModel {
             mentioned.addAll(mentionedHere);
         }
 
-        List<CgmesStatement.Key> order = keyOrder(chain);
         List<CgmesStatement> forward = new ArrayList<>();
         List<CgmesStatement> reverse = new ArrayList<>();
-        for (CgmesStatement.Key key : order) {
+        for (CgmesStatement.Key key : mentioned) {
             CgmesStatement f = forwardByKey.get(key);
             CgmesStatement r = reverseByKey.get(key);
             if (Objects.equals(f, r)) {
@@ -181,16 +180,6 @@ public final class DifferenceModel {
             }
         }
         return new DifferenceModel(header, forward, reverse, List.of());
-    }
-
-    /** The keys of a chain in the order in which the chain first mentions them, reverse before forward. */
-    private static List<CgmesStatement.Key> keyOrder(List<DifferenceModel> chain) {
-        Set<CgmesStatement.Key> seen = new LinkedHashSet<>();
-        for (DifferenceModel model : chain) {
-            model.reverse().forEach(s -> seen.add(s.key()));
-            model.forward().forEach(s -> seen.add(s.key()));
-        }
-        return List.copyOf(seen);
     }
 
     private static void checkOneProfile(Collection<DifferenceModel> chain) {

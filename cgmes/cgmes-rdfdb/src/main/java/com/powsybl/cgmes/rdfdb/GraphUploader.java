@@ -10,7 +10,6 @@ package com.powsybl.cgmes.rdfdb;
 
 import org.eclipse.rdf4j.model.Statement;
 import org.eclipse.rdf4j.repository.Repository;
-import org.eclipse.rdf4j.repository.RepositoryConnection;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -96,11 +95,7 @@ final class GraphUploader {
     }
 
     private void writeOne(Repository source, String contextName, String graphIri) {
-        List<Statement> statements;
-        try (RepositoryConnection conn = source.getConnection()) {
-            statements = new ArrayList<>(conn.getStatements(null, null, null,
-                    conn.getValueFactory().createIRI(contextName)).stream().toList());
-        }
+        List<Statement> statements = SparqlAccess.statementsOf(source, contextName);
         connection.writeGraph(scenario, graphIri, statements);
         LOGGER.debug("Uploaded {} statements of {} into {} of scenario '{}'", statements.size(), contextName,
                 graphIri, scenario);

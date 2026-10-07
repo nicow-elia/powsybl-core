@@ -30,6 +30,9 @@ public class CgmesDiffNotApplicableException extends PowsyblException {
 
     private final transient CgmesDiffImport.Decision decision;
 
+    /**
+     * @param decision the refusal, whose blocking statements make up the message (the first ten of them)
+     */
     public CgmesDiffNotApplicableException(CgmesDiffImport.Decision decision) {
         super(message(decision));
         this.decision = decision;

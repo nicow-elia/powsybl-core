@@ -8,12 +8,12 @@
 package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conversion.Conversion;
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Load;
 import com.powsybl.iidm.network.Network;
 import org.assertj.core.api.SoftAssertions;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -74,6 +74,11 @@ class ScaleVersioningBenchmarkTest {
 
     private final SoftAssertions softly = new SoftAssertions();
 
+    @AfterAll
+    static void uninstallMeter() {
+        BenchMeters.FusekiMeter.uninstall();
+    }
+
     static Stream<Arguments> backends() {
         return BenchMeters.backends();
     }
@@ -103,7 +108,7 @@ class ScaleVersioningBenchmarkTest {
     private String measure(String backend, BenchMeters.Grid grid) {
         String scenario = "scale-versioning-" + grid.key() + "-" + backend;
         ReadOnlyDataSource ds = grid.dataSource();
-        Network file = Network.read(ds, BenchMeters.params());
+        Network file = Network.read(ds, Backends.params());
         Load load = file.getLoads().iterator().next();
         String loadId = load.getId();
         String loadClass = load.getProperty(Conversion.PROPERTY_CGMES_ORIGINAL_CLASS, "EnergyConsumer");
@@ -116,7 +121,7 @@ class ScaleVersioningBenchmarkTest {
             List<String> others = new ArrayList<>();
             SnapshotCatalog catalog = db.snapshots(scenario);
             long build = System.nanoTime();
-            SnapshotInfo head = catalog.putFull(ds, null, SnapshotRef.of(scenario, "1.0"), BenchMeters.params(),
+            SnapshotInfo head = catalog.putFull(ds, null, SnapshotRef.of(scenario, "1.0"), Backends.params(),
                     ReportNode.NO_OP);
             List<SnapshotRef> refs = new ArrayList<>();
             refs.add(head.ref());
@@ -141,7 +146,7 @@ class ScaleVersioningBenchmarkTest {
             for (int i = 0; i < OTHER_SCENARIOS; i++) {
                 String other = scenario + "-other-" + i;
                 others.add(other);
-                syntheticScenario(db, other, NODES_PER_SCENARIO);
+                RdfDbVersioningBenchmarkTest.syntheticScenario(db, other, NODES_PER_SCENARIO);
             }
             long p200many = plan(db, scenario, root, refs.get(DEPTH), warmups, runs);
             long p200again = plan(db, scenario, root, refs.get(DEPTH), warmups, runs);
@@ -157,12 +162,12 @@ class ScaleVersioningBenchmarkTest {
             mark = BenchMeters.FusekiMeter.mark();
             long start = System.nanoTime();
             RdfDbNetworkLoader.LoadResult materialised = RdfDbNetworkLoader.loadWithStatistics(db, refs.get(DEPTH),
-                    null, BenchMeters.params(), ReportNode.NO_OP);
+                    null, Backends.params(), ReportNode.NO_OP);
             long m200cold = (System.nanoTime() - start) / 1_000_000;
             long materialiseRequests = BenchMeters.FusekiMeter.since(mark).requests();
             int graphs = materialised.statistics().graphs();
             long m200warm = BenchMeters.median(warmups, runs, () -> BenchMeters.millis(() ->
-                    RdfDbNetworkLoader.load(db, refs.get(DEPTH), null, BenchMeters.params(), ReportNode.NO_OP)));
+                    RdfDbNetworkLoader.load(db, refs.get(DEPTH), null, Backends.params(), ReportNode.NO_OP)));
 
             // (ck) a checkpoint at 200 and the plan after it
             long checkpoint = BenchMeters.millis(() -> Checkpoint.create(db, refs.get(DEPTH)));
@@ -207,7 +212,7 @@ class ScaleVersioningBenchmarkTest {
     /** Requests of the plain load of the root that {@link #update} does before the update itself. */
     private static long loadRequests(RdfDbConnection db, SnapshotRef root) {
         BenchMeters.FusekiMeter.Reading mark = BenchMeters.FusekiMeter.mark();
-        RdfDbNetworkLoader.load(db, root, null, BenchMeters.params(), ReportNode.NO_OP);
+        RdfDbNetworkLoader.load(db, root, null, Backends.params(), ReportNode.NO_OP);
         return BenchMeters.FusekiMeter.since(mark).requests();
     }
 
@@ -227,9 +232,9 @@ class ScaleVersioningBenchmarkTest {
         List<Long> totals = new ArrayList<>();
         long[] best = null;
         for (int i = 0; i < warmups + runs; i++) {
-            Network client = RdfDbNetworkLoader.load(db, from, null, BenchMeters.params(), ReportNode.NO_OP);
+            Network client = RdfDbNetworkLoader.load(db, from, null, Backends.params(), ReportNode.NO_OP);
             UpdateResult result = RdfDbNetworkLoader.update(client, db, target, new RdfDbUpdateOptions(),
-                    BenchMeters.params(), ReportNode.NO_OP);
+                    Backends.params(), ReportNode.NO_OP);
             assertThat(result.route()).isEqualTo(UpdateResult.Route.DIFF_APPLIED);
             if (i < warmups) {
                 continue;
@@ -245,32 +250,4 @@ class ScaleVersioningBenchmarkTest {
         return best;
     }
 
-    /** A scenario of nothing but snapshot nodes, as {@link RdfDbVersioningBenchmarkTest} writes them. */
-    private static void syntheticScenario(RdfDbConnection db, String scenario, int snapshots) {
-        db.clear(scenario);
-        String meta = SparqlText.iri(RdfDbNames.metaGraph(scenario));
-        StringBuilder update = new StringBuilder(RdfDbVocabulary.PREFIXES)
-                .append("INSERT DATA { GRAPH ").append(meta).append(" { ");
-        StringBuilder filler = new StringBuilder();
-        String timestep = "2016-01-01T00:00:00Z";
-        for (int i = 0; i < snapshots; i++) {
-            String iri = RdfDbNames.snapshot(scenario, timestep, "1." + i);
-            update.append(SparqlText.iri(iri)).append(" a pdb:Snapshot ; pdb:scenario ")
-                    .append(SparqlText.str(scenario)).append(" ; pdb:version ")
-                    .append(SparqlText.str("1." + i)).append(" ; pdb:timestep ").append(SparqlText.str(timestep))
-                    .append(" ; pdb:depth ").append(SparqlText.integer(i));
-            if (i == 0) {
-                update.append(" ; pdb:full ").append(SparqlText.iri(iri + "/full"));
-                filler.append(SparqlText.iri(iri + "/full")).append(" pdb:subset ")
-                        .append(SparqlText.str(CgmesSubset.STEADY_STATE_HYPOTHESIS.getIdentifier())).append(" . ");
-            }
-            if (i > 0) {
-                update.append(" ; pdb:parent ")
-                        .append(SparqlText.iri(RdfDbNames.snapshot(scenario, timestep, "1." + (i - 1))))
-                        .append(" ; pdb:edge pdb:VersionEdge");
-            }
-            update.append(" . ");
-        }
-        db.sparql(scenario).update(update.append(filler).append("} }").toString());
-    }
 }

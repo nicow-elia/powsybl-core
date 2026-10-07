@@ -127,9 +127,7 @@ public class ActivePowerControlImpl<T extends Injection<T>> extends AbstractMult
         boolean oldParticipate = this.participate.get(variantIndex);
         if (oldParticipate != participate) {
             this.participate.set(variantIndex, participate);
-            NetworkImpl network = (NetworkImpl) getExtendable().getNetwork();
-            String variantId = getVariantManagerHolder().getVariantManager().getWorkingVariantId();
-            network.getListeners().notifyExtensionUpdate(this, "participate", variantId, oldParticipate, participate);
+            notifyUpdate("participate", oldParticipate, participate);
         }
     }
 
@@ -142,9 +140,7 @@ public class ActivePowerControlImpl<T extends Injection<T>> extends AbstractMult
         double oldDroop = this.droop.get(variantIndex);
         if (oldDroop != droop) {
             this.droop.set(variantIndex, droop);
-            NetworkImpl network = (NetworkImpl) getExtendable().getNetwork();
-            String variantId = getVariantManagerHolder().getVariantManager().getWorkingVariantId();
-            network.getListeners().notifyExtensionUpdate(this, "droop", variantId, oldDroop, droop);
+            notifyUpdate("droop", oldDroop, droop);
         }
     }
 
@@ -157,10 +153,14 @@ public class ActivePowerControlImpl<T extends Injection<T>> extends AbstractMult
         double oldParticipationFactor = this.participationFactor.get(variantIndex);
         if (oldParticipationFactor != participationFactor) {
             this.participationFactor.set(variantIndex, participationFactor);
-            NetworkImpl network = (NetworkImpl) getExtendable().getNetwork();
-            String variantId = getVariantManagerHolder().getVariantManager().getWorkingVariantId();
-            network.getListeners().notifyExtensionUpdate(this, "participationFactor", variantId, oldParticipationFactor, participationFactor);
+            notifyUpdate("participationFactor", oldParticipationFactor, participationFactor);
         }
+    }
+
+    private void notifyUpdate(String attribute, Object oldValue, Object newValue) {
+        NetworkImpl network = (NetworkImpl) getExtendable().getNetwork();
+        String variantId = getVariantManagerHolder().getVariantManager().getWorkingVariantId();
+        network.getListeners().notifyExtensionUpdate(this, attribute, variantId, oldValue, newValue);
     }
 
     @Override

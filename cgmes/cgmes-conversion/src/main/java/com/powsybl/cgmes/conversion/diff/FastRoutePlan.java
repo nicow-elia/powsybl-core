@@ -52,7 +52,8 @@ import java.util.Set;
  * <p>An update that fails half way through leaves a network in a state no file describes, so a difference model
  * update resolves every subject, completes every consistency group, checks the metadata and evaluates the optional
  * reverse check <em>first</em>, and only then writes. What comes out of the planning is a list of typed objects with
- * complete statements, which is exactly the content of a partial steady state hypothesis document.</p>
+ * complete statements per profile, which is exactly the content of a partial update document, plus the equipment
+ * statements that are applied with IIDM setters ({@link DirectStatement}).</p>
  *
  * <p>The plan is also what {@link CgmesDiffImport#canApplyInPlace} answers with: building it modifies nothing, so
  * asking whether a difference applies and applying it are the same code.</p>
@@ -134,11 +135,6 @@ final class FastRoutePlan {
     private final CgmesLimitIndex limitIndex;
 
     private FastRoutePlan(CgmesDiffImport.Decision decision, List<PlannedModel> models,
-                          List<DirectStatement> directStatements, Set<String> touchedIidmIds) {
-        this(decision, models, directStatements, touchedIidmIds, null);
-    }
-
-    private FastRoutePlan(CgmesDiffImport.Decision decision, List<PlannedModel> models,
                           List<DirectStatement> directStatements, Set<String> touchedIidmIds,
                           CgmesLimitIndex limitIndex) {
         this.decision = decision;
@@ -146,6 +142,11 @@ final class FastRoutePlan {
         this.directStatements = directStatements;
         this.touchedIidmIds = touchedIidmIds;
         this.limitIndex = limitIndex;
+    }
+
+    /** A plan that writes nothing: the difference is refused or says nothing. */
+    private static FastRoutePlan refused(CgmesDiffImport.Decision decision) {
+        return new FastRoutePlan(decision, List.of(), List.of(), Set.of(), null);
     }
 
     /**
@@ -176,11 +177,6 @@ final class FastRoutePlan {
         return models;
     }
 
-    /** Every IIDM object the update touches. */
-    Set<String> touchedIidmIds() {
-        return touchedIidmIds;
-    }
-
     /**
      * The scope the update runs with.
      *
@@ -207,7 +203,7 @@ final class FastRoutePlan {
                             boolean inverted) {
         CgmesDiffImport.Decision structural = FastRouteCapabilities.check(inverted ? invert(diffs) : diffs);
         if (structural.route() != CgmesDiffImport.Route.FAST) {
-            return new FastRoutePlan(structural, List.of(), List.of(), Set.of());
+            return refused(structural);
         }
         return new Planner(network, diffs, options, inverted).plan();
     }
@@ -255,13 +251,10 @@ final class FastRoutePlan {
             }
             checkVoltageLevelLimits();
             if (!blocking.isEmpty()) {
-                return new FastRoutePlan(
-                        new CgmesDiffImport.Decision(CgmesDiffImport.Route.SLOW_REQUIRED, blocking), List.of(),
-                        List.of(), Set.of());
+                return refused(new CgmesDiffImport.Decision(CgmesDiffImport.Route.SLOW_REQUIRED, blocking));
             }
             if (models.isEmpty() && directs.isEmpty()) {
-                return new FastRoutePlan(new CgmesDiffImport.Decision(CgmesDiffImport.Route.NOOP, List.of()),
-                        List.of(), List.of(), Set.of());
+                return refused(new CgmesDiffImport.Decision(CgmesDiffImport.Route.NOOP, List.of()));
             }
             return new FastRoutePlan(new CgmesDiffImport.Decision(CgmesDiffImport.Route.FAST, List.of()),
                     List.copyOf(models), List.copyOf(directs), Set.copyOf(touched), resolver.limitIndex());
@@ -316,7 +309,7 @@ final class FastRoutePlan {
             }
             // A model whose statements are all applied with setters still carries a header, so that the metadata of
             // the profile is registered exactly as it is for a model the update workflow reads
-            return new PlannedModel(model.header(), identity(model, subset, current), List.copyOf(objects));
+            return new PlannedModel(model.header(), identity(model, current), List.copyOf(objects));
         }
 
         private TypedObject planSubject(CgmesSubset subset, String subjectId, List<CgmesStatement> statements,
@@ -334,7 +327,8 @@ final class FastRoutePlan {
             }
             ResolvedSubject subject = resolved.get();
             if (classNameHint != null && !classNameHint.equals(subject.rdfType())) {
-                DiffSubjectResolver.logIgnoredHint(subjectId, classNameHint, subject.rdfType());
+                LOGGER.debug("Ignoring the class {} the difference model gives {}: the network says it is a {}",
+                        classNameHint, subjectId, subject.rdfType());
             }
             if (statements.isEmpty()) {
                 // A forward only type statement on an object the network holds is a no-op
@@ -768,13 +762,12 @@ final class FastRoutePlan {
          * version is decremented and the other values of the header are kept &mdash; an approximation a database
          * layer holding the real metadata may overwrite.</p>
          */
-        private RegisteredIdentity identity(DifferenceModel model, CgmesSubset subset,
-                                            Optional<CgmesMetadataModel> current) {
+        private RegisteredIdentity identity(DifferenceModel model, Optional<CgmesMetadataModel> current) {
             DifferenceModelHeader header = model.header();
             String authority = header.modelingAuthoritySet() != null ? header.modelingAuthoritySet()
                     : current.map(CgmesMetadataModel::getModelingAuthoritySet).orElse(UNKNOWN_AUTHORITY);
             List<String> profiles = !header.profiles().isEmpty() ? header.profiles()
-                    : current.map(m -> List.copyOf(m.getProfiles())).orElseGet(() -> defaultProfiles(header, subset));
+                    : current.map(m -> List.copyOf(m.getProfiles())).orElseGet(() -> defaultProfiles(header));
             ZonedDateTime scenarioTime = header.scenarioTime() != null ? header.scenarioTime() : network.getCaseDate();
             ZonedDateTime created = header.created() != null ? header.created() : ZonedDateTime.now();
             int version = header.version() > 0 ? header.version()
@@ -798,10 +791,10 @@ final class FastRoutePlan {
             return CgmesDiffImport.derivedId("reverted:" + header.id());
         }
 
-        private static List<String> defaultProfiles(DifferenceModelHeader header, CgmesSubset subset) {
+        private static List<String> defaultProfiles(DifferenceModelHeader header) {
             for (CgmesNamespace.Cim cim : CgmesNamespace.CIM_LIST) {
                 if (cim.getNamespace().equals(header.cimNamespace())) {
-                    String uri = cim.getProfileUri(subset.getIdentifier());
+                    String uri = cim.getProfileUri(header.subset().getIdentifier());
                     if (uri != null) {
                         return List.of(uri);
                     }

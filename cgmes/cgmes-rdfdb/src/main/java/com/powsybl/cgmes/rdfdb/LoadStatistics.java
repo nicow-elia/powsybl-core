@@ -53,6 +53,32 @@ public record LoadStatistics(Duration listGraphs, Duration fetch, Duration parse
     }
 
     /**
+     * The statistics of a load that fetched its graphs through a {@link GraphFetcher}.
+     *
+     * @param listGraphs how long listing the graphs took
+     * @param fetch      the fetch time to report, wall clock
+     * @param fetched    what the fetcher measured
+     * @param extraStore store time spent beyond the fetcher's, such as applying differences
+     * @param describe   how long working out the CIM namespace and base URI took
+     * @param convert    how long the conversion took
+     * @return the statistics
+     */
+    static LoadStatistics of(Duration listGraphs, Duration fetch, GraphFetcher.FetchStatistics fetched,
+                             Duration extraStore, Duration describe, Duration convert) {
+        return new LoadStatistics(listGraphs, fetch, fetched.parse(), fetched.store().plus(extraStore), describe,
+                convert, fetched.statements(), fetched.graphs(), fetched.cacheHits(), fetched.perGraph());
+    }
+
+    /**
+     * @param newListGraphs the listing time to report instead
+     * @return the same statistics with another listing time
+     */
+    LoadStatistics withListGraphs(Duration newListGraphs) {
+        return new LoadStatistics(newListGraphs, fetch, parse, store, describe, convert, statements, graphs,
+                cacheHits, perGraph);
+    }
+
+    /**
      * @return the total time of the load
      */
     public Duration total() {

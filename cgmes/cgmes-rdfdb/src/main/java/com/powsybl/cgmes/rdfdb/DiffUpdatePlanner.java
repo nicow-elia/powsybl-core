@@ -18,7 +18,8 @@ import java.util.Map;
 
 /**
  * Decides how a network gets from where it is to a stored state: not at all, by applying differences, or by being
- * rebuilt.
+ * rebuilt. The planner of the model-level route, that is of a scenario without snapshots; a versioned scenario is
+ * planned by {@link VersionGraph}.
  *
  * <p>A pure function over catalogue data. It is written that way on purpose: the decision is the part of the
  * update that has real logic in it &mdash; is the current model an ancestor of the target, how far back, is every

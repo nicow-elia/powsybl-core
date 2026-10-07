@@ -20,7 +20,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.TreeSet;
 
 /**
  * The metadata graph of one scenario, read once and then asked as often as needed.
@@ -45,10 +44,6 @@ public final class CatalogSnapshot {
     private final Map<String, StoredModel> byId = new LinkedHashMap<>();
     private final Map<String, List<StoredModel>> successors = new LinkedHashMap<>();
     private final boolean versioned;
-
-    CatalogSnapshot(String scenario, List<StoredModel> models) {
-        this(scenario, models, false);
-    }
 
     CatalogSnapshot(String scenario, List<StoredModel> models, boolean versioned) {
         this.versioned = versioned;
@@ -103,10 +98,8 @@ public final class CatalogSnapshot {
         return models.stream().anyMatch(StoredModel::isDiff);
     }
 
-    /**
-     * @return the profiles the scenario holds a model of, in the order the models are sorted in
-     */
-    public Set<CgmesSubset> subsets() {
+    /** The profiles the scenario holds a model of, in the order the models are sorted in. */
+    private Set<CgmesSubset> subsets() {
         Set<CgmesSubset> subsets = new LinkedHashSet<>();
         models.forEach(model -> subsets.add(model.subset()));
         return subsets;
@@ -131,11 +124,13 @@ public final class CatalogSnapshot {
      */
     public Optional<StoredModel> head(CgmesSubset subset) {
         Objects.requireNonNull(subset);
-        List<String> heads = new ArrayList<>(new TreeSet<>(models.stream()
+        List<String> heads = models.stream()
                 .filter(model -> model.subset() == subset)
                 .filter(model -> !isSuperseded(model))
                 .map(StoredModel::id)
-                .toList()));
+                .distinct()
+                .sorted()
+                .toList();
         if (heads.isEmpty()) {
             return Optional.empty();
         }

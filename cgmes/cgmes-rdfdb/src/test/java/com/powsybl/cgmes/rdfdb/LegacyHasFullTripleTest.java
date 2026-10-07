@@ -8,25 +8,21 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
-import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
-import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
 import org.eclipse.rdf4j.model.Value;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Properties;
-import java.util.stream.Stream;
 
+import static com.powsybl.cgmes.rdfdb.Backends.microGridBe;
+import static com.powsybl.cgmes.rdfdb.Backends.params;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
@@ -56,20 +52,6 @@ class LegacyHasFullTripleTest {
     private static final String S = "2016-01-01";
     private static final String CIM16 = "http://iec.ch/TC57/2013/CIM-schema-cim16#";
     private static final CgmesSubset SSH = CgmesSubset.STEADY_STATE_HYPOTHESIS;
-
-    static Stream<Arguments> backends() {
-        return Backends.backends();
-    }
-
-    private static Properties params() {
-        Properties p = new Properties();
-        p.put(CgmesImport.IMPORT_CGM_WITH_SUBNETWORKS, "false");
-        return p;
-    }
-
-    private static ReadOnlyDataSource be() {
-        return CgmesConformity1Catalog.microGridBaseCaseBE().dataSource();
-    }
 
     private static RdfDbConnection open(String backend) {
         RdfDbConnection db = RdfDbConnection.open(Backends.database(backend, "legacy-hasfull"));
@@ -105,9 +87,7 @@ class LegacyHasFullTripleTest {
     }
 
     private static long count(RdfDbConnection db, String pattern) {
-        List<Map<String, Value>> rows = db.sparql(S).select(RdfDbVocabulary.PREFIXES
-                + "SELECT (COUNT(*) AS ?n) WHERE { GRAPH <" + RdfDbNames.metaGraph(S) + "> { " + pattern + " } }");
-        return Long.parseLong(rows.get(0).get("n").stringValue());
+        return Backends.count(db, S, RdfDbNames.metaGraph(S), pattern);
     }
 
     /**
@@ -124,11 +104,11 @@ class LegacyHasFullTripleTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aStoredHasFullFlagIsIgnoredAndTheLinksDecide(String backend) {
         try (RdfDbConnection db = open(backend)) {
             SnapshotCatalog catalog = db.snapshots(S);
-            SnapshotInfo root = catalog.putFull(be(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
+            SnapshotInfo root = catalog.putFull(microGridBe(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
             SnapshotInfo plain = catalog.putDiff(change(root, "urn:uuid:ssh-d2", "12.0"), SnapshotRef.of(S, "1.1"));
             SnapshotInfo folded = catalog.putDiff(change(plain, "urn:uuid:ssh-d3", "13.0"),
                     SnapshotRef.of(S, "1.2"));

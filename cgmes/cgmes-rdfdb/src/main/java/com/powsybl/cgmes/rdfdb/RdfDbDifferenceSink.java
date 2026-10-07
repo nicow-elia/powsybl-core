@@ -24,6 +24,7 @@ import org.slf4j.LoggerFactory;
 
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -68,8 +69,8 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
     /**
      * Above this many statements the data graphs are uploaded before the guarded metadata write.
      *
-     * <p>Low on purpose: rdf4j's SPARQL update parser is quadratic in the number of template triples (probe
-     * {@code scratchpad/probes/perf16/UpdateParseProbe.java}: 3 732 patterns 95 ms, 12 440 &rarr; 1 000 ms,
+     * <p>Low on purpose: rdf4j's SPARQL update parser is quadratic in the number of template triples (measured:
+     * 3 732 patterns 95 ms, 12 440 &rarr; 1 000 ms,
      * 24 880 &rarr; 3 860 ms; {@code INSERT DATA} and the Graph Store Protocol are linear at ~5 &micro;s per
      * triple), so the data goes through the Graph Store Protocol above 1 000 statements and the guarded request
      * stays small.</p>
@@ -99,17 +100,81 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
      * @param edge         {@code pdb:VersionEdge} or {@code pdb:TimestepEdge}
      * @param depth        the depth of the new snapshot
      * @param state        the effective model per profile at the new snapshot
-     * @param fullModels   the models with a full graph the new snapshot owns, per profile
      * @param timestepRoot the root snapshot of the new snapshot's timestep
      * @param parentStates the parent states the write is guarded against, per profile
-     * @param uniqueTimestep whether the write must fail if the timestep already exists (a new timestep root)
-     * @param description  the free text of the writer, or {@code null}
      */
     record SnapshotWrite(String iri, String version, String timestep, String timestepLabel, String parent,
-                         String edge,
-                         int depth, Map<CgmesSubset, String> state,
-                         Map<CgmesSubset, String> fullModels, String timestepRoot,
-                         Map<CgmesSubset, String> parentStates, boolean uniqueTimestep, String description) {
+                         String edge, int depth, Map<CgmesSubset, String> state, String timestepRoot,
+                         Map<CgmesSubset, String> parentStates) {
+
+        /**
+         * A root snapshot: no parent, and full models of every profile.
+         *
+         * @param iri           the IRI of the snapshot node
+         * @param version       the version label
+         * @param timestep      the canonical timestep
+         * @param timestepLabel the {@code HH:MM} rendering of the timestep
+         * @param state         the full model per profile
+         * @return the write
+         */
+        static SnapshotWrite root(String iri, String version, String timestep, String timestepLabel,
+                                  Map<CgmesSubset, String> state) {
+            return new SnapshotWrite(iri, version, timestep, timestepLabel, null, null, 0, state, iri, Map.of());
+        }
+
+        /** A new timestep root, whose write must fail if the timestep already exists. */
+        boolean isNewTimestep() {
+            return RdfDbVocabulary.TIMESTEP_EDGE.equals(edge);
+        }
+
+        /**
+         * The {@code pdb:Snapshot} node, as triples of an {@code INSERT} template.
+         *
+         * <p>A snapshot without a parent is a root of full models: its members and its full models are its state.
+         * A difference snapshot carries neither of the two booleans earlier releases wrote beside its links:
+         * {@link RdfDbVocabulary#FAST_PREDICATES_ONLY} is written on each member and a reader takes the conjunction
+         * ({@link SnapshotInfo#fast()}), and it has no {@link RdfDbVocabulary#FULL_MODELS} link at all until a
+         * {@link Checkpoint} gives it one, which is what {@link SnapshotInfo#hasFull()} reads.</p>
+         *
+         * @param query    where to write
+         * @param scenario the scenario
+         * @param members  the models the snapshot adds
+         * @param now      the creation time
+         */
+        void appendTo(StringBuilder query, String scenario, Collection<String> members, ZonedDateTime now) {
+            query.append(SparqlText.iri(iri)).append(' ')
+                    .append(SparqlText.iri(RdfDbVocabulary.RDF_TYPE)).append(' ')
+                    .append(SparqlText.iri(RdfDbVocabulary.SNAPSHOT_CLASS)).append(" ; ")
+                    .append(SparqlText.iri(RdfDbVocabulary.SCENARIO)).append(' ')
+                    .append(SparqlText.str(scenario)).append(" ; ")
+                    .append(SparqlText.iri(RdfDbVocabulary.VERSION)).append(' ')
+                    .append(SparqlText.str(version)).append(" ; ")
+                    .append(SparqlText.iri(RdfDbVocabulary.TIMESTEP)).append(' ')
+                    .append(SparqlText.str(timestep)).append(" ; ")
+                    .append(SparqlText.iri(RdfDbVocabulary.TIMESTEP_LABEL)).append(' ')
+                    .append(SparqlText.str(timestepLabel)).append(" ; ")
+                    .append(SparqlText.iri(RdfDbVocabulary.KIND)).append(' ')
+                    .append(SparqlText.iri(parent == null ? RdfDbVocabulary.FULL : RdfDbVocabulary.DIFF))
+                    .append(" ; ");
+            if (parent != null) {
+                query.append(SparqlText.iri(RdfDbVocabulary.PARENT)).append(' ')
+                        .append(SparqlText.iri(parent)).append(" ; ")
+                        .append(SparqlText.iri(RdfDbVocabulary.EDGE)).append(' ')
+                        .append(SparqlText.iri(edge)).append(" ; ");
+            }
+            query.append(SparqlText.iri(RdfDbVocabulary.DEPTH)).append(' ')
+                    .append(SparqlText.integer(depth)).append(" ; ")
+                    .append(SparqlText.iri(RdfDbVocabulary.TIMESTEP_ROOT)).append(' ')
+                    .append(SparqlText.iri(timestepRoot)).append(" ; ")
+                    .append(SparqlText.iri(RdfDbVocabulary.CREATED)).append(' ')
+                    .append(SparqlText.dateTime(now));
+            members.forEach(id -> appendIri(query, RdfDbVocabulary.MEMBER, id));
+            state.values().forEach(id -> appendIri(query, RdfDbVocabulary.STATE, id));
+            if (parent == null) {
+                state.values().forEach(id -> appendIri(query, RdfDbVocabulary.FULL_MODELS, id));
+            }
+            query.append(" .");
+        }
     }
 
     /**
@@ -202,8 +267,8 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
         if (models.isEmpty()) {
             return;
         }
-        Set<String> knownIds = new LinkedHashSet<>();
-        List<Planned> planned = plan(models, knownIds);
+        Plan plan = plan(models);
+        List<Planned> planned = plan.planned();
         long statements = planned.stream().mapToLong(p -> p.forward.size() + p.reverse.size()).sum();
         ZonedDateTime now = ZonedDateTime.now();
 
@@ -239,7 +304,7 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
             throw new RdfDbConflictException(diagnose(planned, missing));
         }
         planned.forEach(p -> stored.add(nodes.get(p.header.id())));
-        report(planned, knownIds);
+        report(planned, plan.known());
         LOGGER.info("Stored {} difference model(s) in scenario '{}' of {}: {}",
                 planned.size(), scenario, connection.database(),
                 planned.stream().map(p -> p.header.id()).toList());
@@ -267,36 +332,38 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
     // ------------------------------------------------------------------ checking
 
     /** One difference model with everything the write needs, resolved against the catalogue. */
-    private static final class Planned {
-        private final DifferenceModelHeader header;
-        private final StoredModel base;
-        private final List<CgmesStatement> forward;
-        private final List<CgmesStatement> reverse;
-        private final boolean fast;
-        private final boolean variantSafe;
-        private final String forwardGraph;
-        private final String reverseGraph;
+    private record Planned(DifferenceModelHeader header, StoredModel base, List<CgmesStatement> forward,
+                           List<CgmesStatement> reverse, boolean fast, boolean variantSafe, String forwardGraph,
+                           String reverseGraph) {
+    }
 
-        private Planned(DifferenceModelHeader header, StoredModel base, DifferenceModel model, boolean fast,
-                        boolean variantSafe, String forwardGraph, String reverseGraph) {
-            this.header = header;
-            this.base = base;
-            this.forward = model.forward();
-            this.reverse = model.reverse();
-            this.fast = fast;
-            this.variantSafe = variantSafe;
-            this.forwardGraph = forwardGraph;
-            this.reverseGraph = reverseGraph;
-        }
+    /**
+     * What the check produced.
+     *
+     * @param planned the models to write, resolved
+     * @param known   the identifiers the scenario holds, so that the report afterwards needs no query
+     */
+    private record Plan(List<Planned> planned, Set<String> known) {
+    }
+
+    /**
+     * Whether a difference is fast-route capable on its own, which is what {@code pdb:fastPredicatesOnly} records.
+     *
+     * @param model the difference
+     * @return whether an in-place update can read every property it states
+     */
+    static boolean isFast(DifferenceModel model) {
+        return FastRouteCapabilities.check(new DifferenceModelSet(List.of(model))).route()
+                == CgmesDiffImport.Route.FAST;
     }
 
     /**
      * Resolve every model of the set against the catalogue and check the rules, in one request.
      *
      * @param models the difference models to write
-     * @param known  filled with the identifiers the scenario holds, so that the report afterwards needs no query
+     * @return the resolved models and the identifiers the scenario holds
      */
-    private List<Planned> plan(List<DifferenceModel> models, Set<String> known) {
+    private Plan plan(List<DifferenceModel> models) {
         Set<String> ids = new LinkedHashSet<>();
         for (DifferenceModel model : models) {
             DifferenceModelHeader header = model.header();
@@ -310,8 +377,6 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
             ids.addAll(header.dependentOn());
         }
         ModelCatalog.WriteCheck check = catalog.writeCheck(ids);
-        known.clear();
-        known.addAll(check.models().keySet());
 
         List<Planned> planned = new ArrayList<>();
         for (DifferenceModel model : models) {
@@ -333,23 +398,23 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
                         + header.cimNamespace() + " but the model it applies on, " + baseId + ", is written in "
                         + base.cimNamespace());
             }
-            boolean fast = FastRouteCapabilities.check(new DifferenceModelSet(List.of(model)))
-                    .route() == CgmesDiffImport.Route.FAST;
+            boolean fast = isFast(model);
             // The network free half of the variant verdict, recorded once here so that a planner can refuse a
             // path without a network at hand. The network aware half runs at apply time either way
             boolean variantSafe = fast && FastRouteCapabilities.checkVariantSafe(
                     new DifferenceModelSet(List.of(model))).route() == CgmesDiffImport.Route.FAST;
-            planned.add(new Planned(header, base, model, fast, variantSafe,
+            planned.add(new Planned(header, base, model.forward(), model.reverse(), fast, variantSafe,
                     RdfDbNames.forwardGraph(scenario, header.id()),
                     RdfDbNames.reverseGraph(scenario, header.id())));
         }
-        return planned;
+        return new Plan(planned, new LinkedHashSet<>(check.models().keySet()));
     }
 
     private void checkBase(DifferenceModelHeader header, String baseId, StoredModel base) {
         if (base == null) {
-            String where = catalog.scenariosOf(baseId).isEmpty() ? ""
-                    : " (it is stored in scenario " + catalog.scenariosOf(baseId) + "); diffs never cross scenarios";
+            List<String> elsewhere = catalog.scenariosOf(baseId);
+            String where = elsewhere.isEmpty() ? ""
+                    : " (it is stored in scenario " + elsewhere + "); diffs never cross scenarios";
             throw new RdfDbConflictException("difference model " + header.id() + " supersedes " + baseId
                     + ", which is not stored in scenario '" + scenario + "'" + where);
         }
@@ -372,8 +437,8 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
     /** Re-run the checks against the current catalogue, to say which rule a silent guard refused on. */
     private String diagnose(List<Planned> planned, List<String> missing) {
         try {
-            plan(planned.stream().map(p -> new DifferenceModel(p.header, p.forward, p.reverse, List.of())).toList(),
-                    new LinkedHashSet<>());
+            plan(planned.stream().map(p -> new DifferenceModel(p.header, p.forward, p.reverse, List.of()))
+                    .toList());
         } catch (RdfDbException e) {
             return "the difference model(s) " + missing + " were not stored: " + e.getMessage();
         }
@@ -427,7 +492,7 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
         }
         if (snapshotWrite != null) {
             insert.append(" GRAPH ").append(meta).append(" { ");
-            appendSnapshotNode(insert, planned, now);
+            snapshotWrite.appendTo(insert, scenario, planned.stream().map(p -> p.header.id()).toList(), now);
             insert.append(" } ");
         }
         insert.append("} WHERE {");
@@ -513,50 +578,6 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
     }
 
     /**
-     * The snapshot node of a versioned write, in the same {@code INSERT} block as its members.
-     *
-     * <p>It carries neither of the two booleans earlier releases wrote beside its links:
-     * {@link RdfDbVocabulary#FAST_PREDICATES_ONLY} is written on each member a few lines above and a reader takes
-     * the conjunction ({@link SnapshotInfo#fast()}), and a difference snapshot has no {@link
-     * RdfDbVocabulary#FULL_MODELS} link at all until a {@link Checkpoint} gives it one, which is what
-     * {@link SnapshotInfo#hasFull()} reads.</p>
-     */
-    private void appendSnapshotNode(StringBuilder query, List<Planned> planned, ZonedDateTime now) {
-        SnapshotWrite s = snapshotWrite;
-        query.append(SparqlText.iri(s.iri())).append(' ')
-                .append(SparqlText.iri(RdfDbVocabulary.RDF_TYPE)).append(' ')
-                .append(SparqlText.iri(RdfDbVocabulary.SNAPSHOT_CLASS)).append(" ; ")
-                .append(SparqlText.iri(RdfDbVocabulary.SCENARIO)).append(' ')
-                .append(SparqlText.str(scenario)).append(" ; ")
-                .append(SparqlText.iri(RdfDbVocabulary.VERSION)).append(' ')
-                .append(SparqlText.str(s.version())).append(" ; ")
-                .append(SparqlText.iri(RdfDbVocabulary.TIMESTEP)).append(' ')
-                .append(SparqlText.str(s.timestep())).append(" ; ")
-                .append(SparqlText.iri(RdfDbVocabulary.TIMESTEP_LABEL)).append(' ')
-                .append(SparqlText.str(s.timestepLabel())).append(" ; ")
-                .append(SparqlText.iri(RdfDbVocabulary.KIND)).append(' ')
-                .append(SparqlText.iri(RdfDbVocabulary.DIFF)).append(" ; ")
-                .append(SparqlText.iri(RdfDbVocabulary.PARENT)).append(' ')
-                .append(SparqlText.iri(s.parent())).append(" ; ")
-                .append(SparqlText.iri(RdfDbVocabulary.EDGE)).append(' ')
-                .append(SparqlText.iri(s.edge())).append(" ; ")
-                .append(SparqlText.iri(RdfDbVocabulary.DEPTH)).append(' ')
-                .append(SparqlText.integer(s.depth())).append(" ; ")
-                .append(SparqlText.iri(RdfDbVocabulary.TIMESTEP_ROOT)).append(' ')
-                .append(SparqlText.iri(s.timestepRoot())).append(" ; ")
-                .append(SparqlText.iri(RdfDbVocabulary.CREATED)).append(' ')
-                .append(SparqlText.dateTime(now));
-        planned.forEach(p -> query.append(" ; ").append(SparqlText.iri(RdfDbVocabulary.MEMBER)).append(' ')
-                .append(SparqlText.iri(p.header.id())));
-        s.state().values().forEach(id -> query.append(" ; ").append(SparqlText.iri(RdfDbVocabulary.STATE))
-                .append(' ').append(SparqlText.iri(id)));
-        s.fullModels().values().forEach(id -> query.append(" ; ")
-                .append(SparqlText.iri(RdfDbVocabulary.FULL_MODELS)).append(' ').append(SparqlText.iri(id)));
-        appendOptionalString(query, RdfDbVocabulary.DESCRIPTION, s.description());
-        query.append(" .");
-    }
-
-    /**
      * The guards a versioned write adds: no fork, no duplicate address, and a parent that is still where the
      * writer thought it was.
      */
@@ -577,7 +598,7 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
             query.append(" FILTER NOT EXISTS { GRAPH ").append(meta).append(" { ?cs pdb:parent ").append(parent)
                     .append(" ; pdb:edge pdb:VersionEdge } }");
         }
-        if (s.uniqueTimestep()) {
+        if (s.isNewTimestep()) {
             query.append(" FILTER NOT EXISTS { GRAPH ").append(meta)
                     .append(" { ?ts a pdb:Snapshot ; pdb:timestep ").append(SparqlText.str(s.timestep()))
                     .append(" } }");

@@ -13,6 +13,7 @@ import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
 import org.assertj.core.api.SoftAssertions;
 import org.eclipse.rdf4j.model.Value;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -80,6 +81,11 @@ class ScaleIngestBenchmarkTest {
 
     private final SoftAssertions softly = new SoftAssertions();
 
+    @AfterAll
+    static void uninstallMeter() {
+        BenchMeters.FusekiMeter.uninstall();
+    }
+
     static Stream<Arguments> backends() {
         return BenchMeters.backends();
     }
@@ -127,7 +133,7 @@ class ScaleIngestBenchmarkTest {
             ReadOnlyDataSource[] anchorFiles = {ReplicatedSvedala.anchor(n, ANCHOR)};
             BenchMeters.resetPeak();
             long anchor = BenchMeters.millis(() -> catalog.putFull(anchorFiles[0], null,
-                    SnapshotRef.of(scenario, "1.0"), BenchMeters.params(), ReportNode.NO_OP));
+                    SnapshotRef.of(scenario, "1.0"), Backends.params(), ReportNode.NO_OP));
             long anchorPeak = BenchMeters.peakHeap();
             anchorFiles[0] = null;
 
@@ -145,7 +151,7 @@ class ScaleIngestBenchmarkTest {
             int added = 0;
             BenchMeters.resetPeak();
             for (int i = 1; i <= timesteps(); i++) {
-                String instant = SnapshotRef.canonicalTimestep(Instant.parse(ANCHOR)
+                String instant = Timesteps.canonical(Instant.parse(ANCHOR)
                         .plus(Duration.ofMinutes(15L * i)).atZone(ZoneOffset.UTC));
                 String label = String.format(Locale.ROOT, "%02d:%02d", i * 15 / 60, i * 15 % 60);
                 SvedalaTimestepFixtures.TimestepFiles files = SvedalaTimestepFixtures.timestep(shape, i, instant);
@@ -156,7 +162,7 @@ class ScaleIngestBenchmarkTest {
 
                 BenchMeters.FusekiMeter.Reading mark = BenchMeters.FusekiMeter.mark();
                 long start = System.nanoTime();
-                SnapshotInfo written = catalog.putAsDiff(replica, null, target, BenchMeters.params(),
+                SnapshotInfo written = catalog.putAsDiff(replica, null, target, Backends.params(),
                         ReportNode.NO_OP);
                 long wall = (System.nanoTime() - start) / 1_000_000;
                 BenchMeters.FusekiMeter.Reading reading = BenchMeters.FusekiMeter.since(mark);

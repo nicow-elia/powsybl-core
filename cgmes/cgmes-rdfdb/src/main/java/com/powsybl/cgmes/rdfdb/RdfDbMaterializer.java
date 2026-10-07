@@ -26,6 +26,7 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumMap;
@@ -62,15 +63,6 @@ final class RdfDbMaterializer {
     }
 
     /**
-     * What a materialisation produced.
-     *
-     * @param network    the network, with its identity and provenance registered
-     * @param statistics where the time went, in the shape a plain database load reports it
-     */
-    record Materialised(Network network, LoadStatistics statistics) {
-    }
-
-    /**
      * Materialise a scenario at a target and convert it.
      *
      * <p>Two requests before the graph transfer, whatever the scenario holds: the caller has already read the
@@ -87,7 +79,7 @@ final class RdfDbMaterializer {
      * @param rn       where the load reports
      * @return the network and the timings
      */
-    static Materialised materialize(RdfDbConnection db, String scenario, CatalogSnapshot snapshot,
+    static RdfDbNetworkLoader.LoadResult materialize(RdfDbConnection db, String scenario, CatalogSnapshot snapshot,
                                     Map<CgmesSubset, StoredModel> targets, NetworkFactory factory,
                                     Properties params, ReportNode rn) {
         Objects.requireNonNull(db);
@@ -138,11 +130,7 @@ final class RdfDbMaterializer {
             long applyStart = System.nanoTime();
             List<StoredModel> allDiffs = new ArrayList<>();
             paths.values().forEach(allDiffs::addAll);
-            List<DifferenceModel> fetched = RdfDbDiffSource.fetchAll(db, allDiffs);
-            Map<String, DifferenceModel> byId = new LinkedHashMap<>();
-            for (int i = 0; i < allDiffs.size(); i++) {
-                byId.put(allDiffs.get(i).id(), fetched.get(i));
-            }
+            Map<String, DifferenceModel> byId = RdfDbDiffSource.fetchById(db, allDiffs);
             paths.forEach((subset, path) -> {
                 if (path.isEmpty()) {
                     return;
@@ -172,10 +160,8 @@ final class RdfDbMaterializer {
                     allDiffs.size());
             // The differences are counted as part of the store phase: they are statements written into the local
             // store, which is what that phase means for a plain load too
-            return new Materialised(network, new LoadStatistics(Duration.ZERO, fetchWallClock,
-                    fetchStatistics.parse(), fetchStatistics.store().plus(applyDiffs), Duration.ZERO, convert,
-                    fetchStatistics.statements(), fetchStatistics.graphs(), fetchStatistics.cacheHits(),
-                    fetchStatistics.perGraph()));
+            return new RdfDbNetworkLoader.LoadResult(network, LoadStatistics.of(Duration.ZERO, fetchWallClock,
+                    fetchStatistics, applyDiffs, Duration.ZERO, convert));
         } finally {
             if (!handedOver) {
                 local.close();
@@ -201,7 +187,7 @@ final class RdfDbMaterializer {
      * @param rn         where the load reports
      * @return the network and the timings
      */
-    static Materialised materialize(RdfDbConnection db, String scenario, SnapshotInfo snapshot,
+    static RdfDbNetworkLoader.LoadResult materialize(RdfDbConnection db, String scenario, SnapshotInfo snapshot,
                                     MaterializationPlan plan, Map<String, StoredModel> stateModels,
                                     NetworkFactory factory, Properties params, ReportNode rn) {
         Objects.requireNonNull(db);
@@ -251,10 +237,8 @@ final class RdfDbMaterializer {
             registerSnapshot(network, db, scenario, snapshot, plan, stateModels, graphs);
             LOGGER.info("Materialised snapshot {} of scenario '{}' from {} difference(s)", snapshot, scenario,
                     plan.steps().size());
-            return new Materialised(network, new LoadStatistics(Duration.ZERO, fetchWallClock,
-                    fetchStatistics.parse(), fetchStatistics.store().plus(applyDiffs), Duration.ZERO, convert,
-                    fetchStatistics.statements(), fetchStatistics.graphs(), fetchStatistics.cacheHits(),
-                    fetchStatistics.perGraph()));
+            return new RdfDbNetworkLoader.LoadResult(network, LoadStatistics.of(Duration.ZERO, fetchWallClock,
+                    fetchStatistics, applyDiffs, Duration.ZERO, convert));
         } finally {
             if (!handedOver) {
                 local.close();
@@ -347,11 +331,7 @@ final class RdfDbMaterializer {
             return;
         }
         List<StoredModel> all = plan.steps().stream().map(UpdatePlan.DiffStep::model).toList();
-        List<DifferenceModel> fetched = RdfDbDiffSource.fetchAll(db, all);
-        Map<String, DifferenceModel> byId = new LinkedHashMap<>();
-        for (int i = 0; i < all.size(); i++) {
-            byId.put(all.get(i).id(), fetched.get(i));
-        }
+        Map<String, DifferenceModel> byId = RdfDbDiffSource.fetchById(db, all);
         stepsBySubset(plan).forEach((subset, steps) -> {
             String contextName = contextOfSubset.get(subset);
             if (contextName == null) {
@@ -385,7 +365,7 @@ final class RdfDbMaterializer {
             }
         });
         NetworkIdentity.advance(network, targets);
-        network.setCaseDate(java.time.ZonedDateTime.parse(snapshot.timestep()));
+        network.setCaseDate(ZonedDateTime.parse(snapshot.timestep()));
         RdfDbProvenanceImpl provenance = new RdfDbProvenanceImpl(db.database(), scenario, graphs, Instant.now(),
                 NetworkIdentity.modelIds(network));
         provenance.setSnapshot(snapshot.iri());

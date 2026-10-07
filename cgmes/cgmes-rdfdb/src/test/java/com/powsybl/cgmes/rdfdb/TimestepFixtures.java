@@ -139,7 +139,7 @@ final class TimestepFixtures {
         return out.toString();
     }
 
-    private static String rewriteHeader(String file, String modelId, String instant) {
+    static String rewriteHeader(String file, String modelId, String instant) {
         String rewritten = file.replaceFirst("rdf:about=\"urn:uuid:[^\"]*\"",
                 Matcher.quoteReplacement("rdf:about=\"" + modelId + "\""));
         rewritten = rewritten.replaceAll("(<md:Model.scenarioTime>)[^<]*(</md:Model.scenarioTime>)",
@@ -147,7 +147,7 @@ final class TimestepFixtures {
         return rewritten;
     }
 
-    private static String renameFirstLine(String eq) {
+    static String renameFirstLine(String eq) {
         int line = eq.indexOf("<cim:ACLineSegment rdf:ID=");
         if (line < 0) {
             throw new IllegalStateException("the equipment fixture holds no ACLineSegment");
@@ -164,10 +164,10 @@ final class TimestepFixtures {
     // ------------------------------------------------------------------ reading and writing
 
     private static String read(String name) {
-        return readFrom(CgmesConformity1Catalog.microGridBaseCaseBE().dataSource(), name);
+        return read(CgmesConformity1Catalog.microGridBaseCaseBE().dataSource(), name);
     }
 
-    private static String readFrom(ReadOnlyDataSource source, String name) {
+    static String read(ReadOnlyDataSource source, String name) {
         try (InputStream in = source.newInputStream(name)) {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             in.transferTo(out);
@@ -177,7 +177,7 @@ final class TimestepFixtures {
         }
     }
 
-    private static void put(MemDataSource source, String name, String content) {
+    static void put(MemDataSource source, String name, String content) {
         try (var out = source.newOutputStream(name, false)) {
             out.write(content.getBytes(StandardCharsets.UTF_8));
         } catch (IOException e) {

@@ -47,7 +47,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  * choice but to be sequential and to parse RDF/XML, while this one is neither:</p>
  * <ul>
  *   <li>Each graph is one HTTP request, answered as N-Triples &mdash; line-based, absolute IRIs, the cheapest
- *       parser RDF4J has &mdash; and the body is parsed while it is still arriving.</li>
+ *       parser RDF4J has &mdash; and the body is parsed while it is still arriving. An endpoint without a Graph
+ *       Store URL is asked with a {@code CONSTRUCT} per graph instead, and with the graph cache on, a cached
+ *       graph costs one {@code COUNT} request to check it is still current.</li>
  *   <li>Several graphs are fetched and parsed at once. A CGMES model is four to six files of very uneven size;
  *       the EQ transfer overlaps the parsing of SSH, TP and SV.</li>
  *   <li>Exactly one thread writes into the local store, because an RDF4J memory store has one writer anyway.
@@ -138,11 +140,13 @@ public final class GraphFetcher {
      * store still ends up with the plain {@code contexts:<file name>} the CGMES conversion expects.</p>
      *
      * @param local            the local store to fill. Its contexts get the local names, without any prefix
-     * @param localToRemote    local context name to the IRI of the graph in the database, in fetch order
+     * @param localToRemote    local context name to the IRI of the graph in the database; fetched in the
+     *                         alphabetical order of the local names
      * @return what the transfer cost
      */
     public FetchStatistics fetchInto(TripleStoreRDF4J local, Map<String, String> localToRemote) {
         Objects.requireNonNull(local);
+        // A copy: the fetch threads read it while the caller's map is the caller's
         Map<String, String> graphs = new LinkedHashMap<>(Objects.requireNonNull(localToRemote));
         List<String> names = new ArrayList<>(graphs.keySet());
         names.sort(Comparator.naturalOrder());
@@ -276,7 +280,7 @@ public final class GraphFetcher {
         }
         // One cheap aggregate per graph. Still a scan of that graph on most servers, which is why the count
         // check can be switched off for a database whose graphs never change under the same IRI.
-        try (RepositoryConnection conn = repositoryOfScenario().getConnection()) {
+        try (RepositoryConnection conn = connection.repository(scenario).getConnection()) {
             var query = conn.prepareTupleQuery("SELECT (COUNT(*) AS ?n) WHERE { GRAPH <" + remoteGraph
                     + "> { ?s ?p ?o } }");
             try (var result = query.evaluate()) {
@@ -289,12 +293,8 @@ public final class GraphFetcher {
         return -1;
     }
 
-    private Repository repositoryOfScenario() {
-        return connection.repository(scenario);
-    }
-
     private void constructFromSparql(String remoteGraph, CollectingHandler handler) {
-        try (RepositoryConnection conn = repositoryOfScenario().getConnection()) {
+        try (RepositoryConnection conn = connection.repository(scenario).getConnection()) {
             conn.prepareGraphQuery("CONSTRUCT { ?s ?p ?o } WHERE { GRAPH <" + remoteGraph + "> { ?s ?p ?o } }")
                     .evaluate(handler);
         }

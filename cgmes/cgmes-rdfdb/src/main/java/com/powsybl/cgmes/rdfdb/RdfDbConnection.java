@@ -22,7 +22,6 @@ import com.powsybl.triplestore.impl.rdf4j.sparql.TripleStoreRDF4JSparql;
 import org.eclipse.rdf4j.model.IRI;
 import org.eclipse.rdf4j.model.Statement;
 import org.eclipse.rdf4j.model.Value;
-import org.eclipse.rdf4j.query.TupleQuery;
 import org.eclipse.rdf4j.query.TupleQueryResult;
 import org.eclipse.rdf4j.repository.Repository;
 import org.eclipse.rdf4j.repository.RepositoryConnection;
@@ -31,6 +30,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -40,6 +40,7 @@ import java.util.Properties;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 
 /**
  * An open connection to an RDF database, and everything one can ask of it.
@@ -60,6 +61,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public final class RdfDbConnection implements AutoCloseable {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(RdfDbConnection.class);
+
+    /** How many decoded parent profiles the ingestion keeps per connection; see {@link #parentIndex}. */
+    private static final int PARENT_INDEX_CACHE_SIZE = 4;
+
     private final RdfDatabase database;
     private final Repository repository;
     private final GraphStoreClient graphStoreClient;
@@ -68,9 +74,6 @@ public final class RdfDbConnection implements AutoCloseable {
     private final Map<String, ModelCatalog> catalogs = new ConcurrentHashMap<>();
     private final Map<String, SnapshotCatalog> snapshotCatalogs = new ConcurrentHashMap<>();
     private final Map<String, VersionGraph> versionGraphs = new ConcurrentHashMap<>();
-
-    /** How many decoded parent profiles the ingestion keeps per connection; see {@link #parentIndex}. */
-    private static final int PARENT_INDEX_CACHE_SIZE = 4;
 
     /**
      * The decoded parent states {@link SnapshotCatalog#putAsDiff} compares timesteps against, across all
@@ -181,23 +184,28 @@ public final class RdfDbConnection implements AutoCloseable {
             return memory.scenarios();
         }
         TreeSet<String> names = new TreeSet<>();
-        try (RepositoryConnection conn = repository.getConnection()) {
-            // An empty group pattern lists the named graphs without scanning their statements
-            TupleQuery query = conn.prepareTupleQuery(
-                    "SELECT DISTINCT ?g WHERE { GRAPH ?g { } FILTER(STRSTARTS(STR(?g), \""
-                            + ScenarioGraphNames.CONTEXTS + "\") || STRSTARTS(STR(?g), \""
-                            + RdfDbNames.BASE + "\")) }");
-            try (TupleQueryResult result = query.evaluate()) {
-                while (result.hasNext()) {
-                    Value g = result.next().getValue("g");
-                    String scenario = g == null ? null : scenarioOfGraph(g.stringValue());
-                    if (scenario != null) {
-                        names.add(scenario);
-                    }
-                }
-            }
-        }
+        graphNames(ScenarioGraphNames.CONTEXTS, RdfDbNames.BASE).stream().map(RdfDbConnection::scenarioOfGraph)
+                .filter(Objects::nonNull).forEach(names::add);
         return new ArrayList<>(names);
+    }
+
+    /** The named graphs of the server whose IRI starts with one of the prefixes. */
+    private List<String> graphNames(String... prefixes) {
+        String filter = Arrays.stream(prefixes).map(prefix -> "STRSTARTS(STR(?g), \"" + prefix + "\")")
+                .collect(Collectors.joining(" || "));
+        List<String> names = new ArrayList<>();
+        // An empty group pattern lists the named graphs without scanning their statements
+        try (RepositoryConnection conn = repository.getConnection();
+             TupleQueryResult result = conn.prepareTupleQuery(
+                     "SELECT DISTINCT ?g WHERE { GRAPH ?g { } FILTER(" + filter + ") }").evaluate()) {
+            result.forEach(row -> {
+                Value g = row.getValue("g");
+                if (g != null) {
+                    names.add(g.stringValue());
+                }
+            });
+        }
+        return names;
     }
 
     private static String scenarioOfGraph(String graphIri) {
@@ -326,8 +334,7 @@ public final class RdfDbConnection implements AutoCloseable {
                 return new ArrayList<>(names);
             }
         }
-        TripleStoreRDF4JSparql store =
-                (TripleStoreRDF4JSparql) scenarioStore(scenario, new TripleStoreOptions(), false);
+        TripleStoreRDF4JSparql store = remoteStore(scenario);
         return new ArrayList<>(new TreeSet<>(store.contextNames()));
     }
 
@@ -398,8 +405,7 @@ public final class RdfDbConnection implements AutoCloseable {
             // The whole scenario is one store here, metadata graph and difference graphs included
             memory.drop(scenario);
         } else {
-            TripleStoreRDF4JSparql store =
-                    (TripleStoreRDF4JSparql) scenarioStore(scenario, new TripleStoreOptions(), false);
+            TripleStoreRDF4JSparql store = remoteStore(scenario);
             store.clearScenario();
             clearVersioningGraphs(scenario);
         }
@@ -408,6 +414,11 @@ public final class RdfDbConnection implements AutoCloseable {
         versionGraphs.remove(scenario);
         invalidateCache(scenario);
         forgetParentIndexes(scenario);
+    }
+
+    /** The SPARQL store of a scenario on a server backend. */
+    private TripleStoreRDF4JSparql remoteStore(String scenario) {
+        return (TripleStoreRDF4JSparql) scenarioStore(scenario, new TripleStoreOptions(), false);
     }
 
     /**
@@ -419,18 +430,9 @@ public final class RdfDbConnection implements AutoCloseable {
                 .append(RdfDbNames.metaGraph(scenario)).append('>');
         // Everything this layer minted for the scenario: the difference graphs, the versioned full graphs and the
         // graphs a checkpoint materialised. The prefix ends with a slash, so scenario "a" never matches "ab"
-        String prefix = RdfDbNames.scenarioPrefix(scenario);
+        graphNames(RdfDbNames.scenarioPrefix(scenario))
+                .forEach(g -> update.append(" ; DROP SILENT GRAPH <").append(g).append('>'));
         try (RepositoryConnection conn = repository.getConnection()) {
-            TupleQuery query = conn.prepareTupleQuery(
-                    "SELECT DISTINCT ?g WHERE { GRAPH ?g { } FILTER(STRSTARTS(STR(?g), \"" + prefix + "\")) }");
-            try (TupleQueryResult result = query.evaluate()) {
-                while (result.hasNext()) {
-                    Value g = result.next().getValue("g");
-                    if (g != null) {
-                        update.append(" ; DROP SILENT GRAPH <").append(g.stringValue()).append('>');
-                    }
-                }
-            }
             conn.prepareUpdate(update.toString()).execute();
         }
     }
@@ -542,8 +544,7 @@ public final class RdfDbConnection implements AutoCloseable {
                 conn.commit();
             }
         } else {
-            TripleStoreRDF4JSparql store =
-                    (TripleStoreRDF4JSparql) scenarioStore(scenario, new TripleStoreOptions(), false);
+            TripleStoreRDF4JSparql store = remoteStore(scenario);
             store.writeGraph(graphIri, statements, true);
         }
     }
@@ -611,6 +612,4 @@ public final class RdfDbConnection implements AutoCloseable {
             repository.shutDown();
         }
     }
-
-    private static final Logger LOGGER = LoggerFactory.getLogger(RdfDbConnection.class);
 }

@@ -213,6 +213,8 @@ final class IngestParser {
 
     /** How a header-only read stops the parser; stackless, because it is control flow and not a failure. */
     private static final class StopAfterHeader extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
         StopAfterHeader() {
             super(null, null, false, false);
         }

@@ -180,7 +180,7 @@ public final class RecordedChangeScenarios {
         return network.getBoundaryLine("EquivalentBranch").getGeneration();
     }
 
-    // Operational limits, voltage limits and impedances (work package 5)
+    // Operational limits, voltage limits and impedances
 
     private static CurrentLimits currentLimits(Network network, int side) {
         Line line = network.getLine(AC_LINE_SEGMENT);

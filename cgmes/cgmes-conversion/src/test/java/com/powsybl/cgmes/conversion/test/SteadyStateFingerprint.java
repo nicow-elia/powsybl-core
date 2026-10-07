@@ -85,7 +85,7 @@ public final class SteadyStateFingerprint {
         // The connection state of every terminal: it is what a difference carrying cim:ACDCTerminal.connected
         // changes, and what the fictitious switches of a node/breaker import stand for
         network.getConnectableStream().forEach(connectable -> terminals(values, connectable));
-        // Equipment values a difference model can carry since work package 5
+        // Equipment values a difference model can carry
         network.getVoltageLevels().forEach(voltageLevel -> voltageLevelLimits(values, voltageLevel));
         network.getLines().forEach(line -> lineImpedance(values, line));
         network.getBoundaryLines().forEach(boundaryLine -> boundaryLineImpedance(values, boundaryLine));

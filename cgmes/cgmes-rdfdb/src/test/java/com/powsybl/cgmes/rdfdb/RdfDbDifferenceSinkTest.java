@@ -9,14 +9,12 @@
 package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
-import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
-import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.events.NetworkEvent;
@@ -25,9 +23,10 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Properties;
 import java.util.stream.Stream;
 
+import static com.powsybl.cgmes.rdfdb.Backends.microGridBe;
+import static com.powsybl.cgmes.rdfdb.Backends.params;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -56,23 +55,13 @@ class RdfDbDifferenceSinkTest {
         return Backends.backends();
     }
 
-    private static Properties params() {
-        Properties p = new Properties();
-        p.put(CgmesImport.IMPORT_CGM_WITH_SUBNETWORKS, "false");
-        return p;
-    }
-
-    private static ReadOnlyDataSource be() {
-        return CgmesConformity1Catalog.microGridBaseCaseBE().dataSource();
-    }
-
     /** A connection whose scenarios {@value #S} and {@value #OTHER} both hold the MicroGrid BE fixture. */
     private static RdfDbConnection twoScenarios(String backend) {
         RdfDbConnection db = RdfDbConnection.open(Backends.database(backend, "sink"));
         db.clear(S);
         db.clear(OTHER);
-        db.loadCgmes(S, be(), null, params(), ReportNode.NO_OP);
-        db.loadCgmes(OTHER, be(), null, params(), ReportNode.NO_OP);
+        db.loadCgmes(S, microGridBe(), null, params(), ReportNode.NO_OP);
+        db.loadCgmes(OTHER, microGridBe(), null, params(), ReportNode.NO_OP);
         return db;
     }
 
@@ -118,7 +107,7 @@ class RdfDbDifferenceSinkTest {
     void reUploadingTheSameFileReplacesItsNode(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             List<StoredModel> before = db.catalog(S).models();
-            db.loadCgmes(S, be(), null, params(), ReportNode.NO_OP);
+            db.loadCgmes(S, microGridBe(), null, params(), ReportNode.NO_OP);
             List<StoredModel> after = db.catalog(S).models();
             assertThat(after.stream().map(StoredModel::id).toList())
                     .containsExactlyElementsOf(before.stream().map(StoredModel::id).toList());
@@ -343,7 +332,7 @@ class RdfDbDifferenceSinkTest {
     @MethodSource("backends")
     void aFileLoadedSenderExportsIntoEitherScenario(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
-            Network network = Network.read(be(), params());
+            Network network = Network.read(microGridBe(), params());
             RdfDbProvenance before = network.getExtension(RdfDbProvenance.class);
             assertThat(before).isNull();
             RdfDbExport.Result result = exportLoadChange(network, db, OTHER);
@@ -360,7 +349,7 @@ class RdfDbDifferenceSinkTest {
         try (RdfDbConnection db = RdfDbConnection.open(Backends.database(backend, "sink-special"))) {
             String scenario = "DACF#2016?01:01";
             db.clear(scenario);
-            db.loadCgmes(scenario, be(), null, params(), ReportNode.NO_OP);
+            db.loadCgmes(scenario, microGridBe(), null, params(), ReportNode.NO_OP);
             assertThat(db.catalog(scenario).metaGraph()).startsWith(RdfDbNames.BASE).endsWith("/meta")
                     .doesNotContain("#").doesNotContain("?");
             assertThat(db.catalog(scenario).models()).allMatch(model -> scenario.equals(model.scenario()));
@@ -472,8 +461,6 @@ class RdfDbDifferenceSinkTest {
     }
 
     private static long count(RdfDbConnection db, String graph) {
-        return Long.parseLong(db.sparql(S)
-                .select("SELECT (COUNT(*) AS ?n) WHERE { GRAPH <" + graph + "> { ?s ?p ?o } }")
-                .get(0).get("n").stringValue());
+        return Backends.count(db, S, graph, "?s ?p ?o");
     }
 }

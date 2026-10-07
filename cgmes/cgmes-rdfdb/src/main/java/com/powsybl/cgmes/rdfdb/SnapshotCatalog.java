@@ -10,8 +10,6 @@ package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.cgmes.conversion.TripleStoreNetworkLoader;
-import com.powsybl.cgmes.conversion.diff.CgmesDiffImport;
-import com.powsybl.cgmes.conversion.diff.FastRouteCapabilities;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
@@ -22,7 +20,7 @@ import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.triplestore.api.TripleStoreOptions;
 import com.powsybl.triplestore.impl.rdf4j.TripleStoreRDF4J;
-import org.eclipse.rdf4j.model.Statement;
+import org.eclipse.rdf4j.model.IRI;
 import org.eclipse.rdf4j.model.Value;
 import org.eclipse.rdf4j.repository.sail.SailRepository;
 import org.eclipse.rdf4j.sail.memory.MemoryStore;
@@ -33,6 +31,7 @@ import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumMap;
@@ -46,6 +45,8 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * The snapshots of one scenario: what states the database holds, and how a new one is written.
@@ -88,7 +89,7 @@ public final class SnapshotCatalog {
     private volatile CatalogNode cachedCatalogNode;
     private volatile IngestStatistics lastIngest;
 
-    /** How often a whole timestep of this scenario was answered out of the parent index cache; read by tests. */
+    /** How often a whole timestep was answered out of the parent index cache: test-only telemetry. */
     private final AtomicLong parentIndexHits = new AtomicLong();
 
     SnapshotCatalog(RdfDbConnection connection, String scenario) {
@@ -161,10 +162,7 @@ public final class SnapshotCatalog {
      * @return the snapshots, ordered by timestep and then by depth
      */
     public List<SnapshotInfo> snapshots() {
-        List<SnapshotInfo> all = new ArrayList<>(SnapshotRows.group(scenario, select(
-                "SELECT ?s ?p ?o ?sub ?mkind ?mfast WHERE {" + graphClause() + "{ ?s a pdb:Snapshot ; ?p ?o "
-                        + " OPTIONAL { ?o pdb:subset ?sub }" + SnapshotRows.MEMBER_FAST_CLAUSE + "} }"), "s")
-                .values());
+        List<SnapshotInfo> all = new ArrayList<>(snapshotsWhere("", "", "").values());
         all.sort(SnapshotRows.byTimestepAndDepth());
         return List.copyOf(all);
     }
@@ -181,10 +179,7 @@ public final class SnapshotCatalog {
         if (!scenario.equals(RdfDbNames.scenarioOf(snapshotIri))) {
             return Optional.empty();
         }
-        return Optional.ofNullable(SnapshotRows.group(scenario, select(
-                "SELECT ?s ?p ?o ?sub ?mkind ?mfast WHERE {" + graphClause() + "{ BIND(" + SparqlText.iri(snapshotIri)
-                        + " AS ?s) ?s a pdb:Snapshot ; ?p ?o OPTIONAL { ?o pdb:subset ?sub }"
-                        + SnapshotRows.MEMBER_FAST_CLAUSE + "} }"), "s")
+        return Optional.ofNullable(snapshotsWhere("BIND(" + SparqlText.iri(snapshotIri) + " AS ?s) ", "", "")
                 .get(snapshotIri));
     }
 
@@ -206,10 +201,8 @@ public final class SnapshotCatalog {
                 ? " FILTER NOT EXISTS {" + graphClause() + "{ ?c pdb:parent ?s ; pdb:edge pdb:VersionEdge } } "
                 : " ";
         String version = ref.isLatest() ? "" : " ; pdb:version " + SparqlText.str(ref.version());
-        Map<String, SnapshotInfo> found = SnapshotRows.group(scenario, select(
-                "SELECT ?s ?p ?o ?sub ?mkind ?mfast WHERE {" + graphClause() + "{ ?s a pdb:Snapshot ; pdb:timestep "
-                        + SparqlText.str(timestep) + version + " ; ?p ?o OPTIONAL { ?o pdb:subset ?sub }"
-                        + SnapshotRows.MEMBER_FAST_CLAUSE + "}" + pattern + "}"), "s");
+        Map<String, SnapshotInfo> found = snapshotsWhere("", " ; pdb:timestep " + SparqlText.str(timestep) + version,
+                pattern);
         if (found.size() > 1) {
             throw new RdfDbException("the metadata graph of scenario '" + scenario + "' is inconsistent: timestep "
                     + timestep + " has " + found.size() + " heads " + found.keySet() + ", and the version chain of"
@@ -234,11 +227,21 @@ public final class SnapshotCatalog {
      * @return the root, or empty when the scenario is not versioned
      */
     public Optional<SnapshotInfo> root() {
-        return SnapshotRows.group(scenario, select(
-                "SELECT ?s ?p ?o ?sub ?mkind ?mfast WHERE {" + graphClause() + "{ ?s a pdb:Snapshot ; pdb:depth "
-                        + SparqlText.integer(0) + " ; ?p ?o OPTIONAL { ?o pdb:subset ?sub }"
-                        + SnapshotRows.MEMBER_FAST_CLAUSE + "} }"), "s")
-                .values().stream().findFirst();
+        return snapshotsWhere("", " ; pdb:depth " + SparqlText.integer(0), "").values().stream().findFirst();
+    }
+
+    /**
+     * The snapshots matching a pattern, with their members' fast flags, in one request.
+     *
+     * @param bind        a {@code BIND} of {@code ?s}, or empty
+     * @param restriction more properties {@code ?s} must have, starting with {@code " ; "}, or empty
+     * @param outerFilter a filter after the snapshot pattern, or empty
+     * @return the snapshots, keyed by IRI
+     */
+    private Map<String, SnapshotInfo> snapshotsWhere(String bind, String restriction, String outerFilter) {
+        return SnapshotRows.group(scenario, select("SELECT ?s ?p ?o ?sub ?mkind ?mfast WHERE {" + graphClause()
+                + "{ " + bind + "?s a pdb:Snapshot" + restriction + " ; ?p ?o OPTIONAL { ?o pdb:subset ?sub }"
+                + SnapshotRows.MEMBER_FAST_CLAUSE + "}" + outerFilter + " }"), "s");
     }
 
     /**
@@ -332,23 +335,22 @@ public final class SnapshotCatalog {
      * @return the snapshot, or empty
      */
     Optional<SnapshotInfo> byState(Map<CgmesSubset, String> ids) {
-        List<String> patterns = new ArrayList<>();
-        for (CgmesSubset subset : List.of(EQ, SSH)) {
-            String id = ids.get(subset);
-            if (id != null) {
-                patterns.add(" ; pdb:state " + SparqlText.iri(id));
-            }
-        }
-        if (patterns.isEmpty()) {
+        List<String> stateIds = Stream.of(EQ, SSH).map(ids::get).filter(Objects::nonNull).toList();
+        if (stateIds.isEmpty()) {
             return Optional.empty();
         }
-        List<Map<String, Value>> rows = select("SELECT ?s ?d WHERE {" + graphClause()
-                + "{ ?s a pdb:Snapshot ; pdb:depth ?d" + String.join("", patterns) + " } } ORDER BY DESC(?d)"
-                + " LIMIT 1");
+        List<Map<String, Value>> rows = deepestByState(stateIds, "", 1);
         if (rows.isEmpty()) {
             return Optional.empty();
         }
         return info(rows.get(0).get("s").stringValue());
+    }
+
+    /** The snapshots stating all the given models, deepest first: rows of {@code ?s} and {@code ?d}. */
+    private List<Map<String, Value>> deepestByState(List<String> stateIds, String restriction, int limit) {
+        return select("SELECT ?s ?d WHERE {" + graphClause() + "{ ?s a pdb:Snapshot" + restriction
+                + " ; pdb:depth ?d" + stateIds.stream().map(id -> " ; pdb:state " + SparqlText.iri(id))
+                .collect(Collectors.joining()) + " } } ORDER BY DESC(?d) LIMIT " + limit);
     }
 
     /**
@@ -481,7 +483,7 @@ public final class SnapshotCatalog {
         }
         // One request, before the parse: a scenario that already has a root will refuse this write whatever the
         // files say, and parsing a fourteen-megabyte data source first to find that out is wasted work
-        existingRoot().ifPresent(existing -> {
+        root().ifPresent(existing -> {
             throw new RdfDbConflictException("scenario '" + scenario + "' timestep " + existing.timestep()
                     + " already has a root snapshot (version " + existing.version() + "); use putDiff or"
                     + " Checkpoint. Another day is another scenario");
@@ -490,24 +492,23 @@ public final class SnapshotCatalog {
         CgmesImport importer = TripleStoreNetworkLoader.importer();
         TripleStoreOptions options = importer.tripleStoreOptions(importParams);
         SailRepository repository = new SailRepository(new MemoryStore());
-        List<String> uploaded = List.of();
         TripleStoreRDF4J scratch = new TripleStoreRDF4J(repository, options);
         try {
             CgmesTripleStoreLoader.Result parsed =
                     CgmesTripleStoreLoader.load(ds, boundary, scratch, 1, report);
             Map<String, Header> headers = readHeaders(repository, parsed.contextNames());
             String timestep = timestepOf(ref, headers);
-            String offset = offsetOf(ref, headers);
+            String offset = offsetOf(scenarioTimeText(headers));
             Map<String, String> localToRemote = new LinkedHashMap<>();
             headers.forEach((context, header) ->
                     localToRemote.put(context, RdfDbNames.fullGraph(scenario, header.id)));
             refuseKnownModels(headers.values().stream().map(h -> h.id).toList());
 
-            uploaded = new GraphUploader(connection, scenario).upload(repository, localToRemote);
+            List<String> uploaded = new GraphUploader(connection, scenario).upload(repository, localToRemote);
             String snapshotIri = RdfDbNames.snapshot(scenario, timestep, ref.version());
             String label = Timesteps.label(timestep, offset);
-            sparql().update(rootWrite(headers, localToRemote, parsed, snapshotIri, timestep, label, offset,
-                    counts(repository, headers.keySet())));
+            sparql().update(rootWrite(headers, localToRemote, parsed, snapshotIri, ref.version(), timestep, label,
+                    offset, counts(repository, headers.keySet())));
             cachedCatalogNode = null;
             // A new root is a new set of states, and the decoded parents of the old ones are of no use to anyone
             connection.forgetParentIndexes(scenario);
@@ -523,10 +524,6 @@ public final class SnapshotCatalog {
         } finally {
             scratch.close();
         }
-    }
-
-    private Optional<SnapshotInfo> existingRoot() {
-        return root();
     }
 
     private void refuseKnownModels(List<String> ids) {
@@ -595,8 +592,7 @@ public final class SnapshotCatalog {
         RdfDbDifferenceSink.SnapshotWrite write = new RdfDbDifferenceSink.SnapshotWrite(snapshotIri,
                 target.version(), timestep, Timesteps.label(timestep, baseOffset()), parent.iri(),
                 newTimestep ? RdfDbVocabulary.TIMESTEP_EDGE : RdfDbVocabulary.VERSION_EDGE,
-                parent.depth() + 1, state, Map.of(),
-                newTimestep ? snapshotIri : parent.timestepRoot(), parentStates, newTimestep, null);
+                parent.depth() + 1, state, newTimestep ? snapshotIri : parent.timestepRoot(), parentStates);
 
         RdfDbDifferenceSink sink = new RdfDbDifferenceSink(connection, scenario, reportNode);
         sink.writeInto(write);
@@ -622,18 +618,16 @@ public final class SnapshotCatalog {
      */
     private SnapshotInfo pin(List<DifferenceModel> models, String timestep) {
         String base = baseTimestep();
-        List<String> patterns = models.stream()
+        List<String> superseded = models.stream()
                 .filter(model -> model.header().supersedes().size() == 1)
-                .map(model -> " ; pdb:state " + SparqlText.iri(model.header().supersedes().get(0)))
+                .map(model -> model.header().supersedes().get(0))
                 .toList();
-        if (patterns.isEmpty()) {
+        if (superseded.isEmpty()) {
             throw new RdfDbConflictException("the difference models of the new timestep " + timestep
                     + " of scenario '" + scenario + "' do not each supersede exactly one stored model, so the base"
                     + " version they were made against cannot be identified");
         }
-        List<Map<String, Value>> rows = select("SELECT ?s ?d WHERE {" + graphClause()
-                + "{ ?s a pdb:Snapshot ; pdb:timestep " + SparqlText.str(base) + " ; pdb:depth ?d"
-                + String.join("", patterns) + " } } ORDER BY DESC(?d) LIMIT 2");
+        List<Map<String, Value>> rows = deepestByState(superseded, " ; pdb:timestep " + SparqlText.str(base), 2);
         if (rows.isEmpty()) {
             throw new RdfDbConflictException("timestep roots derive from the base timestep of scenario '"
                     + scenario + "' (" + base + "), and no snapshot of it states what these difference models"
@@ -804,9 +798,7 @@ public final class SnapshotCatalog {
         long t3 = System.nanoTime();
         SnapshotInfo written = putDiff(new DifferenceModelSet(models), target, report);
         Map<CgmesSubset, Boolean> fast = new EnumMap<>(CgmesSubset.class);
-        models.forEach(model -> fast.put(model.header().subset(),
-                FastRouteCapabilities.check(new DifferenceModelSet(List.of(model)))
-                        .route() == CgmesDiffImport.Route.FAST));
+        models.forEach(model -> fast.put(model.header().subset(), RdfDbDifferenceSink.isFast(model)));
         lastIngest = new IngestStatistics(parse, materialize, diffTime,
                 Duration.ofNanos(System.nanoTime() - t3), forward, reverse, fast, ignored);
         LOGGER.info("Ingested {} of scenario '{}' from files: {} difference(s), {} profile(s) inherited",
@@ -890,7 +882,8 @@ public final class SnapshotCatalog {
                 }
                 String stateId = plan.targetState().get(subset);
                 TripleDiffCalculator.Index index = TripleDiffCalculator.index(
-                        statementsOf(parentState.store().getRepository(), parentState.contexts().get(subset)),
+                        SparqlAccess.statementsOf(parentState.store().getRepository(),
+                                parentState.contexts().get(subset)),
                         parentBaseOf(stateModels, stateId, fallbackBase), cimNamespace);
                 indexes.put(subset, index);
                 connection.rememberParentIndex(entry.getValue(), index);
@@ -923,8 +916,8 @@ public final class SnapshotCatalog {
                                    String timestep) {
         DifferenceModelHeader diffHeader = DifferenceModelHeader.builder(header.id, subset, cimNamespace)
                 .version(intOf(header.term(RdfDbVocabulary.MODEL_VERSION), 1))
-                .description(header.text(RdfDbVocabulary.MODEL_DESCRIPTION))
-                .modelingAuthoritySet(header.text(RdfDbVocabulary.MODEL_MODELING_AUTHORITY_SET))
+                .description(header.term(RdfDbVocabulary.MODEL_DESCRIPTION))
+                .modelingAuthoritySet(header.term(RdfDbVocabulary.MODEL_MODELING_AUTHORITY_SET))
                 .profiles(header.texts(RdfDbVocabulary.MODEL_PROFILE))
                 .dependentOn(header.texts(RdfDbVocabulary.MODEL_DEPENDENT_ON))
                 .supersedes(List.of(parentStateId))
@@ -932,14 +925,6 @@ public final class SnapshotCatalog {
                 .created(ZonedDateTime.now())
                 .build();
         return TripleDiffCalculator.diff(parentSide, nextSide, diffHeader);
-    }
-
-    private static List<Statement> statementsOf(org.eclipse.rdf4j.repository.Repository repository,
-                                                String context) {
-        try (var conn = repository.getConnection()) {
-            return new ArrayList<>(conn.getStatements(null, null, null,
-                    conn.getValueFactory().createIRI(context)).stream().toList());
-        }
     }
 
     private static int intOf(String text, int fallback) {
@@ -1073,7 +1058,7 @@ public final class SnapshotCatalog {
                         + " md:Model.scenarioTime: it cannot be migrated to a versioned scenario, pass a"
                         + " timestep explicitly"));
         String timestep = Timesteps.canonical(scenarioTime);
-        String offset = offsetOfText(scenarioTime);
+        String offset = offsetOf(scenarioTime);
         String snapshotIri = RdfDbNames.snapshot(scenario, timestep, "0");
         Map<CgmesSubset, String> state = new EnumMap<>(CgmesSubset.class);
         full.forEach(model -> state.put(model.subset(), model.id()));
@@ -1081,8 +1066,9 @@ public final class SnapshotCatalog {
         StringBuilder update = new StringBuilder(RdfDbVocabulary.PREFIXES).append("INSERT { GRAPH ")
                 .append(SparqlText.iri(metaGraph)).append(" { ");
         appendCatalogNode(update, timestep, offset);
-        appendSnapshotNode(update, snapshotIri, "0", timestep, Timesteps.label(timestep, offset),
-                RdfDbVocabulary.FULL, null, 0, state, state, state, snapshotIri);
+        RdfDbDifferenceSink.SnapshotWrite.root(snapshotIri, "0", timestep, Timesteps.label(timestep, offset), state)
+                .appendTo(update, scenario, state.values(), ZonedDateTime.now());
+        update.append(' ');
         full.forEach(model -> update.append(SparqlText.iri(model.id())).append(' ')
                 .append(SparqlText.iri(RdfDbVocabulary.SNAPSHOT)).append(' ')
                 .append(SparqlText.iri(snapshotIri)).append(" . "));
@@ -1106,10 +1092,14 @@ public final class SnapshotCatalog {
                 .findFirst();
     }
 
-    private static String offsetOfText(String text) {
+    /** The zone offset a scenario time is written in, {@code Z} when there is none or it has no offset. */
+    private static String offsetOf(String scenarioTime) {
+        if (scenarioTime == null) {
+            return ZoneOffset.UTC.getId();
+        }
         try {
-            return OffsetDateTime.parse(text.trim()).getOffset().getId();
-        } catch (java.time.format.DateTimeParseException e) {
+            return OffsetDateTime.parse(scenarioTime.trim()).getOffset().getId();
+        } catch (DateTimeParseException e) {
             return ZoneOffset.UTC.getId();
         }
     }
@@ -1246,8 +1236,8 @@ public final class SnapshotCatalog {
     // ------------------------------------------------------------------ SPARQL fragments
 
     private String rootWrite(Map<String, Header> headers, Map<String, String> graphs,
-                             CgmesTripleStoreLoader.Result parsed, String snapshotIri, String timestep,
-                             String label, String offset, Map<String, Long> counts) {
+                             CgmesTripleStoreLoader.Result parsed, String snapshotIri, String version,
+                             String timestep, String label, String offset, Map<String, Long> counts) {
         String subjectBase = ModelCatalog.subjectBaseOf(parsed.baseName());
         ZonedDateTime now = ZonedDateTime.now();
         Map<CgmesSubset, String> state = new EnumMap<>(CgmesSubset.class);
@@ -1255,12 +1245,13 @@ public final class SnapshotCatalog {
 
         StringBuilder update = new StringBuilder(RdfDbVocabulary.PREFIXES).append("INSERT { GRAPH ")
                 .append(SparqlText.iri(metaGraph)).append(" { ");
-        headers.forEach((context, header) -> appendFullModelNode(update, header, GraphInfo.subsetOf(context),
-                graphs.get(context), counts.getOrDefault(context, -1L), subjectBase, parsed.cimNamespace(),
-                snapshotIri, now));
+        headers.forEach((context, header) -> appendFullModelNode(update, header,
+                new FullGraph(GraphInfo.subsetOf(context), graphs.get(context), counts.getOrDefault(context, -1L),
+                        subjectBase, parsed.cimNamespace()), snapshotIri, now));
         appendCatalogNode(update, timestep, offset);
-        appendSnapshotNode(update, snapshotIri, versionOf(snapshotIri), timestep, label, RdfDbVocabulary.FULL,
-                null, 0, state, state, state, snapshotIri);
+        RdfDbDifferenceSink.SnapshotWrite.root(snapshotIri, version, timestep, label, state)
+                .appendTo(update, scenario, state.values(), now);
+        update.append(' ');
         update.append("} } WHERE { FILTER NOT EXISTS { GRAPH ").append(SparqlText.iri(metaGraph))
                 .append(" { ?x a pdb:Snapshot } } FILTER NOT EXISTS { GRAPH ").append(SparqlText.iri(metaGraph))
                 .append(" { ").append(SparqlText.iri(snapshotIri)).append(" ?p ?o } }");
@@ -1268,11 +1259,6 @@ public final class SnapshotCatalog {
                 .append(SparqlText.iri(metaGraph)).append(" { ").append(SparqlText.iri(header.id))
                 .append(" ?p1 ?o1 } }"));
         return update.append(" }").toString();
-    }
-
-    private static String versionOf(String snapshotIri) {
-        String tail = snapshotIri.substring(snapshotIri.lastIndexOf('/') + 1);
-        return RdfDbNames.unsafe(tail);
     }
 
     private void appendCatalogNode(StringBuilder update, String timestep, String offset) {
@@ -1287,77 +1273,41 @@ public final class SnapshotCatalog {
                 .append(SparqlText.str(offset)).append(" . ");
     }
 
-    // CHECKSTYLE:OFF ParameterNumber - one snapshot node has that many properties; the alternative is a builder
-    // that exists only to be unpacked again two lines later
-    private void appendSnapshotNode(StringBuilder update, String iri, String version, String timestep, String label,
-                                    String kind, String parent, int depth,
-                                    Map<CgmesSubset, String> members, Map<CgmesSubset, String> state,
-                                    Map<CgmesSubset, String> full, String timestepRoot) {
-        // CHECKSTYLE:ON ParameterNumber
-        update.append(SparqlText.iri(iri)).append(' ')
-                .append(SparqlText.iri(RdfDbVocabulary.RDF_TYPE)).append(' ')
-                .append(SparqlText.iri(RdfDbVocabulary.SNAPSHOT_CLASS)).append(" ; ")
-                .append(SparqlText.iri(RdfDbVocabulary.SCENARIO)).append(' ')
-                .append(SparqlText.str(scenario)).append(" ; ")
-                .append(SparqlText.iri(RdfDbVocabulary.VERSION)).append(' ')
-                .append(SparqlText.str(version)).append(" ; ")
-                .append(SparqlText.iri(RdfDbVocabulary.TIMESTEP)).append(' ')
-                .append(SparqlText.str(timestep)).append(" ; ")
-                .append(SparqlText.iri(RdfDbVocabulary.TIMESTEP_LABEL)).append(' ')
-                .append(SparqlText.str(label)).append(" ; ")
-                .append(SparqlText.iri(RdfDbVocabulary.KIND)).append(' ').append(SparqlText.iri(kind)).append(" ; ")
-                .append(SparqlText.iri(RdfDbVocabulary.DEPTH)).append(' ')
-                .append(SparqlText.integer(depth)).append(" ; ")
-                .append(SparqlText.iri(RdfDbVocabulary.TIMESTEP_ROOT)).append(' ')
-                .append(SparqlText.iri(timestepRoot)).append(" ; ")
-                .append(SparqlText.iri(RdfDbVocabulary.CREATED)).append(' ')
-                .append(SparqlText.dateTime(ZonedDateTime.now()));
-        if (parent != null) {
-            update.append(" ; ").append(SparqlText.iri(RdfDbVocabulary.PARENT)).append(' ')
-                    .append(SparqlText.iri(parent));
-        }
-        members.values().forEach(id -> update.append(" ; ").append(SparqlText.iri(RdfDbVocabulary.MEMBER))
-                .append(' ').append(SparqlText.iri(id)));
-        state.values().forEach(id -> update.append(" ; ").append(SparqlText.iri(RdfDbVocabulary.STATE))
-                .append(' ').append(SparqlText.iri(id)));
-        full.values().forEach(id -> update.append(" ; ").append(SparqlText.iri(RdfDbVocabulary.FULL_MODELS))
-                .append(' ').append(SparqlText.iri(id)));
-        update.append(" . ");
+    /** Where one parsed instance file of a root went, and what its statements look like. */
+    private record FullGraph(CgmesSubset subset, String graphIri, long tripleCount, String subjectBase,
+                             String cimNamespace) {
     }
 
-    // CHECKSTYLE:OFF ParameterNumber - see above
-    private void appendFullModelNode(StringBuilder update, Header header, CgmesSubset subset, String graphIri,
-                                     long tripleCount, String subjectBase, String cimNamespace, String snapshotIri,
+    private void appendFullModelNode(StringBuilder update, Header header, FullGraph graph, String snapshotIri,
                                      ZonedDateTime now) {
-        // CHECKSTYLE:ON ParameterNumber
         update.append(SparqlText.iri(header.id)).append(' ')
                 .append(SparqlText.iri(RdfDbVocabulary.RDF_TYPE)).append(' ')
                 .append(SparqlText.iri(RdfDbVocabulary.FULL_MODEL)).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.KIND)).append(' ')
                 .append(SparqlText.iri(RdfDbVocabulary.FULL)).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.SUBSET)).append(' ')
-                .append(SparqlText.str(subset.getIdentifier())).append(" ; ")
+                .append(SparqlText.str(graph.subset().getIdentifier())).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.SCENARIO)).append(' ')
                 .append(SparqlText.str(scenario)).append(" ; ")
                 // A string, like every other pdb:graph of this layer: the in-process backend names graphs by the
                 // plain file name, which is not always writable as an IRI
                 .append(SparqlText.iri(RdfDbVocabulary.GRAPH)).append(' ')
-                .append(SparqlText.str(graphIri)).append(" ; ")
+                .append(SparqlText.str(graph.graphIri())).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.SNAPSHOT)).append(' ')
                 .append(SparqlText.iri(snapshotIri)).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.CHAIN_DEPTH)).append(' ')
                 .append(SparqlText.integer(0)).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.TRIPLE_COUNT)).append(' ')
-                .append(SparqlText.integer(tripleCount)).append(" ; ")
+                .append(SparqlText.integer(graph.tripleCount())).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.SUBJECT_BASE)).append(' ')
-                .append(SparqlText.str(subjectBase)).append(" ; ")
+                .append(SparqlText.str(graph.subjectBase())).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.CIM_NAMESPACE)).append(' ')
-                .append(SparqlText.str(cimNamespace)).append(" ; ")
+                .append(SparqlText.str(graph.cimNamespace())).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.CREATED)).append(' ')
                 .append(SparqlText.dateTime(now));
         header.terms.forEach((predicate, values) -> values.forEach(value -> update.append(" ; ")
                 .append(SparqlText.iri(predicate)).append(' ')
-                .append(value instanceof org.eclipse.rdf4j.model.IRI iri ? SparqlText.iri(iri.stringValue())
+                .append(value instanceof IRI iri ? SparqlText.iri(iri.stringValue())
                         : SparqlText.str(value.stringValue()))));
         update.append(" . ");
     }
@@ -1372,17 +1322,8 @@ public final class SnapshotCatalog {
             return values == null || values.isEmpty() ? null : values.get(0).stringValue();
         }
 
-        String text(String predicate) {
-            return term(predicate);
-        }
-
         List<String> texts(String predicate) {
             return terms.getOrDefault(predicate, List.of()).stream().map(Value::stringValue).toList();
-        }
-
-        String scenarioTimeText() {
-            List<Value> values = terms.get(RdfDbVocabulary.MODEL_SCENARIO_TIME);
-            return values == null || values.isEmpty() ? null : values.get(0).stringValue();
         }
     }
 
@@ -1438,15 +1379,10 @@ public final class SnapshotCatalog {
         return Timesteps.canonical(text);
     }
 
-    private String offsetOf(SnapshotRef ref, Map<String, Header> headers) {
-        String text = scenarioTimeText(headers);
-        return text == null ? ZoneOffset.UTC.getId() : offsetOfText(text);
-    }
-
     private static String scenarioTimeText(Map<String, Header> headers) {
         return headers.entrySet().stream()
                 .sorted(Comparator.comparingInt(e -> GraphInfo.subsetOf(e.getKey()) == SSH ? 0 : 1))
-                .map(e -> e.getValue().scenarioTimeText())
+                .map(e -> e.getValue().term(RdfDbVocabulary.MODEL_SCENARIO_TIME))
                 .filter(Objects::nonNull)
                 .findFirst().orElse(null);
     }

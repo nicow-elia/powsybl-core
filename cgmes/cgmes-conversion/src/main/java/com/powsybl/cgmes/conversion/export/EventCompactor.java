@@ -7,6 +7,8 @@
  */
 package com.powsybl.cgmes.conversion.export;
 
+import com.powsybl.commons.PowsyblException;
+import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.events.ExtensionCreationNetworkEvent;
 import com.powsybl.iidm.network.events.ExtensionUpdateNetworkEvent;
 import com.powsybl.iidm.network.events.NetworkEvent;
@@ -51,8 +53,7 @@ final class EventCompactor {
     static CompactedChanges compact(Collection<NetworkEvent> events, String workingVariantId) {
         Objects.requireNonNull(events);
 
-        Map<UpdateKey, Object> firstOldValues = new HashMap<>();
-        Map<UpdateKey, Integer> firstEventIndexes = new HashMap<>();
+        Map<UpdateKey, FirstChange> firstChanges = new HashMap<>();
         Set<String> createdExtensions = new HashSet<>();
         int index = 0;
         for (NetworkEvent event : events) {
@@ -62,15 +63,11 @@ final class EventCompactor {
             }
             UpdateKey key = updateKey(event);
             // Every recorded change of this variant feeds the previous values, including the ones a mapping later
-            // rejects: whether a change can be exported is decided after the previous state is known.
-            // containsKey, not putIfAbsent: a recorded previous value may legitimately be null (an unset section
-            // count or tap position, a reference priority that did not exist), and putIfAbsent would treat that as
-            // no value at all and let the next change of the same attribute overwrite it with an intermediate one.
-            if (key != null && appliesTo(event, workingVariantId) && !firstOldValues.containsKey(key)) {
-                firstOldValues.put(key, oldValue(event));
-                // The position is recorded exactly where the previous value is, so that a caller comparing two
-                // positions can always read the previous value of the earlier one
-                firstEventIndexes.put(key, index);
+            // rejects: whether a change can be exported is decided after the previous state is known. The position
+            // is kept with the previous value, so that a caller comparing two positions can always read the
+            // previous value of the earlier one.
+            if (key != null && appliesTo(event, workingVariantId)) {
+                firstChanges.putIfAbsent(key, new FirstChange(oldValue(event), index));
             }
             index++;
         }
@@ -87,20 +84,47 @@ final class EventCompactor {
         }
         Collections.reverse(compactedEvents);
 
-        // A previous value may legitimately be null (an unset section count, a withdrawn reference priority), so
-        // the map cannot be a Map.copyOf, which rejects null values
-        return new CompactedChanges(List.copyOf(compactedEvents), Collections.unmodifiableMap(firstOldValues),
-                Map.copyOf(firstEventIndexes), Set.copyOf(createdExtensions));
+        return new CompactedChanges(List.copyOf(compactedEvents), Map.copyOf(firstChanges),
+                Set.copyOf(createdExtensions));
     }
 
-    /** Whether a change describes the variant the export reads its values from. */
-    private static boolean appliesTo(NetworkEvent event, String workingVariantId) {
-        String variantId = switch (event) {
+    /** Whether a change describes the given variant, which a change belonging to every variant always does. */
+    private static boolean appliesTo(NetworkEvent event, String variantId) {
+        String eventVariantId = variantIdOf(event);
+        return eventVariantId == null || eventVariantId.equals(variantId);
+    }
+
+    /** The variant a recorded change belongs to, or {@code null} when it belongs to every variant. */
+    static String variantIdOf(NetworkEvent event) {
+        return switch (event) {
             case UpdateNetworkEvent update -> update.variantId();
             case ExtensionUpdateNetworkEvent update -> update.variantId();
             default -> null;
         };
-        return variantId == null || variantId.equals(workingVariantId);
+    }
+
+    /**
+     * The changes that belong to the selected variant, all of them when none is selected. Naming a variant is a
+     * selection: a change recorded on another one is simply not part of the export. A change without a variant
+     * belongs to every variant and is kept.
+     */
+    static Collection<NetworkEvent> ofVariant(Collection<NetworkEvent> events, String variantId) {
+        return variantId == null ? events : events.stream().filter(event -> appliesTo(event, variantId)).toList();
+    }
+
+    /**
+     * Refuse a merged network: an exported document describes a single individual grid model, whose header
+     * references the model it replaces and the equipment model it applies to, and a merged network has one of each
+     * per subnetwork.
+     *
+     * @param documentName what the message calls the exported document, for instance "A partial SSH file"
+     */
+    static void checkSingleGridModel(Network network, String documentName) {
+        if (!network.getSubnetworks().isEmpty()) {
+            throw new PowsyblException("Network " + network.getId() + " is a merged model with "
+                    + network.getSubnetworks().size() + " subnetworks. " + documentName + " describes a single "
+                    + "individual grid model, so it has to be exported from each subnetwork separately.");
+        }
     }
 
     private static Object oldValue(NetworkEvent event) {
@@ -181,26 +205,31 @@ final class EventCompactor {
     }
 
     /**
-     * The result of compacting a change log: the changes to export and the state the change set started from.
+     * The first recorded change of an attribute.
+     *
+     * @param oldValue the value it replaced, which may legitimately be {@code null}: an unset section count or tap
+     *                 position, a reference priority that did not exist
+     * @param index    where in the recorded log it sits
      */
-    static final class CompactedChanges {
+    record FirstChange(Object oldValue, int index) {
+    }
 
-        private final List<NetworkEvent> events;
-        private final Map<UpdateKey, Object> firstOldValues;
-        private final Map<UpdateKey, Integer> firstEventIndexes;
-        private final Set<String> createdExtensions;
+    /**
+     * The result of compacting a change log: the changes to export and the state the change set started from.
+     *
+     * @param events            one change per updated attribute, in the order of its last occurrence in the log
+     * @param firstChanges      the first change of every attribute the change set touched on the selected variant
+     * @param createdExtensions the extensions the change set created, as {@code id#extensionName}
+     */
+    record CompactedChanges(List<NetworkEvent> events, Map<UpdateKey, FirstChange> firstChanges,
+                            Set<String> createdExtensions) {
 
-        private CompactedChanges(List<NetworkEvent> events, Map<UpdateKey, Object> firstOldValues,
-                                 Map<UpdateKey, Integer> firstEventIndexes, Set<String> createdExtensions) {
-            this.events = events;
-            this.firstOldValues = firstOldValues;
-            this.firstEventIndexes = firstEventIndexes;
-            this.createdExtensions = createdExtensions;
-        }
+        /** Nothing changed: every read of a view over it is a live read. */
+        static final CompactedChanges NONE = new CompactedChanges(List.of(), Map.of(), Set.of());
 
-        /** One change per updated attribute, in the order of its last occurrence in the log. */
-        List<NetworkEvent> events() {
-            return events;
+        /** Whether the change set touched nothing on the selected variant and created no extension. */
+        boolean isEmpty() {
+            return firstChanges.isEmpty() && createdExtensions.isEmpty();
         }
 
         /**
@@ -210,7 +239,8 @@ final class EventCompactor {
          * @param attributeKey the attribute, or {@code extensionName + "#" + attribute} for an extension attribute
          */
         boolean hasChange(String id, String attributeKey) {
-            return firstOldValues.containsKey(new UpdateKey(id, attributeKey));
+            // The empty check keeps a read of the live state (NONE) free of any allocation
+            return !firstChanges.isEmpty() && firstChanges.containsKey(new UpdateKey(id, attributeKey));
         }
 
         /**
@@ -219,7 +249,8 @@ final class EventCompactor {
          * not recorded, which {@link #hasChange} tells apart.
          */
         Object firstOldValue(String id, String attributeKey) {
-            return firstOldValues.get(new UpdateKey(id, attributeKey));
+            FirstChange first = firstChanges.get(new UpdateKey(id, attributeKey));
+            return first == null ? null : first.oldValue();
         }
 
         /**
@@ -232,12 +263,11 @@ final class EventCompactor {
          * remembered by whichever of them came <em>first</em>.</p>
          */
         int firstEventIndex(String id, String attributeKey) {
-            return firstEventIndexes.getOrDefault(new UpdateKey(id, attributeKey), -1);
-        }
-
-        /** The key under which a change of this event is remembered here, see {@link EventCompactor#attributeKey}. */
-        String attributeKey(NetworkEvent event) {
-            return EventCompactor.attributeKey(event);
+            if (firstChanges.isEmpty()) {
+                return -1;
+            }
+            FirstChange first = firstChanges.get(new UpdateKey(id, attributeKey));
+            return first == null ? -1 : first.index();
         }
 
         /**
@@ -245,7 +275,7 @@ final class EventCompactor {
          * recorded anywhere, because it did not exist.
          */
         boolean extensionCreated(String id, String extensionName) {
-            return createdExtensions.contains(extensionKey(id, extensionName));
+            return !createdExtensions.isEmpty() && createdExtensions.contains(extensionKey(id, extensionName));
         }
 
         /**
@@ -254,7 +284,7 @@ final class EventCompactor {
          */
         Set<String> changedKeys() {
             Set<String> keys = new HashSet<>();
-            firstOldValues.keySet().forEach(key -> keys.add(key.identifiableId() + "." + key.attributeKey()));
+            firstChanges.keySet().forEach(key -> keys.add(key.identifiableId() + "." + key.attributeKey()));
             return keys;
         }
     }

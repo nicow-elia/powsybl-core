@@ -89,13 +89,12 @@ final class VariantUpdater {
         if (options.getTargetVariant() != null && existing instanceof RdfDbProvenanceImpl already) {
             already.enableVariantMode();
         }
+        Call call = new Call(network, db, options, params, rn, existing == null);
         if (existing != null && !existing.scenario().equals(scenario)) {
-            return refused(network, variantId, target, null,
+            return refused(call, variantId, target, null,
                     List.of("the network was loaded from scenario '" + existing.scenario() + "' and the target"
-                            + " is in scenario '" + scenario + "': differences never cross scenarios"),
-                    db, options, params, rn, false);
+                            + " is in scenario '" + scenario + "': differences never cross scenarios"));
         }
-        boolean createdProvenance = existing == null;
         RdfDbProvenanceImpl provenance = provenanceOf(network, db, scenario, options);
         if (options.getTargetVariant() != null) {
             provenance.enableVariantMode();
@@ -119,7 +118,7 @@ final class VariantUpdater {
         Map<String, VersionGraph.Start> starts = new LinkedHashMap<>();
         starts.put(TARGET_SIDE, new VersionGraph.Start(null, resolved));
         for (int i = 0; i < candidates.size(); i++) {
-            starts.put("A" + i, new VersionGraph.Start(candidates.get(i).snapshotIri(), null));
+            starts.put(side(i), new VersionGraph.Start(candidates.get(i).snapshotIri(), null));
         }
         VersionGraph.Chains chains = graph.chains(starts);
         List<SnapshotInfo> targetChain = chains.bySide().get(TARGET_SIDE);
@@ -128,45 +127,50 @@ final class VariantUpdater {
         }
         String targetIri = targetChain.get(0).iri();
 
-        Chosen chosen = null;
+        List<VariantPlans.Source> sources = new ArrayList<>();
         for (int i = 0; i < candidates.size(); i++) {
-            List<SnapshotInfo> from = chains.bySide().get("A" + i);
-            if (from == null || from.isEmpty()) {
-                continue;
-            }
-            UpdatePlan plan = graph.path(from, targetChain, chains.diffs(), options);
-            if (chosen == null || VariantPlans.isBetter(plan, chosen.plan())) {
-                chosen = new Chosen(candidates.get(i), plan);
-            }
+            sources.add(new VariantPlans.Source(candidates.get(i).variantId(), chains.bySide().get(side(i))));
         }
+        VariantPlans.Chosen chosen = VariantPlans.nearest(sources,
+                from -> graph.path(from, targetChain, chains.diffs(), options)).orElse(null);
         Duration planning = Duration.ofNanos(System.nanoTime() - planStart);
         if (chosen == null) {
-            return refused(network, variantId, resolved, targetIri,
+            return refused(call, variantId, resolved, targetIri,
                     List.of("no variant of the network is at a snapshot of scenario '" + scenario
-                            + "' that the target can be reached from"), db, options, params, rn,
-                    createdProvenance);
+                            + "' that the target can be reached from"));
         }
 
         UpdatePlan plan = chosen.plan();
         List<String> blocking = VariantPlans.blockingReasons(plan);
         if (!blocking.isEmpty()) {
-            return refused(network, variantId, resolved, targetIri, blocking, db, options, params, rn,
-                    createdProvenance);
+            return refused(call, variantId, resolved, targetIri, blocking);
         }
         if (plan.kind() == UpdatePlan.Kind.NOOP) {
-            return noop(network, provenance, variantId, exists, chosen, resolved, targetIri, planning, rn,
-                    scenario);
+            return noop(call, provenance, variantId, exists, chosen, targetIri, planning, scenario);
         }
-        return applyOnVariant(network, db, provenance, variantId, exists, chosen, resolved, targetIri, options,
-                params, rn, planning, createdProvenance);
+        return applyOnVariant(call, provenance, variantId, exists, chosen, resolved, targetIri, planning);
+    }
+
+    private static String side(int candidate) {
+        return "A" + candidate;
+    }
+
+    /**
+     * What every step of one update is given.
+     *
+     * @param network           the network holding the variant
+     * @param db                the open connection
+     * @param options           the caller's options
+     * @param params            the CGMES import parameters
+     * @param rn                where the update reports
+     * @param createdProvenance whether this update gave the network its provenance, which a refusal takes back
+     */
+    private record Call(Network network, RdfDbConnection db, RdfDbUpdateOptions options, Properties params,
+                        ReportNode rn, boolean createdProvenance) {
     }
 
     /** One variant whose state a new variant could be cloned from. */
     private record Candidate(String variantId, String snapshotIri) {
-    }
-
-    /** The candidate whose path to the target is the shortest, and that path. */
-    private record Chosen(Candidate candidate, UpdatePlan plan) {
     }
 
     /**
@@ -205,52 +209,52 @@ final class VariantUpdater {
     }
 
     /** The variant is already at the target, or a clone of a variant that is. */
-    private static UpdateResult noop(Network network, RdfDbProvenanceImpl provenance, String variantId,
-                                     boolean exists, Chosen chosen, SnapshotRef resolved, String targetIri,
-                                     Duration planning, ReportNode rn, String scenario) {
+    private static UpdateResult noop(Call call, RdfDbProvenanceImpl provenance, String variantId, boolean exists,
+                                     VariantPlans.Chosen chosen, String targetIri, Duration planning,
+                                     String scenario) {
         if (!exists) {
-            network.getVariantManager().cloneVariant(chosen.candidate().variantId(), variantId);
+            call.network().getVariantManager().cloneVariant(chosen.sourceVariant(), variantId);
         }
         rebind(provenance, variantId, targetIri);
         provenance.setLastRefused(List.of());
-        RdfDbReports.updateRouteReport(rn, scenario, UpdateResult.Route.NOOP, 0, List.of());
-        return new UpdateResult(UpdateResult.Route.NOOP, network, Map.of(), List.of(),
+        RdfDbReports.updateRouteReport(call.rn(), scenario, UpdateResult.Route.NOOP, 0, List.of());
+        return new UpdateResult(UpdateResult.Route.NOOP, call.network(), Map.of(), List.of(),
                 new UpdateStatistics(planning, Duration.ZERO, Duration.ZERO, Duration.ZERO, 0, 0), variantId);
     }
 
     /**
      * Clone the nearest variant when needed and apply the path on it, inside its own scope.
      */
-    private static UpdateResult applyOnVariant(Network network, RdfDbConnection db,
-                                               RdfDbProvenanceImpl provenance, String variantId, boolean exists,
-                                               Chosen chosen, SnapshotRef resolved, String targetIri,
-                                               RdfDbUpdateOptions options, Properties params, ReportNode rn,
-                                               Duration planning, boolean createdProvenance) {
+    private static UpdateResult applyOnVariant(Call call, RdfDbProvenanceImpl provenance, String variantId,
+                                               boolean exists, VariantPlans.Chosen chosen, SnapshotRef resolved,
+                                               String targetIri, Duration planning) {
+        Network network = call.network();
+        RdfDbConnection db = call.db();
+        ReportNode rn = call.rn();
         String scenario = resolved.scenario();
         UpdatePlan plan = chosen.plan();
         // Cloning happens outside the scope on purpose: the binding listener reads the network-level identity for
         // a clone of the primary, and inside a scope that identity describes the variant being operated on
         boolean created = !exists;
         if (created) {
-            network.getVariantManager().cloneVariant(chosen.candidate().variantId(), variantId);
+            network.getVariantManager().cloneVariant(chosen.sourceVariant(), variantId);
         }
-        RdfDbUpdateOptions variantOptions = VariantPlans.variantSafe(options);
-        Conversion.Config config = TripleStoreNetworkLoader.importer().config(params);
+        RdfDbUpdateOptions variantOptions = VariantPlans.variantSafe(call.options());
+        Conversion.Config config = TripleStoreNetworkLoader.importer().config(call.params());
 
         // Fetching needs neither the network nor the identity, so it stays outside the scope: a transient
         // endpoint error then costs nothing at all rather than the binding of an intact variant
         RdfDbNetworkLoader.FetchedDiffs fetched = RdfDbNetworkLoader.fetchSteps(db, scenario, plan);
         RdfDbNetworkLoader.AppliedDiffs applied;
         boolean settled = false;
-        try (VariantScope scope = VariantScope.enter(network, provenance, variantId)) {
-            applied = RdfDbNetworkLoader.composeAndApply(network, db, scenario, plan, fetched, variantOptions,
-                    config, rn);
+        try {
+            applied = VariantScope.call(network, provenance, variantId, () -> RdfDbNetworkLoader.composeAndApply(
+                    network, db, scenario, plan, fetched, variantOptions, config, rn));
             settled = true;
         } catch (CgmesDiffNotApplicableException e) {
             settled = true;
             undo(network, provenance, variantId, created);
-            return refused(network, variantId, resolved, targetIri, e.getDecision().reasons(), db, options,
-                    params, rn, createdProvenance);
+            return refused(call, variantId, resolved, targetIri, e.getDecision().reasons());
         } catch (PowsyblException e) {
             // The apply got far enough to change something: the variant no longer stands for any stored state
             settled = true;
@@ -276,7 +280,7 @@ final class VariantUpdater {
         RdfDbReports.updateRouteReport(rn, scenario, UpdateResult.Route.DIFF_APPLIED, plan.chainLength(),
                 List.of());
         LOGGER.info("Brought variant '{}' of network {} to snapshot {} by applying {} difference(s) from '{}': {}",
-                variantId, network.getId(), resolved, plan.chainLength(), chosen.candidate().variantId(),
+                variantId, network.getId(), resolved, plan.chainLength(), chosen.sourceVariant(),
                 statistics.summary());
         provenance.setLastRefused(List.of());
         return new UpdateResult(UpdateResult.Route.DIFF_APPLIED, network, applied.appliedModelIds(), List.of(),
@@ -312,28 +316,30 @@ final class VariantUpdater {
      * <p>Under {@link RdfDbUpdateOptions.VariantFallback#SEPARATE_NETWORK} the caller still gets the state it
      * asked for, but in a network of its own; the multi-variant network is untouched either way.</p>
      */
-    private static UpdateResult refused(Network network, String variantId, SnapshotRef target, String targetIri,
-                                        List<String> reasons, RdfDbConnection db, RdfDbUpdateOptions options,
-                                        Properties params, ReportNode rn, boolean createdProvenance) {
+    private static UpdateResult refused(Call call, String variantId, SnapshotRef target, String targetIri,
+                                        List<String> reasons) {
+        Network network = call.network();
         RdfDbProvenance provenance = network.getExtension(RdfDbProvenance.class);
-        if (createdProvenance) {
+        if (call.createdProvenance()) {
             // "The network handed in, unchanged" has to be literally true, extensions included
             network.removeExtension(RdfDbProvenance.class);
         } else if (provenance instanceof RdfDbProvenanceImpl impl) {
             impl.setLastRefused(List.of(VariantOutcome.refused(variantId, target, targetIri, reasons)));
         }
-        RdfDbReports.updateRouteReport(rn, target.scenario(), UpdateResult.Route.VARIANT_REFUSED, 0, reasons);
+        RdfDbReports.updateRouteReport(call.rn(), target.scenario(), UpdateResult.Route.VARIANT_REFUSED, 0,
+                reasons);
         LOGGER.info("Refused to bring variant '{}' of network {} to snapshot {}: {}", variantId, network.getId(),
                 target, reasons);
-        if (options.getVariantFallback() == RdfDbUpdateOptions.VariantFallback.SEPARATE_NETWORK) {
+        if (call.options().getVariantFallback() == RdfDbUpdateOptions.VariantFallback.SEPARATE_NETWORK) {
             long start = System.nanoTime();
-            Network separate = RdfDbNetworkLoader.load(db, target, options.getNetworkFactory(), params, rn);
+            Network separate = RdfDbNetworkLoader.load(call.db(), target, call.options().getNetworkFactory(),
+                    call.params(), call.rn());
             Duration apply = Duration.ofNanos(System.nanoTime() - start);
             return new UpdateResult(UpdateResult.Route.FULL_RELOAD, separate, Map.of(), reasons,
                     new UpdateStatistics(Duration.ZERO, Duration.ZERO, Duration.ZERO, apply, 0, 0), variantId);
         }
         return new UpdateResult(UpdateResult.Route.VARIANT_REFUSED, network, Map.of(), reasons,
-                new UpdateStatistics(Duration.ZERO, Duration.ZERO, Duration.ZERO, Duration.ZERO, 0, 0), variantId);
+                UpdateStatistics.none(), variantId);
     }
 
     /** The provenance of the network, created for a file-loaded network. The scenario is checked by the caller. */

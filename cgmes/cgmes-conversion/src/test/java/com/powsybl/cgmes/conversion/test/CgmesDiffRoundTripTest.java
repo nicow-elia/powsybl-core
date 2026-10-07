@@ -71,7 +71,7 @@ class CgmesDiffRoundTripTest {
      */
     private static final Set<String> KNOWN_IMPORT_NORMALISATIONS = Set.of(
             // The steady state hypothesis has no property for the setpoint of a regulation mode that is not active,
-            // so that value cannot travel at all (WP1 decision D4). Both receivers keep what their equipment model
+            // so that value cannot travel at all. Both receivers keep what their equipment model
             // gave them.
             "StaticVarCompensator-V.reactivePowerSetpoint",
             "StaticVarCompensator-Q.voltageSetpoint",
@@ -110,7 +110,7 @@ class CgmesDiffRoundTripTest {
      *
      * <p>The forward direction is correct in every case &mdash; all three routes agree there &mdash; and
      * {@code FULL_OBJECT}, which states whole consistency groups, undoes the same change exactly. Two real fixes
-     * exist and both are outside this work package: keeping the voltage target in the reactive branch of the
+     * exist and both change accepted behaviour: keeping the voltage target in the reactive branch of the
      * importer (which changes existing expectations of {@code HvdcUpdateTest}), or making
      * {@code DifferenceModel.minimized()} group aware (which changes the accepted change export).</p>
      */

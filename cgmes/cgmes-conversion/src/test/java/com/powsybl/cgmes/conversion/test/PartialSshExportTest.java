@@ -801,6 +801,34 @@ class PartialSshExportTest extends AbstractSerDeTest {
         assertTrue(sshXml.contains("<cim:RegulatingControl.enabled>true</cim:RegulatingControl.enabled>"));
     }
 
+    /**
+     * The reverse of {@link #remoteReactivePowerControlOnVoltageRegulatingGeneratorIsRejected}: a generator whose
+     * CGMES control regulates reactive power cannot be switched to voltage regulation from a steady state hypothesis
+     * file, because the receiver reads the single target of that control as a reactive power. Describing the control
+     * with the remote reactive power control instead would silently switch the regulation off.
+     */
+    @Test
+    void voltageRegulationOfAReactivePowerControlledGeneratorIsRejected() {
+        Network sender = readCgmesResources(GENERATOR_DIR, "generator_EQ.xml", "generator_SSH.xml");
+        Generator generator = sender.getGenerator("SynchronousMachine");
+        generator.setVoltageRegulatorOn(false);
+        generator.setProperty(Conversion.PROPERTY_MODE, "RegulatingControlModeKind.reactivePower");
+        generator.newExtension(RemoteReactivePowerControlAdder.class)
+                .withTargetQ(25.0)
+                .withRegulatingTerminal(generator.getTerminal())
+                .withEnabled(true)
+                .add();
+
+        NetworkEventRecorder recorder = new NetworkEventRecorder();
+        sender.addListener(recorder);
+        generator.setVoltageRegulatorOn(true);
+
+        PowsyblException exception = assertThrows(PowsyblException.class,
+                () -> PartialSshExport.toString(sender, recorder.getEvents(), UnsupportedChangeBehavior.FAIL));
+        assertTrue(exception.getMessage().contains("regulates voltage, but its CGMES regulating control regulates reactive power"),
+                exception.getMessage());
+    }
+
     @Test
     void staticVarCompensatorSetpointsRoundTrip() throws IOException {
         RoundTripResult result = roundTrip(STATIC_VAR_COMPENSATOR_DIR, sender -> {

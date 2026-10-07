@@ -69,7 +69,7 @@ public class CgmesOnDataSource {
     public String baseName() {
         // Get the base URI if present, else build an absolute URI from the data source base name
         return names().stream()
-                .map(n -> loadInputStreamAndGetNamespace(n, NamespaceReader::base))
+                .map(n -> readFile(n, NamespaceReader::base))
                 .filter(Objects::nonNull)
                 .findFirst()
                 .orElseGet(() -> {
@@ -129,10 +129,6 @@ public class CgmesOnDataSource {
         }
     }
 
-    private <T> T loadInputStreamAndGetNamespace(String n, Function<InputStream, T> namespaceGetter) {
-        return readFile(n, namespaceGetter);
-    }
-
     /**
      * The names of the files of this data source that hold an IEC 61970-552 difference model, sorted.
      *
@@ -151,13 +147,13 @@ public class CgmesOnDataSource {
     }
 
     private boolean containsValidNamespace(String name) {
-        Set<String> ns = loadInputStreamAndGetNamespace(name, NamespaceReader::namespacesOrEmpty);
+        Set<String> ns = readFile(name, NamespaceReader::namespacesOrEmpty);
         return ns.contains(RDF_NAMESPACE) && ns.stream().anyMatch(CgmesNamespace::isValid);
     }
 
     public Set<String> namespaces() {
         return names().stream()
-                .map(name -> loadInputStreamAndGetNamespace(name, NamespaceReader::namespaces))
+                .map(name -> readFile(name, NamespaceReader::namespaces))
                 .flatMap(Set::stream)
                 .collect(Collectors.toSet());
     }

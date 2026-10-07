@@ -8,9 +8,11 @@
 
 package com.powsybl.cgmes.rdfdb;
 
+import org.eclipse.rdf4j.model.Statement;
 import org.eclipse.rdf4j.model.Value;
 import org.eclipse.rdf4j.model.ValueFactory;
 import org.eclipse.rdf4j.query.BindingSet;
+import org.eclipse.rdf4j.query.QueryResults;
 import org.eclipse.rdf4j.query.TupleQueryResult;
 import org.eclipse.rdf4j.repository.Repository;
 import org.eclipse.rdf4j.repository.RepositoryConnection;
@@ -49,10 +51,18 @@ public final class SparqlAccess {
     }
 
     /**
-     * @return the scenario these queries run on
+     * Every statement of one context of a repository, through the RDF4J API rather than SPARQL: a context name of
+     * the in-process backend may hold a space, which no SPARQL IRI reference can.
+     *
+     * @param repository the repository
+     * @param context    the context name
+     * @return the statements, in a list the caller may change
      */
-    public String scenario() {
-        return scenario;
+    static List<Statement> statementsOf(Repository repository, String context) {
+        try (RepositoryConnection conn = repository.getConnection()) {
+            return QueryResults.asList(conn.getStatements(null, null, null,
+                    conn.getValueFactory().createIRI(context)));
+        }
     }
 
     /**

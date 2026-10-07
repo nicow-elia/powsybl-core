@@ -10,7 +10,6 @@ package com.powsybl.cgmes.rdfdb;
 
 import com.google.auto.service.AutoService;
 import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
-import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.computation.ComputationManager;
 import com.powsybl.iidm.network.ImportPostProcessor;
@@ -22,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.Properties;
 
+import static com.powsybl.cgmes.rdfdb.Backends.params;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -64,12 +64,6 @@ class RdfDbPostProcessorTest {
         Recorder.calls = 0;
         Recorder.lastComputationManager = null;
         Recorder.lastNetworkId = null;
-    }
-
-    private static Properties params() {
-        Properties p = new Properties();
-        p.put(CgmesImport.IMPORT_CGM_WITH_SUBNETWORKS, "false");
-        return p;
     }
 
     @Test

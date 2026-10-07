@@ -9,7 +9,6 @@
 package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
-import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.commons.report.ReportNode;
 import org.junit.jupiter.api.Test;
 
@@ -17,6 +16,7 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.Properties;
 
+import static com.powsybl.cgmes.rdfdb.Backends.params;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -34,12 +34,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 class InMemoryRdfDatabaseTest {
-
-    private static Properties params() {
-        Properties p = new Properties();
-        p.put(CgmesImport.IMPORT_CGM_WITH_SUBNETWORKS, "false");
-        return p;
-    }
 
     @Test
     void twoConnectionsToTheSameNameSeeTheSameData() {

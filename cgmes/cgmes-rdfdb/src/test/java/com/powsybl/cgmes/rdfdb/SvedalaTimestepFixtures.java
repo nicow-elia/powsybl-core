@@ -12,9 +12,7 @@ import com.powsybl.cgmes.conformity.Cgmes3Catalog;
 import com.powsybl.commons.datasource.MemDataSource;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -29,6 +27,11 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import static com.powsybl.cgmes.rdfdb.TimestepFixtures.put;
+import static com.powsybl.cgmes.rdfdb.TimestepFixtures.read;
+import static com.powsybl.cgmes.rdfdb.TimestepFixtures.renameFirstLine;
+import static com.powsybl.cgmes.rdfdb.TimestepFixtures.rewriteHeader;
 
 /**
  * A day of quarter-hourly CGMES exports of the <em>largest</em> conformity model, made by editing Svedala.
@@ -437,22 +440,7 @@ final class SvedalaTimestepFixtures {
         return result;
     }
 
-    private static String renameFirstLine(String eq) {
-        int line = eq.indexOf("<cim:ACLineSegment rdf:ID=");
-        int name = eq.indexOf("<cim:IdentifiedObject.name>", line);
-        int end = eq.indexOf("</cim:IdentifiedObject.name>", name);
-        if (line < 0 || name < 0 || end < 0) {
-            throw new IllegalStateException("the equipment fixture holds no named ACLineSegment");
-        }
-        return eq.substring(0, name) + "<cim:IdentifiedObject.name>renamed-by-the-day" + eq.substring(end);
-    }
-
     // ------------------------------------------------------------------ headers
-
-    private static String rewriteHeader(String text, String modelId, String instant) {
-        return rewriteScenarioTime(text.replaceFirst("rdf:about=\"urn:uuid:[^\"]*\"",
-                Matcher.quoteReplacement("rdf:about=\"" + modelId + "\"")), instant);
-    }
 
     private static String rewriteScenarioTime(String text, String instant) {
         return text.replaceAll("(<md:Model.scenarioTime>)[^<]*(</md:Model.scenarioTime>)",
@@ -597,24 +585,6 @@ final class SvedalaTimestepFixtures {
     private static boolean contains(ReadOnlyDataSource source, String name) {
         try {
             return source.exists(name);
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
-    }
-
-    private static String read(ReadOnlyDataSource source, String name) {
-        try (InputStream in = source.newInputStream(name)) {
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            in.transferTo(out);
-            return out.toString(StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
-    }
-
-    private static void put(MemDataSource source, String name, String content) {
-        try (var out = source.newOutputStream(name, false)) {
-            out.write(content.getBytes(StandardCharsets.UTF_8));
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }

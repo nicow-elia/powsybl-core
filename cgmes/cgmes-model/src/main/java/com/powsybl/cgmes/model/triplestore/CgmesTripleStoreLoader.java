@@ -9,6 +9,7 @@
 package com.powsybl.cgmes.model.triplestore;
 
 import com.powsybl.cgmes.model.CgmesModelException;
+import com.powsybl.cgmes.model.CgmesModelFactory;
 import com.powsybl.cgmes.model.CgmesModelReports;
 import com.powsybl.cgmes.model.CgmesOnDataSource;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
@@ -21,7 +22,6 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -31,8 +31,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * The first half of a CGMES import: <em>CGMES files &rarr; triple store</em>, with nothing of IIDM in sight.
  *
- * <p>Reading CGMES data and converting it to IIDM used to be one indivisible step, hidden inside
- * {@link com.powsybl.cgmes.model.CgmesModelFactory} and the CGMES importer. Splitting it in two is what makes an
+ * <p>{@link com.powsybl.cgmes.model.CgmesModelFactory} and the CGMES importer read CGMES data and convert it to IIDM
+ * in one go. Splitting that in two is what makes an
  * RDF database usable as the place CGMES data lives: the files are parsed and uploaded once (this class), and every
  * later network build reads the statements back out of the database instead of the files. The second half &mdash;
  * <em>triple store &rarr; IIDM</em> &mdash; is {@code TripleStoreNetworkLoader} in {@code cgmes-conversion}.</p>
@@ -134,9 +134,10 @@ public final class CgmesTripleStoreLoader {
 
         CgmesOnDataSource cds = new CgmesOnDataSource(main);
         String baseName = cds.baseName();
-        String namespace = cimNamespace == null ? obtainCimNamespace(main, boundary) : cimNamespace;
+        String namespace = cimNamespace == null ? CgmesModelFactory.obtainCimNamespace(main, boundary) : cimNamespace;
 
-        List<String> fileNames = new ArrayList<>(readAll(cds, baseName, target, parallelism, reportNode));
+        // readAll answers with a fresh list, so it can take the boundary files as well
+        List<String> fileNames = readAll(cds, baseName, target, parallelism, reportNode);
 
         boolean boundaryLoaded = false;
         if (boundary != null && !hasBoundary(namespace, target)) {
@@ -159,27 +160,6 @@ public final class CgmesTripleStoreLoader {
      */
     public static String contextName(String fileName) {
         return fileName.startsWith(CONTEXTS) ? fileName : CONTEXTS + fileName;
-    }
-
-    /**
-     * The CIM namespace of the data, taken from the boundary when the main data source declares none.
-     *
-     * <p>The same rule {@code CgmesModelFactory} applies, and it matters: a data source that holds nothing but
-     * boundary files still has to be loadable.</p>
-     */
-    private static String obtainCimNamespace(ReadOnlyDataSource main, ReadOnlyDataSource boundary) {
-        try {
-            return new CgmesOnDataSource(main).cimNamespace();
-        } catch (CgmesModelException e) {
-            if (boundary != null) {
-                try {
-                    return new CgmesOnDataSource(boundary).cimNamespace();
-                } catch (CgmesModelException ignored) {
-                    throw e;
-                }
-            }
-            throw e;
-        }
     }
 
     /**
@@ -224,11 +204,7 @@ public final class CgmesTripleStoreLoader {
         try {
             List<Future<?>> futures = new ArrayList<>(names.size());
             for (String name : names) {
-                Callable<Void> task = () -> {
-                    readOne(cds, baseName, target, name);
-                    return null;
-                };
-                futures.add(pool.submit(task));
+                futures.add(pool.submit(() -> readOne(cds, baseName, target, name)));
             }
             for (Future<?> future : futures) {
                 waitFor(future);

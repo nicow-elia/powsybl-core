@@ -258,6 +258,7 @@ Other changes are reported as unsupported, because the SSH profile cannot expres
 
 * The regulation mode of a `StaticVarCompensator` or of a tap changer: it is `RegulatingControl.mode`, which belongs to the EQ profile.
 * A change of the `generatorRemoteReactivePowerControl` of a generator whose CGMES control regulates voltage: the single target of that control means a voltage, so there is nowhere to put a reactive power target.
+* The reverse: a regulation change of a generator whose CGMES control regulates reactive power while the generator regulates voltage (`voltageRegulatorOn`). The receiver would read the voltage target as a reactive power one.
 * A regulation change of a ratio tap changer that does not regulate voltage: the CGMES update only reads voltage regulation of ratio tap changers.
 * The power factor of a line commutated converter whose line carries no power: the factor is carried by `ACDCConverter.p` and `q`, which are then zero.
 * The converters mode of an HVDC line of voltage source converters whose setpoint is zero: a `VsConverter` has no operating mode, the mode is only derived from a non zero `targetPpcc`.

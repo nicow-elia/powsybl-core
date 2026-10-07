@@ -456,7 +456,7 @@ class CgmesDiffImportTest {
     }
 
     /**
-     * The equipment profile is accepted for the values work package 5 added, and only for them: the subject still
+     * The equipment profile is accepted for the equipment values (limits and impedances), and only for them: the subject still
      * has to exist in the receiving network.
      */
     @Test

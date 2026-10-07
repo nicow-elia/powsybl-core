@@ -8,14 +8,17 @@
 
 package com.powsybl.cgmes.rdfdb;
 
+import java.time.DateTimeException;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoUnit;
 import java.util.regex.Pattern;
 
 /**
@@ -51,7 +54,7 @@ public final class Timesteps {
      * @return the ISO instant in UTC, second precision
      */
     public static String canonical(ZonedDateTime time) {
-        return DateTimeFormatter.ISO_INSTANT.format(time.toInstant().truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
+        return DateTimeFormatter.ISO_INSTANT.format(time.toInstant().truncatedTo(ChronoUnit.SECONDS));
     }
 
     /**
@@ -88,7 +91,7 @@ public final class Timesteps {
      */
     private static String localDateTime(String original, String text, DateTimeParseException notOffset) {
         try {
-            return canonical(java.time.LocalDateTime.parse(text).atOffset(ZoneOffset.UTC).toZonedDateTime());
+            return canonical(LocalDateTime.parse(text).atOffset(ZoneOffset.UTC).toZonedDateTime());
         } catch (DateTimeParseException notLocal) {
             RdfDbException failure = new RdfDbException("\"" + original + "\" is not a timestep: pass an ISO"
                     + " instant (2016-01-01T08:30:00Z), an offset date-time (2016-01-01T09:30:00+01:00), a local"
@@ -168,7 +171,7 @@ public final class Timesteps {
         }
         try {
             return ZoneOffset.of(text.trim());
-        } catch (java.time.DateTimeException e) {
+        } catch (DateTimeException e) {
             throw new RdfDbException("\"" + text + "\" is not a zone offset", e);
         }
     }

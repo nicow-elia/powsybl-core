@@ -50,7 +50,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The statements the difference model export writes for the equipment values of work package 5: operational limits,
+ * The statements the difference model export writes for the equipment values (limits and impedances): operational limits,
  * voltage level limits and branch impedances.
  *
  * <p>Every test asserts the exact CGMES subjects and values of both directions, because the whole point of these
@@ -398,16 +398,12 @@ class CgmesEqDiffExportTest {
 
     // Golden documents of the equipment scenarios
 
-    static List<Scenario> equipmentScenarios() {
-        return RecordedChangeScenarios.equipmentChanges();
-    }
-
     /**
      * Pins the exact document of every equipment scenario, one per profile it touches. The steady state scenarios are
      * pinned by {@code CgmesDiffExportTest}, which writes the steady state document only.
      */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("equipmentScenarios")
+    @MethodSource("com.powsybl.cgmes.conversion.test.RecordedChangeScenarios#equipmentChanges")
     void differenceModelOfEveryEquipmentScenarioIsUnchanged(Scenario scenario) throws IOException {
         Network network = scenario.load();
         List<NetworkEvent> events = RecordedChangeScenarios.record(network, scenario.forwardChange());

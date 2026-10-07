@@ -23,8 +23,9 @@ import com.powsybl.triplestore.api.PropertyBags;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -218,10 +219,10 @@ public class Context {
         updateCachesRequested = true;
     }
 
-    /** The named cache, built from its query on first use. */
-    private Map<String, PropertyBag> updateCache(String name, Map<String, PropertyBag> cache,
-                                                 Supplier<PropertyBags> query, String tagId) {
-        if (updateCachesRequested && builtUpdateCaches.add(name)) {
+    /** The given cache, built from its query on first use. */
+    private Map<String, PropertyBag> updateCache(Map<String, PropertyBag> cache, Supplier<PropertyBags> query,
+                                                 String tagId) {
+        if (updateCachesRequested && builtUpdateCaches.add(cache)) {
             buildUpdateCache(cache, query.get(), tagId);
         }
         return cache;
@@ -235,43 +236,43 @@ public class Context {
     }
 
     public PropertyBag cgmesTerminal(String id) {
-        return updateCache("terminals", cgmesTerminals, cgmes::terminals, CgmesNames.TERMINAL).get(id);
+        return updateCache(cgmesTerminals, cgmes::terminals, CgmesNames.TERMINAL).get(id);
     }
 
     public PropertyBag cgmesDcTerminal(String id) {
-        return updateCache("dcTerminals", cgmesDcTerminals, cgmes::dcTerminals, CgmesNames.DC_TERMINAL).get(id);
+        return updateCache(cgmesDcTerminals, cgmes::dcTerminals, CgmesNames.DC_TERMINAL).get(id);
     }
 
     public PropertyBag ratioTapChanger(String id) {
-        return updateCache("ratioTapChangers", ratioTapChangers, cgmes::ratioTapChangers, CgmesNames.RATIO_TAP_CHANGER).get(id);
+        return updateCache(ratioTapChangers, cgmes::ratioTapChangers, CgmesNames.RATIO_TAP_CHANGER).get(id);
     }
 
     public PropertyBag phaseTapChanger(String id) {
-        return updateCache("phaseTapChangers", phaseTapChangers, cgmes::phaseTapChangers, CgmesNames.PHASE_TAP_CHANGER).get(id);
+        return updateCache(phaseTapChangers, cgmes::phaseTapChangers, CgmesNames.PHASE_TAP_CHANGER).get(id);
     }
 
     public PropertyBag regulatingControl(String id) {
-        return updateCache("regulatingControls", regulatingControls, cgmes::regulatingControls, CgmesNames.REGULATING_CONTROL).get(id);
+        return updateCache(regulatingControls, cgmes::regulatingControls, CgmesNames.REGULATING_CONTROL).get(id);
     }
 
     public PropertyBag operationalLimit(String id) {
-        return updateCache("operationalLimits", operationalLimits, cgmes::operationalLimits, CgmesNames.OPERATIONAL_LIMIT).get(id);
+        return updateCache(operationalLimits, cgmes::operationalLimits, CgmesNames.OPERATIONAL_LIMIT).get(id);
     }
 
     public PropertyBag generatingUnit(String id) {
-        return updateCache("generatingUnits", generatingUnits, cgmes::generatingUnits, CgmesNames.GENERATING_UNIT).get(id);
+        return updateCache(generatingUnits, cgmes::generatingUnits, CgmesNames.GENERATING_UNIT).get(id);
     }
 
     public PropertyBag equivalentInjection(String id) {
-        return updateCache("equivalentInjections", equivalentInjections, cgmes::equivalentInjections, CgmesNames.EQUIVALENT_INJECTION).get(id);
+        return updateCache(equivalentInjections, cgmes::equivalentInjections, CgmesNames.EQUIVALENT_INJECTION).get(id);
     }
 
     public PropertyBag svVoltage(String id) {
-        return updateCache("svVoltages", svVoltages, cgmes::svVoltages, CgmesNames.TOPOLOGICAL_NODE).get(id);
+        return updateCache(svVoltages, cgmes::svVoltages, CgmesNames.TOPOLOGICAL_NODE).get(id);
     }
 
     public PropertyBag cgmesSwitch(String id) {
-        return updateCache("switches", switches, cgmes::switches, CgmesNames.SWITCH).get(id);
+        return updateCache(switches, cgmes::switches, CgmesNames.SWITCH).get(id);
     }
 
     // Handling issues found during conversion
@@ -397,7 +398,8 @@ public class Context {
 
     /** Whether the update workflow asked for its caches; they are then built one by one, on first use. */
     private boolean updateCachesRequested = false;
-    private final Set<String> builtUpdateCaches = new HashSet<>();
+    /** The update caches already built, by identity. */
+    private final Set<Map<String, PropertyBag>> builtUpdateCaches = Collections.newSetFromMap(new IdentityHashMap<>());
 
     private final Map<String, PropertyBag> cgmesTerminals;
     private final Map<String, PropertyBag> cgmesDcTerminals;

@@ -60,7 +60,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *   Network.read(svedala)                      1054 ms
  * </pre>
  *
- * <p>The equipment values of work package 5 behave the same way. The limits go through the update workflow like any
+ * <p>The equipment values (limits and impedances) behave the same way. The limits go through the update workflow like any
  * steady state value; the impedances are applied with IIDM setters, which is the {@code direct} phase and costs
  * almost nothing, because the fixed cost of an apply is the RDF and SPARQL machinery, not the setters:</p>
  * <pre>

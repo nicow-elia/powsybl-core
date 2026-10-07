@@ -79,6 +79,15 @@ The file names are free &mdash; the detection reads the first elements of each f
 zip of difference models works like any other CGMES data source. A data source that mixes difference models with full
 or partial files is refused, because nothing would define the order in which they apply.
 
+A data source normally holds at most one difference model per profile. Several models of *one* profile are accepted
+when they form a `md:Model.Supersedes` chain &mdash; each one supersedes the previous one, the first one supersedes
+nothing else in the data source. `network.update` then orders them along the chain (not by file name) and applies them
+one step after the other, step *k* holding the *k*-th model of every profile, so the Supersedes check of each step
+sees the model the step before registered (`CgmesDiffImport.readChain` returns these steps). Models of one profile
+that do not chain &mdash; two copies of the same difference, two successors of the same model &mdash; are refused
+before anything is applied, and the message names the files. The steps are not one transaction: a step that cannot
+be applied leaves the steps before it applied.
+
 The direct API adds the decision function, the undo and the explicit options:
 
 ```java

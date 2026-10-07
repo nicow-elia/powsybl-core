@@ -8,6 +8,8 @@
 
 package com.powsybl.cgmes.rdfdb;
 
+import java.util.Objects;
+
 /**
  * One snapshot a bulk load turns into a variant of the network.
  *
@@ -24,7 +26,7 @@ public record VariantRequest(String variantId, SnapshotRef ref) {
      * @param ref       see {@link #ref()}
      */
     public VariantRequest {
-        java.util.Objects.requireNonNull(ref);
+        Objects.requireNonNull(ref);
     }
 
     /**

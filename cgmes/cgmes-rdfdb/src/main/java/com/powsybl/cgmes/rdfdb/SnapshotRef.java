@@ -43,11 +43,6 @@ public record SnapshotRef(String scenario, String version, String timestep) {
     /** What a version label may look like. */
     static final Pattern VERSION = Pattern.compile("[A-Za-z0-9._-]{1,64}");
 
-    /**
-     * @param scenario see {@link #scenario()}
-     * @param version  see {@link #version()}
-     * @param timestep see {@link #timestep()}
-     */
     public SnapshotRef {
         RdfDbNames.checkScenario(scenario);
         if (version != null && !VERSION.matcher(version).matches()) {
@@ -149,16 +144,6 @@ public record SnapshotRef(String scenario, String version, String timestep) {
     }
 
     /**
-     * The canonical form of a moment in time, as the database stores it.
-     *
-     * @param time the moment
-     * @return the ISO instant in UTC, second precision
-     */
-    public static String canonicalTimestep(ZonedDateTime time) {
-        return Timesteps.canonical(time);
-    }
-
-    /**
      * The same address at another timestep.
      *
      * @param canonicalTimestep the canonical timestep
@@ -166,16 +151,6 @@ public record SnapshotRef(String scenario, String version, String timestep) {
      */
     public SnapshotRef at(String canonicalTimestep) {
         return new SnapshotRef(scenario, version, canonicalTimestep);
-    }
-
-    /**
-     * The same address at another version.
-     *
-     * @param newVersion the version label
-     * @return the reference
-     */
-    public SnapshotRef withVersion(String newVersion) {
-        return new SnapshotRef(scenario, newVersion, timestep);
     }
 
     @Override

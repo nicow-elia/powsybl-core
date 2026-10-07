@@ -12,7 +12,6 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.AppenderBase;
 import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
-import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import org.junit.jupiter.params.provider.Arguments;
 import org.slf4j.LoggerFactory;
@@ -20,11 +19,12 @@ import org.slf4j.LoggerFactory;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryPoolMXBean;
 import java.lang.management.MemoryType;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
-import java.util.Properties;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
@@ -128,12 +128,6 @@ final class BenchMeters {
                 || Arrays.asList(only.split(",")).contains((String) a.get()[0]));
     }
 
-    static Properties params() {
-        Properties p = new Properties();
-        p.put(CgmesImport.IMPORT_CGM_WITH_SUBNETWORKS, "false");
-        return p;
-    }
-
     // ------------------------------------------------------------------ heap
 
     /** Used heap after three full collections, in bytes. */
@@ -196,6 +190,10 @@ final class BenchMeters {
         return sorted.get(sorted.size() / 2);
     }
 
+    static void add(Map<String, List<Long>> phases, String name, Duration duration) {
+        phases.computeIfAbsent(name, k -> new ArrayList<>()).add(duration.toMillis());
+    }
+
     static long max(List<Long> values) {
         return values.stream().mapToLong(Long::longValue).max().orElse(0L);
     }
@@ -224,7 +222,11 @@ final class BenchMeters {
      * <p>Fuseki logs one line per request ({@code [12] GET http://…}) and one per response
      * ({@code [12] 200 OK (3 ms)}) on {@code org.apache.jena.fuseki.Fuseki} at INFO. The meter raises that
      * logger to INFO, stops it from reaching the console (a sv20 load would otherwise print a line per request of
-     * every test) and counts. Installed once per JVM.</p>
+     * every test) and counts. Installed until {@link #uninstall()}, which every class that installs it calls
+     * {@code @AfterAll} so that later classes of the same surefire fork get the logger back as it was.</p>
+     *
+     * <p>The counts are JVM-wide: every request any thread sends to any embedded Fuseki is counted, so the
+     * request-count bounds assume the test classes of a fork run one after the other, not in parallel.</p>
      */
     static final class FusekiMeter {
 
@@ -234,6 +236,9 @@ final class BenchMeters {
         private static final AtomicLong SERVER_MS = new AtomicLong();
         private static final AtomicLong RESPONSES = new AtomicLong();
         private static boolean installed;
+        private static AppenderBase<ILoggingEvent> counter;
+        private static Level previousLevel;
+        private static boolean previousAdditive;
         private static String firstResponse;
 
         private FusekiMeter() {
@@ -247,10 +252,12 @@ final class BenchMeters {
             if (installed) {
                 return;
             }
-            Logger fusekiLog = (Logger) LoggerFactory.getLogger("org.apache.jena.fuseki.Fuseki");
+            Logger fusekiLog = fusekiLog();
+            previousLevel = fusekiLog.getLevel();
+            previousAdditive = fusekiLog.isAdditive();
             fusekiLog.setLevel(Level.INFO);
             fusekiLog.setAdditive(false);
-            AppenderBase<ILoggingEvent> counter = new AppenderBase<>() {
+            counter = new AppenderBase<>() {
                 @Override
                 protected void append(ILoggingEvent event) {
                     String message = event.getFormattedMessage();
@@ -272,6 +279,24 @@ final class BenchMeters {
             counter.start();
             fusekiLog.addAppender(counter);
             installed = true;
+        }
+
+        /** Detach the counter and give the Fuseki logger back its level and additivity; a no-op if not installed. */
+        static synchronized void uninstall() {
+            if (!installed) {
+                return;
+            }
+            Logger fusekiLog = fusekiLog();
+            fusekiLog.detachAppender(counter);
+            counter.stop();
+            fusekiLog.setLevel(previousLevel);
+            fusekiLog.setAdditive(previousAdditive);
+            counter = null;
+            installed = false;
+        }
+
+        private static Logger fusekiLog() {
+            return (Logger) LoggerFactory.getLogger("org.apache.jena.fuseki.Fuseki");
         }
 
         static Reading mark() {

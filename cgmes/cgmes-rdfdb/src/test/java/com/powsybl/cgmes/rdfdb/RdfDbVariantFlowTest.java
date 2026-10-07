@@ -8,17 +8,13 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
-import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
-import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Load;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.VariantManagerConstants;
 import com.powsybl.iidm.network.events.NetworkEvent;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.nio.charset.StandardCharsets;
@@ -26,11 +22,10 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Properties;
 import java.util.Set;
-import java.util.function.Consumer;
-import java.util.stream.Stream;
 
+import static com.powsybl.cgmes.rdfdb.Backends.microGridBe;
+import static com.powsybl.cgmes.rdfdb.Backends.params;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -60,36 +55,16 @@ class RdfDbVariantFlowTest {
     /** The identity of a network is its own assertion, so it is kept out of the network comparison. */
     private static final Set<String> IDENTITY = Set.of("cgmesMetadataModels", "rdfDbProvenance");
 
-    static Stream<Arguments> backends() {
-        return Backends.backends();
-    }
-
-    private static Properties params() {
-        Properties p = new Properties();
-        p.put(CgmesImport.IMPORT_CGM_WITH_SUBNETWORKS, "false");
-        return p;
-    }
-
-    private static ReadOnlyDataSource be() {
-        return CgmesConformity1Catalog.microGridBaseCaseBE().dataSource();
-    }
-
     private static RdfDbConnection rootOnly(String backend) {
         RdfDbConnection db = RdfDbConnection.open(Backends.database(backend, "variant-flow"));
         db.clear(S);
         db.clear(OTHER);
-        db.snapshots(S).putFull(be(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
+        db.snapshots(S).putFull(microGridBe(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
         return db;
     }
 
     private static Network load(RdfDbConnection db, String scenario, String version, String timestep) {
         return RdfDbNetworkLoader.load(db, scenario, version, timestep, null, params(), ReportNode.NO_OP);
-    }
-
-    /** Record a change on a network and store it as the given snapshot. */
-    private static void record(Network network, RdfDbConnection db, SnapshotRef target, Consumer<Network> change) {
-        List<NetworkEvent> events = Changes.record(network, change);
-        RdfDbExport.export(network, events, db, target, new CgmesDiffExport.ExportOptions());
     }
 
     private static UpdateResult bring(Network network, RdfDbConnection db, String version, String timestep,
@@ -100,10 +75,7 @@ class RdfDbVariantFlowTest {
 
     /** How many {@code pdb:variantSafe} flags the metadata graph of the scenario holds. */
     private static long variantSafeFlags(RdfDbConnection db) {
-        List<Map<String, org.eclipse.rdf4j.model.Value>> rows = db.sparql(S).select(RdfDbVocabulary.PREFIXES
-                + "SELECT (COUNT(*) AS ?n) WHERE { GRAPH <" + RdfDbNames.metaGraph(S)
-                + "> { ?m pdb:variantSafe ?v } }");
-        return rows.isEmpty() ? 0 : Long.parseLong(rows.get(0).get("n").stringValue());
+        return Backends.count(db, S, RdfDbNames.metaGraph(S), "?m pdb:variantSafe ?v");
     }
 
     /** The canonical XIIDM of every variant of a network, keyed by variant. */
@@ -136,15 +108,15 @@ class RdfDbVariantFlowTest {
     private static RdfDbConnection threeVersions(String backend) {
         RdfDbConnection db = rootOnly(backend);
         Network sender = load(db, S, "1.0", null);
-        record(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 11.0));
-        record(sender, db, SnapshotRef.of(S, "1.2"), n -> Changes.moveLoad(n, 13.0));
+        Changes.export(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 11.0));
+        Changes.export(sender, db, SnapshotRef.of(S, "1.2"), n -> Changes.moveLoad(n, 13.0));
         return db;
     }
 
     // ------------------------------------------------------------------ the two promises
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void applyOnVariantLeavesOthersByteIdentical(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
             Network network = load(db, S, "1.0", null);
@@ -169,7 +141,7 @@ class RdfDbVariantFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void everyVariantEqualsASeparateLoad(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
             Network network = load(db, S, "1.0", null);
@@ -194,7 +166,7 @@ class RdfDbVariantFlowTest {
     // ------------------------------------------------------------------ create or update
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void createOrUpdateSemantics(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
             Network network = load(db, S, "1.0", null);
@@ -220,7 +192,7 @@ class RdfDbVariantFlowTest {
 
     /** A new variant is cloned from the variant nearest to the target, not always from the primary. */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void newVariantIsClonedFromTheNearestBoundVariant(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
             Network network = load(db, S, "1.0", null);
@@ -237,7 +209,7 @@ class RdfDbVariantFlowTest {
 
     /** A variant can be walked backwards as well as forwards. */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void backwardsOnAVariant(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
             Network network = load(db, S, "1.0", null);
@@ -262,12 +234,12 @@ class RdfDbVariantFlowTest {
     // ------------------------------------------------------------------ refusals
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void equipmentDifferenceIsRefused(String backend) {
         try (RdfDbConnection db = rootOnly(backend)) {
             Network sender = load(db, S, "1.0", null);
             String line = sender.getLineStream().map(l -> l.getId()).sorted().findFirst().orElseThrow();
-            record(sender, db, SnapshotRef.of(S, "1.1"),
+            Changes.export(sender, db, SnapshotRef.of(S, "1.1"),
                 n -> n.getLine(line).setR(n.getLine(line).getR() + 1.0));
 
             Network network = load(db, S, "1.0", null);
@@ -289,7 +261,7 @@ class RdfDbVariantFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void eqDriftIsRefused(String backend) {
         try (RdfDbConnection db = rootOnly(backend)) {
             // A renamed line is an equipment change no in-place update can apply at all
@@ -310,12 +282,12 @@ class RdfDbVariantFlowTest {
 
     /** The separate-network fallback hands the caller the state, and still does not touch the network. */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void separateNetworkFallbackLeavesTheOriginalUntouched(String backend) {
         try (RdfDbConnection db = rootOnly(backend)) {
             Network sender = load(db, S, "1.0", null);
             String line = sender.getLineStream().map(l -> l.getId()).sorted().findFirst().orElseThrow();
-            record(sender, db, SnapshotRef.of(S, "1.1"),
+            Changes.export(sender, db, SnapshotRef.of(S, "1.1"),
                 n -> n.getLine(line).setR(n.getLine(line).getR() + 1.0));
 
             Network network = load(db, S, "1.0", null);
@@ -336,10 +308,10 @@ class RdfDbVariantFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void crossScenarioIsRefusedWithoutAQuery(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
-            db.snapshots(OTHER).putFull(be(), null, SnapshotRef.of(OTHER, "1.0"), params(), ReportNode.NO_OP);
+            db.snapshots(OTHER).putFull(microGridBe(), null, SnapshotRef.of(OTHER, "1.0"), params(), ReportNode.NO_OP);
             Network network = load(db, OTHER, "1.0", null);
 
             UpdateResult result = RdfDbNetworkLoader.update(network, db, SnapshotRef.of(S, "1.1"),
@@ -358,7 +330,7 @@ class RdfDbVariantFlowTest {
      * is gone. Opting in on it afterwards therefore has to say so, instead of planning from a lie.</p>
      */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aClassicUpdateDropsTheBindingsOfTrackedClones(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
             Network network = load(db, S, "1.0", null);
@@ -380,7 +352,7 @@ class RdfDbVariantFlowTest {
      * R2: committing a study variant onto the primary moves the network-level identity with the state.
      */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void overwritingThePrimaryMovesTheIdentityWithTheState(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
             Network network = load(db, S, "1.0", null);
@@ -413,13 +385,13 @@ class RdfDbVariantFlowTest {
      * later.
      */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void variantModeStaysOnAfterARefusalAndAfterRemovingEveryVariant(String backend) {
         try (RdfDbConnection db = rootOnly(backend)) {
             Network sender = load(db, S, "1.0", null);
-            record(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 11.0));
+            Changes.export(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 11.0));
             String line = sender.getLineStream().map(l -> l.getId()).sorted().findFirst().orElseThrow();
-            record(sender, db, SnapshotRef.of(S, "1.2"),
+            Changes.export(sender, db, SnapshotRef.of(S, "1.2"),
                 n -> n.getLine(line).setR(n.getLine(line).getR() + 1.0));
 
             // (a) a refused first opt-in still switches the mode on
@@ -446,15 +418,15 @@ class RdfDbVariantFlowTest {
 
     /** F14: a refusal on a network this package never saw leaves nothing behind, extensions included. */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aRefusalOnAFileLoadedNetworkLeavesNoProvenance(String backend) {
         try (RdfDbConnection db = rootOnly(backend)) {
             Network sender = load(db, S, "1.0", null);
             String line = sender.getLineStream().map(l -> l.getId()).sorted().findFirst().orElseThrow();
-            record(sender, db, SnapshotRef.of(S, "1.1"),
+            Changes.export(sender, db, SnapshotRef.of(S, "1.1"),
                 n -> n.getLine(line).setR(n.getLine(line).getR() + 1.0));
 
-            Network network = Network.read(be(), params());
+            Network network = Network.read(microGridBe(), params());
             RdfDbProvenance before = network.getExtension(RdfDbProvenance.class);
             assertThat(before).isNull();
 
@@ -469,7 +441,7 @@ class RdfDbVariantFlowTest {
 
     /** F5: a variant created with an open address reports the version and the timestep it really reached. */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aBindingCarriesTheResolvedAddress(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
             Network network = load(db, S, "1.0", null);
@@ -508,7 +480,7 @@ class RdfDbVariantFlowTest {
      * to tell apart before it decides whether a route of {@code 'full'} is possible at all.</p>
      */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void isVariantModeAnswersWhoOptedIn(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
             // A plain load, and a clone the user made: bindings tracked, mode off
@@ -543,7 +515,7 @@ class RdfDbVariantFlowTest {
             assertThat(exporter.getExtension(RdfDbProvenance.class).isVariantMode()).isTrue();
 
             // ... and a refused first opt-in switches it on too, which is what makes the answer usable
-            db.snapshots(OTHER).putFull(be(), null, SnapshotRef.of(OTHER, "1.0"), params(), ReportNode.NO_OP);
+            db.snapshots(OTHER).putFull(microGridBe(), null, SnapshotRef.of(OTHER, "1.0"), params(), ReportNode.NO_OP);
             Network refused = load(db, OTHER, "1.0", null);
             assertThat(RdfDbNetworkLoader.update(refused, db, SnapshotRef.of(S, "1.1"),
                     new RdfDbUpdateOptions().setTargetVariant("A"), params(), ReportNode.NO_OP).route())
@@ -561,10 +533,10 @@ class RdfDbVariantFlowTest {
      * the mode on; this pins it for that path too.</p>
      */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aCrossScenarioRefusalIsStillAnOptIn(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
-            db.snapshots(OTHER).putFull(be(), null, SnapshotRef.of(OTHER, "1.0"), params(), ReportNode.NO_OP);
+            db.snapshots(OTHER).putFull(microGridBe(), null, SnapshotRef.of(OTHER, "1.0"), params(), ReportNode.NO_OP);
             Network network = load(db, OTHER, "1.0", null);
             Map<String, String> before = xiidmPerVariant(network);
 
@@ -586,12 +558,12 @@ class RdfDbVariantFlowTest {
 
     /** An older store carries no variant-safety flag, and the network aware check still refuses. */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void anOlderStoreWithoutTheFlagStillRefusesAtApply(String backend) {
         try (RdfDbConnection db = rootOnly(backend)) {
             Network sender = load(db, S, "1.0", null);
             String line = sender.getLineStream().map(l -> l.getId()).sorted().findFirst().orElseThrow();
-            record(sender, db, SnapshotRef.of(S, "1.1"),
+            Changes.export(sender, db, SnapshotRef.of(S, "1.1"),
                 n -> n.getLine(line).setR(n.getLine(line).getR() + 1.0));
             // Make the store look like one written before the flag existed. The prefix has to be the real one:
             // a DELETE against a wrong namespace matches nothing and the test would pass on the plan-time path
@@ -620,7 +592,7 @@ class RdfDbVariantFlowTest {
     // ------------------------------------------------------------------ what a user may do to the variants
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void userRemovedVariantAndUserClonedVariant(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
             Network network = load(db, S, "1.0", null);
@@ -642,10 +614,10 @@ class RdfDbVariantFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void unboundVariantIsAClearError(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
-            Network network = Network.read(be(), params());
+            Network network = Network.read(microGridBe(), params());
             network.getVariantManager().cloneVariant(VariantManagerConstants.INITIAL_VARIANT_ID, "stray");
             // Bind another variant so that the network is in variant mode at all
             RdfDbNetworkLoader.update(network, db, SnapshotRef.of(S, "1.1"),
@@ -662,13 +634,13 @@ class RdfDbVariantFlowTest {
      * would leak into the bound ones.
      */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void classicApiWithBoundVariantsIsAVariantOperation(String backend) {
         try (RdfDbConnection db = rootOnly(backend)) {
             Network sender = load(db, S, "1.0", null);
-            record(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 11.0));
+            Changes.export(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 11.0));
             String line = sender.getLineStream().map(l -> l.getId()).sorted().findFirst().orElseThrow();
-            record(sender, db, SnapshotRef.of(S, "1.2"),
+            Changes.export(sender, db, SnapshotRef.of(S, "1.2"),
                 n -> n.getLine(line).setR(n.getLine(line).getR() + 1.0));
 
             Network network = load(db, S, "1.0", null);
@@ -687,7 +659,7 @@ class RdfDbVariantFlowTest {
 
     /** The pre-snapshot entry points say so rather than writing into every variant at once. */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void modelLevelEntryPointsAreRefusedInVariantMode(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
             Network network = load(db, S, "1.0", null);
@@ -711,12 +683,12 @@ class RdfDbVariantFlowTest {
      * route. Only naming a target variant, or loadVariants, is the opt-in.
      */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aUserCloneAloneDoesNotSwitchToVariantMode(String backend) {
         try (RdfDbConnection db = rootOnly(backend)) {
             Network sender = load(db, S, "1.0", null);
             String line = sender.getLineStream().map(l -> l.getId()).sorted().findFirst().orElseThrow();
-            record(sender, db, SnapshotRef.of(S, "1.1"),
+            Changes.export(sender, db, SnapshotRef.of(S, "1.1"),
                 n -> n.getLine(line).setR(n.getLine(line).getR() + 1.0));
 
             Network network = load(db, S, "1.0", null);
@@ -752,7 +724,7 @@ class RdfDbVariantFlowTest {
 
     /** F1, export side: a user clone must not change what the classic snapshot export does either. */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aUserCloneDoesNotChangeTheClassicExport(String backend) {
         try (RdfDbConnection db = rootOnly(backend)) {
             Network sender = load(db, S, "1.0", null);
@@ -760,7 +732,7 @@ class RdfDbVariantFlowTest {
             String sshBefore = sender.getExtension(RdfDbProvenance.class).modelIds()
                     .get(com.powsybl.cgmes.model.CgmesSubset.STEADY_STATE_HYPOTHESIS);
 
-            record(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 9.0));
+            Changes.export(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 9.0));
 
             // The primary advanced, exactly as it always did
             assertThat(sender.getExtension(RdfDbProvenance.class).modelIds()
@@ -772,10 +744,10 @@ class RdfDbVariantFlowTest {
 
     /** A file-loaded network is recognised by its model identifiers and gets a provenance of its own. */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aFileLoadedNetworkCanBeGivenVariants(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
-            Network network = Network.read(be(), params());
+            Network network = Network.read(microGridBe(), params());
 
             UpdateResult result = RdfDbNetworkLoader.update(network, db, SnapshotRef.of(S, "1.1"),
                     new RdfDbUpdateOptions().setTargetVariant("A"), params(), ReportNode.NO_OP);
@@ -791,7 +763,7 @@ class RdfDbVariantFlowTest {
 
     /** A timestep is an address like any other: a variant may stand for another moment of the day. */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aVariantMayStandForAnotherTimestep(String backend) {
         try (RdfDbConnection db = rootOnly(backend)) {
             db.snapshots(S).putAsDiff(TimestepFixtures.ssh(2, "2014-06-01T11:00:00Z", "t11"), null,

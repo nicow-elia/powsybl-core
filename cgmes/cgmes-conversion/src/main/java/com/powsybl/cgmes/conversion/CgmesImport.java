@@ -19,6 +19,7 @@ import com.powsybl.cgmes.model.CgmesModelFactory;
 import com.powsybl.cgmes.model.CgmesNames;
 import com.powsybl.cgmes.model.CgmesOnDataSource;
 import com.powsybl.cgmes.model.CgmesSubset;
+import com.powsybl.cgmes.model.diff.DifferenceModelSet;
 import com.powsybl.commons.PowsyblException;
 import com.powsybl.commons.compress.SafeZipInputStream;
 import com.powsybl.commons.config.PlatformConfig;
@@ -252,7 +253,13 @@ public class CgmesImport implements Importer {
                 throw new CgmesModelException("The data source mixes difference models " + differenceModelNames
                         + " with full or partial models; update with one kind at a time");
             }
-            CgmesDiffImport.apply(network, CgmesDiffImport.read(ds), config(p), diffOptions(p), reportNode);
+            // Several models of one profile are applied one step after the other along their Supersedes chain
+            List<DifferenceModelSet> steps = CgmesDiffImport.readChain(ds);
+            Conversion.Config config = config(p);
+            CgmesDiffImport.Options options = diffOptions(p);
+            for (DifferenceModelSet step : steps) {
+                CgmesDiffImport.apply(network, step, config, options, reportNode);
+            }
             return;
         }
         // Deliberately the plain defaults, not tripleStoreOptions(p): this is what the update flow has always

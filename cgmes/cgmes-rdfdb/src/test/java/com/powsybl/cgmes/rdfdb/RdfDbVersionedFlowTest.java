@@ -8,26 +8,21 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
-import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
 import com.powsybl.cgmes.model.CgmesSubset;
-import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.events.NetworkEvent;
 import org.eclipse.rdf4j.model.Value;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Properties;
 import java.util.Set;
-import java.util.function.Consumer;
-import java.util.stream.Stream;
 
+import static com.powsybl.cgmes.rdfdb.Backends.microGridBe;
+import static com.powsybl.cgmes.rdfdb.Backends.params;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -54,27 +49,13 @@ class RdfDbVersionedFlowTest {
     /** The identity of a network is its own assertion, so it is kept out of the network comparison. */
     private static final Set<String> IDENTITY = Set.of("cgmesMetadataModels", "rdfDbProvenance");
 
-    static Stream<Arguments> backends() {
-        return Backends.backends();
-    }
-
-    private static Properties params() {
-        Properties p = new Properties();
-        p.put(CgmesImport.IMPORT_CGM_WITH_SUBNETWORKS, "false");
-        return p;
-    }
-
-    private static ReadOnlyDataSource be() {
-        return CgmesConformity1Catalog.microGridBaseCaseBE().dataSource();
-    }
-
     /** Two scenarios of the same files, each with a root snapshot at version 1.0. */
     private static RdfDbConnection twoScenarios(String backend) {
         RdfDbConnection db = RdfDbConnection.open(Backends.database(backend, "versioned-flow"));
         db.clear(S);
         db.clear(OTHER);
-        db.snapshots(S).putFull(be(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
-        db.snapshots(OTHER).putFull(be(), null, SnapshotRef.of(OTHER, "1.0"), params(), ReportNode.NO_OP);
+        db.snapshots(S).putFull(microGridBe(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
+        db.snapshots(OTHER).putFull(microGridBe(), null, SnapshotRef.of(OTHER, "1.0"), params(), ReportNode.NO_OP);
         return db;
     }
 
@@ -87,21 +68,14 @@ class RdfDbVersionedFlowTest {
         return RdfDbNetworkLoader.update(network, db, target, options, params(), ReportNode.NO_OP);
     }
 
-    /** Record a change on a network and store it as the given version. */
-    private static RdfDbExport.SnapshotResult record(Network network, RdfDbConnection db, SnapshotRef target,
-                                                     Consumer<Network> change) {
-        List<NetworkEvent> events = Changes.record(network, change);
-        return RdfDbExport.export(network, events, db, target, new CgmesDiffExport.ExportOptions());
-    }
-
     // ------------------------------------------------------------------ loading
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void loadAtVersionEqualsFileImport(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network fromDb = load(db, S, "1.0");
-            Network fromFiles = Network.read(be(), params());
+            Network fromFiles = Network.read(microGridBe(), params());
 
             Networks.assertSameNetwork(fromFiles, fromDb, IDENTITY);
             RdfDbProvenance provenance = fromDb.getExtension(RdfDbProvenance.class);
@@ -113,11 +87,11 @@ class RdfDbVersionedFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void latestResolvesTheHead(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network sender = load(db, S, "1.0");
-            record(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 12.0));
+            Changes.export(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 12.0));
 
             Network latest = load(db, S, null);
 
@@ -129,13 +103,13 @@ class RdfDbVersionedFlowTest {
     // ------------------------------------------------------------------ updating along the chain
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void updateAlongFastChain(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network sender = load(db, S, "1.0");
             Network receiver = load(db, S, "1.0");
             RdfDbExport.SnapshotResult exported =
-                    record(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 12.0));
+                    Changes.export(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 12.0));
 
             assertThat(exported.snapshot().version()).isEqualTo("1.1");
             // Derived from pdb:fastPredicatesOnly of the member, and never written onto the snapshot node: the
@@ -157,7 +131,7 @@ class RdfDbVersionedFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void anUpdateToWhereTheNetworkAlreadyIsDoesNothing(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network network = load(db, S, "1.0");
@@ -168,12 +142,12 @@ class RdfDbVersionedFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void updateBackwardsUndoesTheDifference(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network base = load(db, S, "1.0");
             Network sender = load(db, S, "1.0");
-            record(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 12.0));
+            Changes.export(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 12.0));
 
             UpdateResult result = update(sender, db, SnapshotRef.of(S, "1.0"), new RdfDbUpdateOptions());
 
@@ -184,14 +158,14 @@ class RdfDbVersionedFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void anAccumulatedChainIsAppliedInOneUpdate(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network sender = load(db, S, "1.0");
             Network receiver = load(db, S, "1.0");
             for (int i = 1; i <= 10; i++) {
                 double delta = i % 2 == 0 ? 11.0 : 13.0;
-                record(sender, db, SnapshotRef.of(S, "1." + i), n -> Changes.moveLoad(n, delta));
+                Changes.export(sender, db, SnapshotRef.of(S, "1." + i), n -> Changes.moveLoad(n, delta));
             }
             assertThat(db.snapshots(S).snapshots()).hasSize(11);
             db.snapshots(S).verify();
@@ -211,13 +185,13 @@ class RdfDbVersionedFlowTest {
     // ------------------------------------------------------------------ checkpoints
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void checkpointEqualsClientSideMaterialisation(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network sender = load(db, S, "1.0");
             for (int i = 1; i <= 5; i++) {
                 double delta = i % 2 == 0 ? 11.0 : 13.0;
-                record(sender, db, SnapshotRef.of(S, "1." + i), n -> Changes.moveLoad(n, delta));
+                Changes.export(sender, db, SnapshotRef.of(S, "1." + i), n -> Changes.moveLoad(n, delta));
             }
             Network before = load(db, S, "1.5");
             MaterializationPlan plainPlan = db.versionGraph(S)
@@ -245,18 +219,18 @@ class RdfDbVersionedFlowTest {
 
             // Idempotent, and the earlier versions are still reachable
             assertThat(Checkpoint.create(db, SnapshotRef.of(S, "1.5")).iri()).isEqualTo(checkpointed.iri());
-            Networks.assertSameNetwork(load(db, S, "1.0"), Network.read(be(), params()), IDENTITY);
+            Networks.assertSameNetwork(load(db, S, "1.0"), Network.read(microGridBe(), params()), IDENTITY);
             db.snapshots(S).verify();
         }
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void theF1AndF2EntryPointsMeanTheNewestSnapshot(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network sender = load(db, S, "1.0");
-            record(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 12.0));
-            record(sender, db, SnapshotRef.of(S, "1.2"), n -> Changes.moveLoad(n, 15.0));
+            Changes.export(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 12.0));
+            Changes.export(sender, db, SnapshotRef.of(S, "1.2"), n -> Changes.moveLoad(n, 15.0));
 
             // "The scenario", asked the pre-versioning way, is its newest snapshot
             Network f1 = RdfDbNetworkLoader.load(db, S, null, params(), ReportNode.NO_OP);
@@ -274,12 +248,12 @@ class RdfDbVersionedFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void checkpointKeepsTheModelCatalogueUsable(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network sender = load(db, S, "1.0");
-            record(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 12.0));
-            record(sender, db, SnapshotRef.of(S, "1.2"), n -> Changes.moveLoad(n, 15.0));
+            Changes.export(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 12.0));
+            Changes.export(sender, db, SnapshotRef.of(S, "1.2"), n -> Changes.moveLoad(n, 15.0));
             String headBefore = db.catalog(S).head(SSH).orElseThrow().id();
 
             Checkpoint.create(db, SnapshotRef.of(S, "1.2"));
@@ -296,10 +270,10 @@ class RdfDbVersionedFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void loadCgmesRejectedOnVersionedCatalog(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
-            assertThatThrownBy(() -> db.loadCgmes(S, be(), null, params(), ReportNode.NO_OP))
+            assertThatThrownBy(() -> db.loadCgmes(S, microGridBe(), null, params(), ReportNode.NO_OP))
                     .isInstanceOf(RdfDbException.class)
                     .hasMessageContaining("is versioned: use SnapshotCatalog.putFull");
         }
@@ -308,11 +282,11 @@ class RdfDbVersionedFlowTest {
     // ------------------------------------------------------------------ scenarios never mix
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void updateAcrossScenariosReloads(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network there = load(db, OTHER, "1.0");
-            record(there, db, SnapshotRef.of(OTHER, "1.1"), n -> Changes.moveLoad(n, 12.0));
+            Changes.export(there, db, SnapshotRef.of(OTHER, "1.1"), n -> Changes.moveLoad(n, 12.0));
             Network here = load(db, S, "1.0");
 
             UpdateResult result = update(here, db, SnapshotRef.of(OTHER, "1.1"), new RdfDbUpdateOptions());
@@ -329,7 +303,7 @@ class RdfDbVersionedFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aCrossScenarioUpdateCanBeRefusedInsteadOfReloading(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network here = load(db, S, "1.0");
@@ -341,7 +315,7 @@ class RdfDbVersionedFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void exportIntoOtherScenarioRejected(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network here = load(db, S, "1.0");
@@ -354,18 +328,18 @@ class RdfDbVersionedFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void twoScenariosKeepIndependentChains(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network senderHere = load(db, S, "1.0");
             Network senderThere = load(db, OTHER, "1.0");
             for (int i = 1; i <= 4; i++) {
                 double delta = 10.0 + i;
-                record(senderHere, db, SnapshotRef.of(S, "1." + i), n -> Changes.moveLoad(n, delta));
+                Changes.export(senderHere, db, SnapshotRef.of(S, "1." + i), n -> Changes.moveLoad(n, delta));
             }
             for (int i = 1; i <= 2; i++) {
                 double delta = 20.0 + i;
-                record(senderThere, db, SnapshotRef.of(OTHER, "1." + i), n -> Changes.moveLoad(n, delta));
+                Changes.export(senderThere, db, SnapshotRef.of(OTHER, "1." + i), n -> Changes.moveLoad(n, delta));
             }
 
             Network client = load(db, OTHER, "1.0");
@@ -383,7 +357,7 @@ class RdfDbVersionedFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aPlanAcrossScenariosSendsNoQuery(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network here = load(db, S, "1.0");
@@ -396,7 +370,7 @@ class RdfDbVersionedFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void blankScenarioRejected(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             assertThatThrownBy(() -> RdfDbNetworkLoader.load(db, "", "1.0", null, null, params(),
@@ -406,11 +380,11 @@ class RdfDbVersionedFlowTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void stringOverloadsAddressTheSameSnapshot(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network sender = load(db, S, "1.0");
-            record(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 12.0));
+            Changes.export(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 12.0));
 
             Network receiver = load(db, S, "1.0");
             UpdateResult result = RdfDbNetworkLoader.update(receiver, db, S, "1.1", "2014-06-01T10:30:00Z",

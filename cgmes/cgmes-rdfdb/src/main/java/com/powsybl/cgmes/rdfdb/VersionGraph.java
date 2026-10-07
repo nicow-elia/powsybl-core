@@ -14,6 +14,7 @@ import org.eclipse.rdf4j.model.Value;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -23,8 +24,13 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
+import static com.powsybl.cgmes.rdfdb.SnapshotRows.longOf;
+import static com.powsybl.cgmes.rdfdb.SnapshotRows.text;
+
 /**
  * The one query that answers "can I get from here to there by applying differences?", and the arithmetic on it.
+ * The planner of the snapshot route (a versioned scenario); a scenario without snapshots is planned by
+ * {@link DiffUpdatePlanner}.
  *
  * <h2>One round trip</h2>
  * <p>Both chains come back in a single request. A {@code UNION} binds the start of each side &mdash; the snapshot
@@ -127,27 +133,24 @@ public final class VersionGraph {
         if (from == null && !identity.isEmpty()) {
             from = catalog.byState(identity).map(SnapshotInfo::iri).orElse(null);
         }
-        Sides sides = query(from, target);
-        if (sides.b.isEmpty()) {
+        Map<String, Start> starts = new LinkedHashMap<>();
+        if (from != null) {
+            starts.put(SIDE_A, new Start(from, null));
+        }
+        starts.put(SIDE_B, new Start(null, target));
+        Chains chains = chains(starts);
+        List<SnapshotInfo> a = chains.bySide().getOrDefault(SIDE_A, List.of());
+        List<SnapshotInfo> b = chains.bySide().get(SIDE_B);
+        if (b.isEmpty()) {
             throw new RdfDbException("scenario '" + scenario + "' holds no snapshot " + target);
         }
-        SnapshotInfo b = sides.b.get(0);
-        Map<CgmesSubset, String> targetState = b.state();
-        if (from == null) {
-            return new UpdatePlan(UpdatePlan.Kind.FULL, null, b.iri(), List.of(),
-                    List.of("the network is at no snapshot of scenario '" + scenario + "': it has to be rebuilt"),
-                    0, checkpointRecommended(sides.b, effective), distanceToFull(sides.b), targetState);
-        }
-        if (from.equals(b.iri())) {
-            return new UpdatePlan(UpdatePlan.Kind.NOOP, from, b.iri(), List.of(), List.of(), 0,
-                    checkpointRecommended(sides.b, effective), distanceToFull(sides.b), targetState);
-        }
-        if (sides.a.isEmpty()) {
-            return new UpdatePlan(UpdatePlan.Kind.FULL, from, b.iri(), List.of(),
+        if (from != null && a.isEmpty()) {
+            return new UpdatePlan(UpdatePlan.Kind.FULL, from, b.get(0).iri(), List.of(),
                     List.of("scenario '" + scenario + "' no longer holds the snapshot " + from), 0,
-                    checkpointRecommended(sides.b, effective), distanceToFull(sides.b), targetState);
+                    checkpointRecommended(b, effective), distanceToFull(b), b.get(0).state());
         }
-        return path(sides.a, sides.b, sides.diffs, effective);
+        // No start (FULL), the start is the target (NOOP) and the path itself are what path() answers
+        return path(a, b, chains.diffs(), effective);
     }
 
     /**
@@ -161,11 +164,12 @@ public final class VersionGraph {
         if (!scenario.equals(RdfDbNames.scenarioOf(snapshotIri))) {
             throw new RdfDbException("snapshot " + snapshotIri + " does not belong to scenario '" + scenario + "'");
         }
-        Sides sides = query(null, snapshotIri);
-        if (sides.b.isEmpty()) {
+        Chains chains = chains(Map.of(SIDE_B, new Start(snapshotIri, null)));
+        List<SnapshotInfo> chain = chains.bySide().get(SIDE_B);
+        if (chain.isEmpty()) {
             throw new RdfDbException("scenario '" + scenario + "' holds no snapshot " + snapshotIri);
         }
-        return materialization(sides.b, sides.fullGraphs, sides.diffs);
+        return materialization(chain, chains.fullGraphs(), chains.diffs());
     }
 
     /**
@@ -175,7 +179,7 @@ public final class VersionGraph {
      * @return the plan
      */
     public MaterializationPlan materialization(SnapshotRef ref) {
-        SnapshotInfo info = catalog.find(catalog.check(ref))
+        SnapshotInfo info = catalog.find(ref)
                 .orElseThrow(() -> new RdfDbException("scenario '" + scenario + "' holds no snapshot " + ref));
         return materialization(info.iri());
     }
@@ -208,7 +212,7 @@ public final class VersionGraph {
             }
         }
         // Down the chain, oldest first, taking the difference members of each profile below its start snapshot
-        List<UpdatePlan.DiffStep> steps = new ArrayList<>();
+        List<Hop> steps = new ArrayList<>();
         for (int i = chain.size() - 1; i >= 0; i--) {
             SnapshotInfo snapshot = chain.get(i);
             for (Map.Entry<CgmesSubset, Integer> entry : startIndex.entrySet()) {
@@ -216,7 +220,7 @@ public final class VersionGraph {
                     continue;
                 }
                 memberOf(snapshot, entry.getKey())
-                        .ifPresent(id -> steps.add(new UpdatePlan.DiffStep(snapshot.iri(), named(id), false)));
+                        .ifPresent(id -> steps.add(new Hop(snapshot.iri(), id, false)));
             }
         }
         return new MaterializationPlan(target.iri(), start, resolve(steps, models), target.state());
@@ -259,13 +263,13 @@ public final class VersionGraph {
                             + "'"), 0, checkpointRecommended(to, options), distanceToFull(to),
                     targetState);
         }
-        List<UpdatePlan.DiffStep> steps = new ArrayList<>();
+        List<Hop> steps = new ArrayList<>();
         // Up from A, exclusive of the common ancestor: every difference of those snapshots has to be undone
         for (SnapshotInfo info : from) {
             if (info.iri().equals(lca.iri())) {
                 break;
             }
-            info.members().forEach(id -> steps.add(new UpdatePlan.DiffStep(info.iri(), named(id), true)));
+            info.members().forEach(id -> steps.add(new Hop(info.iri(), id, true)));
         }
         // Down to B, exclusive of the common ancestor, oldest first
         List<SnapshotInfo> down = new ArrayList<>();
@@ -277,7 +281,7 @@ public final class VersionGraph {
         }
         Collections.reverse(down);
         down.forEach(info -> info.members()
-                .forEach(id -> steps.add(new UpdatePlan.DiffStep(info.iri(), named(id), false))));
+                .forEach(id -> steps.add(new Hop(info.iri(), id, false))));
 
         List<UpdatePlan.DiffStep> resolved = resolve(steps, models);
         List<String> reasons = new ArrayList<>();
@@ -303,9 +307,7 @@ public final class VersionGraph {
     }
 
     /** A step before its model is put on it: the identifier is what the chain rows name. */
-    private static StoredModel named(String id) {
-        return new StoredModel("", id, CgmesSubset.UNKNOWN, StoredModel.Kind.DIFF, null, null, null, 1, null,
-                null, null, null, List.of(), List.of(), List.of(), false, -1L, "", null, 0);
+    private record Hop(String snapshot, String id, boolean inverted) {
     }
 
     /**
@@ -321,24 +323,9 @@ public final class VersionGraph {
         return new StoredModel(scenario, id, SnapshotRows.subsetOf(row.get("sub")), StoredModel.Kind.DIFF, null,
                 text(row, "fwd"), text(row, "rev"), 1, null, null, null, null, List.of(), List.of(), List.of(),
                 row.get("mfast") != null && SnapshotRows.booleanOf(row.get("mfast")),
-                longOf(row.get("n")), text(row, "sbase"), text(row, "cim"), (int) longOf(row.get("cdepth")),
+                longOf(row.get("n"), -1L), text(row, "sbase"), text(row, "cim"),
+                (int) longOf(row.get("cdepth"), -1L),
                 row.get("vsafe") == null ? null : SnapshotRows.booleanOf(row.get("vsafe")));
-    }
-
-    private static String text(Map<String, Value> row, String binding) {
-        Value value = row.get(binding);
-        return value == null ? null : value.stringValue();
-    }
-
-    private static long longOf(Value value) {
-        if (value == null) {
-            return -1L;
-        }
-        try {
-            return Long.parseLong(value.stringValue());
-        } catch (NumberFormatException e) {
-            return -1L;
-        }
     }
 
     /**
@@ -346,20 +333,15 @@ public final class VersionGraph {
      *
      * <p>No request: the rows that said which differences lie on the path also said what they are.</p>
      */
-    private List<UpdatePlan.DiffStep> resolve(List<UpdatePlan.DiffStep> steps, Map<String, StoredModel> models) {
-        if (steps.isEmpty()) {
-            return List.of();
-        }
-        List<UpdatePlan.DiffStep> resolved = new ArrayList<>();
-        for (UpdatePlan.DiffStep step : steps) {
-            StoredModel model = models.get(step.model().id());
+    private List<UpdatePlan.DiffStep> resolve(List<Hop> hops, Map<String, StoredModel> models) {
+        return hops.stream().map(hop -> {
+            StoredModel model = models.get(hop.id());
             if (model == null) {
-                throw new RdfDbException("scenario '" + scenario + "' names the model " + step.model().id()
-                        + " in snapshot " + step.snapshot() + " but does not hold it as a difference");
+                throw new RdfDbException("scenario '" + scenario + "' names the model " + hop.id()
+                        + " in snapshot " + hop.snapshot() + " but does not hold it as a difference");
             }
-            resolved.add(new UpdatePlan.DiffStep(step.snapshot(), model, step.inverted()));
-        }
-        return resolved;
+            return new UpdatePlan.DiffStep(hop.snapshot(), model, hop.inverted());
+        }).toList();
     }
 
     private static boolean checkpointRecommended(List<SnapshotInfo> chain, RdfDbUpdateOptions options) {
@@ -475,14 +457,14 @@ public final class VersionGraph {
         Map<String, List<SnapshotInfo>> bySide = new LinkedHashMap<>();
         starts.keySet().forEach(side -> {
             List<SnapshotInfo> chain = new ArrayList<>();
-            java.util.Set<String> seen = new LinkedHashSet<>();
+            Set<String> seen = new LinkedHashSet<>();
             for (String iri : membership.getOrDefault(side, List.of())) {
                 SnapshotInfo info = byIri.get(iri);
                 if (info != null && seen.add(iri)) {
                     chain.add(info);
                 }
             }
-            chain.sort(java.util.Comparator.comparingInt(SnapshotInfo::depth).reversed());
+            chain.sort(Comparator.comparingInt(SnapshotInfo::depth).reversed());
             bySide.put(side, List.copyOf(chain));
         });
         // The side order is the caller's, so a bulk load can read its requests back off the result in order
@@ -500,86 +482,5 @@ public final class VersionGraph {
                 + (ref.version() == null
                         ? " . FILTER NOT EXISTS { ?c pdb:parent ?start ; pdb:edge pdb:VersionEdge }"
                         : " ; pdb:version " + SparqlText.str(ref.version()));
-    }
-
-    // ------------------------------------------------------------------ the query
-
-    /**
-     * The two chains a plan query returns, deepest first, plus what the rows said about the models they name.
-     *
-     * @param a          the chain of the snapshot the network is at, deepest first
-     * @param b          the chain of the target, deepest first
-     * @param fullGraphs the named graph of every full model the chains refer to
-     * @param diffs      every difference model the chains refer to, built from the rows of the same request
-     */
-    private record Sides(List<SnapshotInfo> a, List<SnapshotInfo> b, Map<String, String> fullGraphs,
-                         Map<String, StoredModel> diffs) {
-    }
-
-    private Sides query(String fromIri, SnapshotRef target) {
-        String timestep = target.timestep() == null ? catalog.baseTimestep() : target.timestep();
-        String bStart = " { BIND(" + SparqlText.str(SIDE_B) + " AS ?side) ?start a pdb:Snapshot ; pdb:timestep "
-                + SparqlText.str(timestep)
-                + (target.isLatest() ? " . FILTER NOT EXISTS { ?c pdb:parent ?start ; pdb:edge pdb:VersionEdge }"
-                        : " ; pdb:version " + SparqlText.str(target.version()))
-                + " } ";
-        return runQuery(fromIri, bStart);
-    }
-
-    private Sides query(String fromIri, String bSnapshotIri) {
-        return runQuery(fromIri, " { BIND(" + SparqlText.str(SIDE_B) + " AS ?side) BIND("
-                + SparqlText.iri(bSnapshotIri) + " AS ?start) } ");
-    }
-
-    private Sides runQuery(String fromIri, String bStart) {
-        StringBuilder query = new StringBuilder(RdfDbVocabulary.PREFIXES)
-                .append("SELECT ?side ?snap ?p ?o ?sub ?graph ?fwd ?rev ?mfast ?vsafe ?n ?sbase ?cim ?cdepth")
-                .append(" WHERE { GRAPH ").append(SparqlText.iri(metaGraph))
-                .append(" { ");
-        if (fromIri != null) {
-            query.append(" { BIND(").append(SparqlText.str(SIDE_A)).append(" AS ?side) BIND(")
-                    .append(SparqlText.iri(fromIri)).append(" AS ?start) } UNION ");
-        }
-        // One request. The path walk is bounded by the depth of the two ends, and every row an object needs to
-        // become a stored model travels with it, so the plan needs no second query to resolve what it found
-        query.append(bStart)
-                .append(" ?start pdb:parent* ?snap . ?snap a pdb:Snapshot ; ?p ?o ")
-                .append(" OPTIONAL { ?o pdb:subset ?sub ")
-                .append("   OPTIONAL { ?o pdb:graph ?graph } ")
-                .append("   OPTIONAL { ?o pdb:forwardGraph ?fwd ; pdb:reverseGraph ?rev ;")
-                .append("     pdb:fastPredicatesOnly ?mfast ; pdb:subjectBase ?sbase ; pdb:cimNamespace ?cim ;")
-                .append("     pdb:chainDepth ?cdepth . OPTIONAL { ?o pdb:tripleCount ?n }")
-                .append("     OPTIONAL { ?o pdb:variantSafe ?vsafe } } } } }");
-
-        List<Map<String, Value>> rows = connection.sparql(scenario).select(query.toString());
-        Map<String, List<Map<String, Value>>> bySide = new LinkedHashMap<>();
-        Map<String, String> graphs = new LinkedHashMap<>();
-        Map<String, StoredModel> diffs = new LinkedHashMap<>();
-        for (Map<String, Value> row : rows) {
-            Value side = row.get("side");
-            if (side == null) {
-                continue;
-            }
-            bySide.computeIfAbsent(side.stringValue(), k -> new ArrayList<>()).add(row);
-            Value graph = row.get("graph");
-            Value object = row.get("o");
-            if (graph != null && object != null) {
-                graphs.put(object.stringValue(), graph.stringValue());
-            }
-            if (object != null && row.get("fwd") != null) {
-                diffs.putIfAbsent(object.stringValue(), storedModel(object.stringValue(), row));
-            }
-        }
-        return new Sides(chain(bySide.get(SIDE_A)), chain(bySide.get(SIDE_B)), graphs, diffs);
-    }
-
-    /** The snapshots of one side, deepest first: the chain a path walk reads off. */
-    private List<SnapshotInfo> chain(List<Map<String, Value>> rows) {
-        if (rows == null) {
-            return List.of();
-        }
-        List<SnapshotInfo> chain = new ArrayList<>(SnapshotRows.group(scenario, rows, "snap").values());
-        chain.sort(java.util.Comparator.comparingInt(SnapshotInfo::depth).reversed());
-        return chain;
     }
 }

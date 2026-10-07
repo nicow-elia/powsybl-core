@@ -15,6 +15,7 @@ import com.powsybl.iidm.network.NetworkListener;
 
 import java.time.Instant;
 import java.time.ZonedDateTime;
+import java.util.Collections;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -82,6 +83,13 @@ class RdfDbProvenanceImpl extends AbstractExtension<Network> implements RdfDbPro
             return copy;
         }
 
+        /** Point this state at a snapshot; its address travels with the IRI. */
+        void pointAt(String iri, Instant at) {
+            snapshotIri = iri;
+            ref = iri == null ? null : RdfDbNames.refOf(iri);
+            boundAt = at;
+        }
+
         VariantBinding toBinding(String variantId, String scenario) {
             return new VariantBinding(variantId, scenario, ref, snapshotIri, modelIds, caseDate, clonedFrom,
                     boundAt);
@@ -143,9 +151,7 @@ class RdfDbProvenanceImpl extends AbstractExtension<Network> implements RdfDbPro
             } else {
                 // The address travels with the IRI: a caller reading the binding wants the version and the
                 // timestep, not a string it would have to parse itself
-                activeState().snapshotIri = snapshotIri;
-                activeState().ref = snapshotIri == null ? null : RdfDbNames.refOf(snapshotIri);
-                activeState().boundAt = Instant.now();
+                activeState().pointAt(snapshotIri, Instant.now());
             }
         } finally {
             lock.unlock();
@@ -200,7 +206,7 @@ class RdfDbProvenanceImpl extends AbstractExtension<Network> implements RdfDbPro
         try {
             Map<String, VariantBinding> bindings = new LinkedHashMap<>();
             bound.forEach((variantId, state) -> bindings.put(variantId, state.toBinding(variantId, scenario)));
-            return java.util.Collections.unmodifiableMap(bindings);
+            return Collections.unmodifiableMap(bindings);
         } finally {
             lock.unlock();
         }
@@ -272,9 +278,7 @@ class RdfDbProvenanceImpl extends AbstractExtension<Network> implements RdfDbPro
         try {
             BoundState state = bound.get(variantId);
             if (state != null) {
-                state.snapshotIri = iri;
-                state.ref = iri == null ? null : RdfDbNames.refOf(iri);
-                state.boundAt = Instant.now();
+                state.pointAt(iri, Instant.now());
             }
         } finally {
             lock.unlock();
@@ -314,8 +318,7 @@ class RdfDbProvenanceImpl extends AbstractExtension<Network> implements RdfDbPro
     /** The network-level identity as a state value, which is what the primary variant is. */
     private BoundState primaryState() {
         BoundState state = new BoundState();
-        state.snapshotIri = snapshot;
-        state.ref = snapshot == null ? null : RdfDbNames.refOf(snapshot);
+        state.pointAt(snapshot, loadedAt);
         state.modelIds.putAll(modelIds);
         if (getExtendable() != null) {
             // The whole identity, not only the identifiers: a clone of the primary has to be able to say what it
@@ -324,12 +327,13 @@ class RdfDbProvenanceImpl extends AbstractExtension<Network> implements RdfDbPro
             state.caseDate = getExtendable().getCaseDate();
             state.forecastDistance = getExtendable().getForecastDistance();
         }
-        state.boundAt = loadedAt;
         return state;
     }
 
     /**
      * Bind a variant to a stored state.
+     *
+     * <p>Only tests call it: in production a binding is created by the clone listener or by {@link #rebind}.</p>
      *
      * @param variantId  the variant
      * @param state      what it stands for

@@ -42,9 +42,9 @@ class ReplicatedSvedalaTest {
 
     @Test
     void aTwoFoldReplicaIsTwiceTheModel() {
-        Network plain = Network.read(ReplicatedSvedala.cached(1), BenchMeters.params());
+        Network plain = Network.read(ReplicatedSvedala.cached(1), Backends.params());
         ReadOnlyDataSource replica = ReplicatedSvedala.replicate(ReplicatedSvedala.cached(1), 2);
-        Network twice = Network.read(replica, BenchMeters.params());
+        Network twice = Network.read(replica, Backends.params());
 
         assertTwice(plain, twice, "substations", Network::getSubstationCount);
         assertTwice(plain, twice, "voltage levels", Network::getVoltageLevelCount);
@@ -65,8 +65,8 @@ class ReplicatedSvedalaTest {
         }
 
         // Every object of the replicated equipment model is declared once
-        int plainCount = count(ReplicatedSvedala.read(ReplicatedSvedala.cached(1), SvedalaTimestepFixtures.EQ));
-        String eq = ReplicatedSvedala.read(replica, SvedalaTimestepFixtures.EQ);
+        int plainCount = count(TimestepFixtures.read(ReplicatedSvedala.cached(1), SvedalaTimestepFixtures.EQ));
+        String eq = TimestepFixtures.read(replica, SvedalaTimestepFixtures.EQ);
         Matcher ids = RDF_ID.matcher(eq);
         Set<String> seen = new HashSet<>();
         int count = 0;
@@ -84,11 +84,11 @@ class ReplicatedSvedalaTest {
             String scenario = "replicated";
             SnapshotCatalog catalog = db.snapshots(scenario);
             catalog.putFull(ReplicatedSvedala.replicate(SvedalaTimestepFixtures.anchor(ANCHOR), 2), null,
-                    SnapshotRef.of(scenario, "1.0"), BenchMeters.params(), ReportNode.NO_OP);
+                    SnapshotRef.of(scenario, "1.0"), Backends.params(), ReportNode.NO_OP);
             String instant = "2020-12-02T00:15:00Z";
             ReadOnlyDataSource timestep = ReplicatedSvedala.replicate(SvedalaTimestepFixtures.timestep(
                     SvedalaTimestepFixtures.Shape.RICH, 1, instant).dataSource(), 2);
-            catalog.putAsDiff(timestep, null, SnapshotRef.of("1.0", "00:15", catalog), BenchMeters.params(),
+            catalog.putAsDiff(timestep, null, SnapshotRef.of("1.0", "00:15", catalog), Backends.params(),
                     ReportNode.NO_OP);
             SnapshotCatalog.IngestStatistics statistics = catalog.lastIngestStatistics();
             int forward = statistics.forwardStatements().getOrDefault(CgmesSubset.STEADY_STATE_HYPOTHESIS, 0);
@@ -98,9 +98,9 @@ class ReplicatedSvedalaTest {
             assertThat(reverse).isEqualTo(2 * 311);
 
             Network loaded = RdfDbNetworkLoader.load(db, new SnapshotRef(scenario, "1.0", instant), null,
-                    BenchMeters.params(), ReportNode.NO_OP);
+                    Backends.params(), ReportNode.NO_OP);
             assertThat(loaded.getLoadCount()).isEqualTo(2 * Network.read(ReplicatedSvedala.cached(1),
-                    BenchMeters.params()).getLoadCount());
+                    Backends.params()).getLoadCount());
         }
     }
 
@@ -118,7 +118,7 @@ class ReplicatedSvedalaTest {
             long cached = (System.nanoTime() - start) / 1_000_000;
             BenchMeters.resetPeak();
             long readStart = System.nanoTime();
-            Network network = Network.read(source, BenchMeters.params());
+            Network network = Network.read(source, Backends.params());
             long read = (System.nanoTime() - readStart) / 1_000_000;
             long peak = BenchMeters.peakHeap();
             long withNetwork = BenchMeters.heapAfterGc();

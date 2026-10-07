@@ -14,12 +14,14 @@ import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
 
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -27,9 +29,10 @@ import java.util.Set;
  *
  * <p>Applying a difference model in place means feeding its forward statements into the ordinary CGMES update
  * workflow, which is driven by the SPARQL queries of {@code CIM16-update.sparql}. A statement can therefore only be
- * applied when some update query reads the property it states, on an object of a class that query accepts. This class
- * is the machine readable form of that catalogue: one {@link FamilySpec} per update query family, naming the query,
- * the CIM classes it accepts and the <em>property groups</em> it reads.</p>
+ * applied when some update query reads the property it states, on an object of a class that query accepts &mdash; or,
+ * for the few equipment values no query reads, when a family names them as {@link Handler#DIRECT_SETTER}. This class
+ * is the machine readable form of that catalogue: one {@link FamilySpec} per family, naming the query (or the direct
+ * setter), the CIM classes it accepts and the <em>property groups</em> it reads.</p>
  *
  * <p>A property group matters because SPARQL basic graph patterns are conjunctive: a query block that reads
  * {@code EnergyConsumer.p} and {@code EnergyConsumer.q} together returns <em>nothing at all</em> when only one of
@@ -46,7 +49,12 @@ import java.util.Set;
  */
 public final class FastRouteCapabilities {
 
-    /** One update query family, that is one group of CIM classes updated by one query. */
+    /**
+     * One family, that is one group of CIM classes updated together. Each constant is named after the CIM class (or
+     * class group) it stands for; the operational limit families ({@code CURRENT_LIMIT} &hellip; {@code VOLTAGE_LIMIT})
+     * accept the equipment profile as well, and the last four ({@code AC_LINE_SEGMENT} &hellip;
+     * {@code VOLTAGE_LEVEL}) are {@link Handler#DIRECT_SETTER} families of the equipment profile.
+     */
     public enum Family {
         SWITCH, TERMINAL, DC_TERMINAL, ENERGY_CONSUMER, ENERGY_SOURCE, ASYNCHRONOUS_MACHINE, SYNCHRONOUS_MACHINE,
         EXTERNAL_NETWORK_INJECTION, EQUIVALENT_INJECTION, GENERATING_UNIT, STATIC_VAR_COMPENSATOR, SHUNT_COMPENSATOR,
@@ -113,10 +121,6 @@ public final class FastRouteCapabilities {
             return new PropertyGroup(Set.of(required), Set.of());
         }
 
-        static PropertyGroup of(Set<String> required, Set<String> optional) {
-            return new PropertyGroup(required, optional);
-        }
-
         /** Every property this group mentions. */
         public Set<String> properties() {
             Set<String> all = new LinkedHashSet<>(required);
@@ -148,17 +152,6 @@ public final class FastRouteCapabilities {
             rdfTypes = Set.copyOf(rdfTypes);
             groups = List.copyOf(groups);
             Objects.requireNonNull(variantSafety);
-        }
-
-        /**
-         * A specification of a family whose values are all stored per variant.
-         *
-         * <p>Kept so that a caller written against the table before network variants existed still compiles; it is
-         * the same as naming {@link VariantSafety#SAFE}.</p>
-         */
-        public FamilySpec(Family family, Set<CgmesSubset> subsets, Handler handler, String updateQuery,
-                          String canonicalType, Set<String> rdfTypes, List<PropertyGroup> groups) {
-            this(family, subsets, handler, updateQuery, canonicalType, rdfTypes, groups, VariantSafety.SAFE);
         }
 
         /** Whether the properties of this family may appear in a difference model of the given profile. */
@@ -198,27 +191,21 @@ public final class FastRouteCapabilities {
             ACDC_CONVERTER_TARGET_PPCC, ACDC_CONVERTER_TARGET_UDC, ACDC_CONVERTER_P, ACDC_CONVERTER_Q);
 
     /**
-     * Properties the update catalogue reads but a difference model can never apply in place, with the reason.
+     * Properties the update catalogue reads but a difference model can never apply in place, all for the reason
+     * {@link #STATE_VARIABLE}.
      *
      * <p>State variables are the result of a computation, not a hypothesis: a difference model of the steady state
      * hypothesis never carries them, and a difference model of the state variables profile describes a solved state
-     * that the update workflow reaches through a full SV file, not statement by statement. Operational limits are
-     * equipment values and are added by the limit families of a later work package.</p>
+     * that the update workflow reaches through a full SV file, not statement by statement.</p>
      */
-    private static final Map<String, String> NOT_DIFFERENCE_UPDATABLE = notDifferenceUpdatable();
+    private static final Set<String> NOT_DIFFERENCE_UPDATABLE = Set.of("SvPowerFlow.p", "SvPowerFlow.q",
+            "SvPowerFlow.Terminal", "SvVoltage.v", "SvVoltage.angle", "SvVoltage.TopologicalNode",
+            "SvInjection.pInjection", "SvInjection.qInjection", "SvInjection.TopologicalNode",
+            "SvTapStep.position", "SvTapStep.TapChanger",
+            "SvShuntCompensatorSections.sections", "SvShuntCompensatorSections.ShuntCompensator",
+            "Terminal.TopologicalNode", "ACDCConverter.poleLossP");
 
-    private static Map<String, String> notDifferenceUpdatable() {
-        Map<String, String> excluded = new HashMap<>();
-        for (String property : List.of("SvPowerFlow.p", "SvPowerFlow.q", "SvPowerFlow.Terminal",
-                "SvVoltage.v", "SvVoltage.angle", "SvVoltage.TopologicalNode",
-                "SvInjection.pInjection", "SvInjection.qInjection", "SvInjection.TopologicalNode",
-                "SvTapStep.position", "SvTapStep.TapChanger",
-                "SvShuntCompensatorSections.sections", "SvShuntCompensatorSections.ShuntCompensator",
-                "Terminal.TopologicalNode", "ACDCConverter.poleLossP")) {
-            excluded.put(property, "state variable");
-        }
-        return Map.copyOf(excluded);
-    }
+    private static final String STATE_VARIABLE = "state variable";
 
     /**
      * Properties whose IIDM target is shared by every variant although the rest of their family is not.
@@ -235,7 +222,7 @@ public final class FastRouteCapabilities {
     private static final Map<Family, String> VARIANT_UNSAFE_REASONS = variantUnsafeReasons();
 
     private static Map<Family, String> variantUnsafeReasons() {
-        Map<Family, String> reasons = new java.util.EnumMap<>(Family.class);
+        Map<Family, String> reasons = new EnumMap<>(Family.class);
         String limits = "operational limit values are not stored per variant in IIDM"
                 + " (LoadingLimits.setPermanentLimit / setTemporaryLimitValue write the shared limits group)";
         reasons.put(Family.CURRENT_LIMIT, limits);
@@ -260,7 +247,7 @@ public final class FastRouteCapabilities {
     private static final Map<Family, String> VARIANT_NETWORK_DEPENDENT_REASONS = networkDependentReasons();
 
     private static Map<Family, String> networkDependentReasons() {
-        Map<Family, String> reasons = new java.util.EnumMap<>(Family.class);
+        Map<Family, String> reasons = new EnumMap<>(Family.class);
         String referencePriority = "setting a reference priority above zero creates the ReferencePriorities"
                 + " extension when the generator has none, and creating an extension is not per variant";
         reasons.put(Family.SYNCHRONOUS_MACHINE, referencePriority);
@@ -304,7 +291,7 @@ public final class FastRouteCapabilities {
                 List.of(PropertyGroup.of("EnergySource.activePower", "EnergySource.reactivePower"))));
         table.add(ssh(Family.ASYNCHRONOUS_MACHINE, "asynchronousMachines", "AsynchronousMachine",
                 Set.of("AsynchronousMachine"),
-                List.of(PropertyGroup.of(Set.of(ROTATING_MACHINE_P, ROTATING_MACHINE_Q),
+                List.of(new PropertyGroup(Set.of(ROTATING_MACHINE_P, ROTATING_MACHINE_Q),
                         Set.of("AsynchronousMachine.asynchronousMachineType", REGULATING_COND_EQ_CONTROL_ENABLED)))));
         // The query reads p and q in two optional blocks, but the conversion only takes either of them when BOTH
         // are bound (SynchronousMachineConversion: the updated power flow has to be "defined"). A difference that
@@ -312,7 +299,7 @@ public final class FastRouteCapabilities {
         // travel together here exactly as they do for an asynchronous machine; the rest of the group is optional
         table.add(ssh(Family.SYNCHRONOUS_MACHINE, "synchronousMachinesForUpdate", "SynchronousMachine",
                 Set.of("SynchronousMachine"),
-                List.of(PropertyGroup.of(Set.of(ROTATING_MACHINE_P, ROTATING_MACHINE_Q),
+                List.of(new PropertyGroup(Set.of(ROTATING_MACHINE_P, ROTATING_MACHINE_Q),
                         Set.of("SynchronousMachine.referencePriority", "SynchronousMachine.operatingMode",
                                 REGULATING_COND_EQ_CONTROL_ENABLED))),
                 VariantSafety.NETWORK_DEPENDENT));
@@ -323,7 +310,7 @@ public final class FastRouteCapabilities {
                 VariantSafety.NETWORK_DEPENDENT));
         table.add(ssh(Family.EQUIVALENT_INJECTION, "equivalentInjections", "EquivalentInjection",
                 Set.of("EquivalentInjection"),
-                List.of(PropertyGroup.of(Set.of("EquivalentInjection.p", "EquivalentInjection.q"),
+                List.of(new PropertyGroup(Set.of("EquivalentInjection.p", "EquivalentInjection.q"),
                         Set.of("EquivalentInjection.regulationStatus", "EquivalentInjection.regulationTarget")))));
         table.add(ssh(Family.GENERATING_UNIT, "generatingUnits", "GeneratingUnit",
                 Set.of("GeneratingUnit", "ThermalGeneratingUnit", "HydroGeneratingUnit", "NuclearGeneratingUnit",
@@ -345,7 +332,7 @@ public final class FastRouteCapabilities {
                 VariantSafety.NETWORK_DEPENDENT));
         table.add(ssh(Family.REGULATING_CONTROL, "regulatingControls", "RegulatingControl",
                 Set.of("RegulatingControl", "TapChangerControl"),
-                List.of(PropertyGroup.of(Set.of("RegulatingControl.enabled", "RegulatingControl.targetValue",
+                List.of(new PropertyGroup(Set.of("RegulatingControl.enabled", "RegulatingControl.targetValue",
                                 "RegulatingControl.targetValueUnitMultiplier", "RegulatingControl.discrete"),
                         Set.of("RegulatingControl.targetDeadband"))),
                 VariantSafety.NETWORK_DEPENDENT));
@@ -355,11 +342,11 @@ public final class FastRouteCapabilities {
                 VariantSafety.UNSAFE));
         table.add(ssh(Family.VS_CONVERTER, AC_DC_CONVERTERS_QUERY, "VsConverter", Set.of("VsConverter"),
                 List.of(AC_DC_CONVERTER_SETPOINTS,
-                        PropertyGroup.of(Set.of("VsConverter.pPccControl", "VsConverter.qPccControl"),
+                        new PropertyGroup(Set.of("VsConverter.pPccControl", "VsConverter.qPccControl"),
                                 Set.of("VsConverter.targetQpcc", "VsConverter.targetUpcc"))),
                 VariantSafety.NETWORK_DEPENDENT));
         table.add(ssh(Family.CONTROL_AREA, "controlAreas", "ControlArea", Set.of("ControlArea"),
-                List.of(PropertyGroup.of(Set.of("ControlArea.netInterchange"), Set.of("ControlArea.pTolerance")))));
+                List.of(new PropertyGroup(Set.of("ControlArea.netInterchange"), Set.of("ControlArea.pTolerance")))));
         // Operational limit values: equipment data in CIM 2.4.15, steady state data in CIM 3. One OperationalLimit
         // is one CGMES object with one value, so every group holds a single property.
         table.add(limit(Family.CURRENT_LIMIT, "CurrentLimit"));
@@ -414,7 +401,7 @@ public final class FastRouteCapabilities {
     }
 
     private static Map<Family, FamilySpec> byFamily() {
-        Map<Family, FamilySpec> map = new java.util.EnumMap<>(Family.class);
+        Map<Family, FamilySpec> map = new EnumMap<>(Family.class);
         TABLE.forEach(spec -> map.put(spec.family(), spec));
         return Map.copyOf(map);
     }
@@ -452,12 +439,12 @@ public final class FastRouteCapabilities {
 
     /** Why a property of the update catalogue can never be applied in place, or {@code null} when it can. */
     public static String excludedReason(String property) {
-        return NOT_DIFFERENCE_UPDATABLE.get(property);
+        return NOT_DIFFERENCE_UPDATABLE.contains(property) ? STATE_VARIABLE : null;
     }
 
     /** Every property of the update catalogue that is deliberately outside the in-place route. */
     public static Set<String> notDifferenceUpdatableProperties() {
-        return NOT_DIFFERENCE_UPDATABLE.keySet();
+        return NOT_DIFFERENCE_UPDATABLE;
     }
 
     /**
@@ -547,18 +534,19 @@ public final class FastRouteCapabilities {
      * The reason a property can only be written for every variant at once, or empty when some family that accepts
      * it in this profile writes it per variant.
      */
-    private static java.util.Optional<String> sharedWriteReason(CgmesSubset subset, String property) {
+    private static Optional<String> sharedWriteReason(CgmesSubset subset, String property) {
         List<Family> candidates = familiesOf(property).stream()
                 .filter(family -> spec(family).acceptsSubset(subset))
                 .toList();
         if (candidates.isEmpty()) {
-            // check() already answered FAST, so this property is carried by some family; nothing to add
-            return java.util.Optional.empty();
+            // No family accepts the property in this profile, so there is no shared write to report; the branch is
+            // reachable even after check() answered FAST, and it keeps candidates.get(0) below safe
+            return Optional.empty();
         }
         if (candidates.stream().anyMatch(family -> variantSafety(family, property) != VariantSafety.UNSAFE)) {
-            return java.util.Optional.empty();
+            return Optional.empty();
         }
-        return java.util.Optional.of(variantUnsafeReason(candidates.get(0), property));
+        return Optional.of(variantUnsafeReason(candidates.get(0), property));
     }
 
     /**
@@ -634,7 +622,7 @@ public final class FastRouteCapabilities {
 
     private static void checkProperty(CgmesSubset subset, CgmesStatement statement,
                                       List<CgmesDiffImport.BlockingStatement> blocking) {
-        String excluded = NOT_DIFFERENCE_UPDATABLE.get(statement.property());
+        String excluded = excludedReason(statement.property());
         if (excluded != null) {
             blocking.add(new CgmesDiffImport.BlockingStatement(subset, statement,
                     "property is not part of the in-place update (" + excluded + ")"));

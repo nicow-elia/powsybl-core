@@ -8,25 +8,19 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
-import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
-import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
-import org.eclipse.rdf4j.model.Value;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.List;
-import java.util.Map;
-import java.util.Properties;
-import java.util.stream.Stream;
 
+import static com.powsybl.cgmes.rdfdb.Backends.microGridBe;
+import static com.powsybl.cgmes.rdfdb.Backends.params;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -52,20 +46,6 @@ class LegacyLabelTermTest {
     private static final CgmesSubset SSH = CgmesSubset.STEADY_STATE_HYPOTHESIS;
     private static final String BASE_LABEL = "10:30";
 
-    static Stream<Arguments> backends() {
-        return Backends.backends();
-    }
-
-    private static Properties params() {
-        Properties p = new Properties();
-        p.put(CgmesImport.IMPORT_CGM_WITH_SUBNETWORKS, "false");
-        return p;
-    }
-
-    private static ReadOnlyDataSource be() {
-        return CgmesConformity1Catalog.microGridBaseCaseBE().dataSource();
-    }
-
     private static RdfDbConnection open(String backend) {
         RdfDbConnection db = RdfDbConnection.open(Backends.database(backend, "legacy-label"));
         db.clear(S);
@@ -84,18 +64,15 @@ class LegacyLabelTermTest {
     }
 
     private static long count(RdfDbConnection db, String predicate) {
-        List<Map<String, Value>> rows = db.sparql(S).select(RdfDbVocabulary.PREFIXES
-                + "SELECT (COUNT(*) AS ?n) WHERE { GRAPH <" + RdfDbNames.metaGraph(S) + "> { ?s a pdb:Snapshot ; <"
-                + predicate + "> ?o } }");
-        return Long.parseLong(rows.get(0).get("n").stringValue());
+        return Backends.count(db, S, RdfDbNames.metaGraph(S), "?s a pdb:Snapshot ; <" + predicate + "> ?o");
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aStoreWithTheRetiredLabelTermIsStillRead(String backend) {
         try (RdfDbConnection db = open(backend)) {
             SnapshotCatalog catalog = db.snapshots(S);
-            SnapshotInfo root = catalog.putFull(be(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
+            SnapshotInfo root = catalog.putFull(microGridBe(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
             SnapshotInfo v11 = catalog.putDiff(change(root, "urn:uuid:ssh-d2"), SnapshotRef.of(S, "1.1"));
 
             assertThat(root.timestepLabel()).isEqualTo(BASE_LABEL);

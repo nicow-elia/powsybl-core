@@ -8,25 +8,20 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import ch.qos.logback.classic.Level;
-import ch.qos.logback.classic.Logger;
-import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.core.AppenderBase;
 import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
-import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Line;
 import com.powsybl.iidm.network.Network;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
+import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
-import java.util.Properties;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.regex.Pattern;
 
+import static com.powsybl.cgmes.rdfdb.Backends.params;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -46,40 +41,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class RdfDbRequestCountTest {
 
-    /** What the Fuseki request log writes per HTTP request. */
-    private static final Pattern REQUEST = Pattern.compile("^\\[\\d+] (GET|POST|PUT|DELETE|HEAD) .*");
-
     private static final String S = "2016-01-01";
 
-    private static final AtomicInteger REQUESTS = new AtomicInteger();
+    private static final Logger LOGGER = LoggerFactory.getLogger(RdfDbRequestCountTest.class);
 
-    private static final org.slf4j.Logger LOGGER = LoggerFactory.getLogger(RdfDbRequestCountTest.class);
-
-    private static Properties params() {
-        Properties p = new Properties();
-        p.put(CgmesImport.IMPORT_CGM_WITH_SUBNETWORKS, "false");
-        return p;
+    @AfterAll
+    static void uninstallMeter() {
+        BenchMeters.FusekiMeter.uninstall();
     }
 
-    private static int since(int mark) {
-        return REQUESTS.get() - mark;
+    private static int since(BenchMeters.FusekiMeter.Reading mark) {
+        return (int) BenchMeters.FusekiMeter.since(mark).requests();
     }
 
     @Test
     void theFlowsSendTheRequestsTheDesignSays() {
-        Logger fusekiLog = (Logger) LoggerFactory.getLogger("org.apache.jena.fuseki.Fuseki");
-        Level previous = fusekiLog.getLevel();
-        fusekiLog.setLevel(Level.INFO);
-        AppenderBase<ILoggingEvent> counter = new AppenderBase<>() {
-            @Override
-            protected void append(ILoggingEvent event) {
-                if (REQUEST.matcher(event.getFormattedMessage()).matches()) {
-                    REQUESTS.incrementAndGet();
-                }
-            }
-        };
-        counter.start();
-        fusekiLog.addAppender(counter);
+        BenchMeters.FusekiMeter.install();
         try (EmbeddedFuseki fuseki = EmbeddedFuseki.inMemory();
              RdfDbConnection db = RdfDbConnection.open(fuseki.database())) {
             db.clear(S);
@@ -90,14 +67,14 @@ class RdfDbRequestCountTest {
             String line = sender.getLineStream().map(Line::getId).sorted().findFirst().orElseThrow();
 
             // One difference of one profile: check, write, read back
-            int mark = REQUESTS.get();
+            BenchMeters.FusekiMeter.Reading mark = BenchMeters.FusekiMeter.mark();
             RdfDbExport.export(sender, Changes.record(sender, n -> Changes.moveLoad(n, 3.0)), db, S,
                     new CgmesDiffExport.ExportOptions());
             int oneDiff = since(mark);
             assertAtMost("exporting one difference", oneDiff, 3);
 
             // A set of two profiles is the same three requests: what grows is the size of each, not their number
-            mark = REQUESTS.get();
+            mark = BenchMeters.FusekiMeter.mark();
             RdfDbExport.export(sender, Changes.record(sender, n -> {
                 Changes.moveLoad(n, 2.0);
                 n.getLine(line).setR(n.getLine(line).getR() + 0.1);
@@ -106,7 +83,7 @@ class RdfDbRequestCountTest {
             assertAtMost("exporting a set of two profiles", twoProfiles, 3);
 
             // An update is the catalogue and the statements of the chain
-            mark = REQUESTS.get();
+            mark = BenchMeters.FusekiMeter.mark();
             UpdateResult update = RdfDbNetworkLoader.update(receiver, db, S, DiffTarget.head(),
                     new RdfDbUpdateOptions(), params(), ReportNode.NO_OP);
             int updateRequests = since(mark);
@@ -115,14 +92,14 @@ class RdfDbRequestCountTest {
 
             // A materialisation is the catalogue, the statements of the chain and one transfer per instance file
             int graphs = db.contextNames(S).size();
-            mark = REQUESTS.get();
+            mark = BenchMeters.FusekiMeter.mark();
             RdfDbNetworkLoader.load(db, S, DiffTarget.head(), null, params(), ReportNode.NO_OP);
             int materialise = since(mark);
             assertAtMost("materialising the head of a chain (" + graphs + " instance files)", materialise,
                     graphs + 2);
 
             // Reading the catalogue is one request, whatever is asked of it afterwards
-            mark = REQUESTS.get();
+            mark = BenchMeters.FusekiMeter.mark();
             CatalogSnapshot snapshot = db.catalog(S).snapshot();
             List<StoredModel> chain = snapshot.chainDown(snapshot.head(CgmesSubset.STEADY_STATE_HYPOTHESIS)
                     .orElseThrow().id());
@@ -131,9 +108,6 @@ class RdfDbRequestCountTest {
             assertAtMost("reading the catalogue and asking it " + chain.size() + " questions", since(mark), 1);
 
             versionedFlows(db);
-        } finally {
-            fusekiLog.detachAppender(counter);
-            fusekiLog.setLevel(previous);
         }
     }
 
@@ -151,18 +125,18 @@ class RdfDbRequestCountTest {
         SnapshotCatalog catalog = db.snapshots(scenario);
         int graphs = 9;
 
-        int mark = REQUESTS.get();
+        BenchMeters.FusekiMeter.Reading mark = BenchMeters.FusekiMeter.mark();
         catalog.putFull(CgmesConformity1Catalog.microGridBaseCaseBE().dataSource(), null,
                 SnapshotRef.of(scenario, "1.0"), params(), ReportNode.NO_OP);
         // The uploads, plus the checks before them and the guarded write and read-back after them
         assertAtMost("writing a root snapshot of " + graphs + " instance files", since(mark), graphs + 5);
 
-        int load = REQUESTS.get();
+        BenchMeters.FusekiMeter.Reading load = BenchMeters.FusekiMeter.mark();
         Network sender = RdfDbNetworkLoader.load(db, SnapshotRef.of(scenario, "1.0"), null, params(),
                 ReportNode.NO_OP);
         assertAtMost("loading a root snapshot (" + graphs + " graphs)", since(load), graphs + 5);
 
-        mark = REQUESTS.get();
+        mark = BenchMeters.FusekiMeter.mark();
         RdfDbExport.export(sender, Changes.record(sender, n -> Changes.moveLoad(n, 4.0)), db,
                 SnapshotRef.of(scenario, "1.1"), new CgmesDiffExport.ExportOptions());
         // The three of the sink, plus resolving the head, refusing a duplicate version and reading the node back
@@ -170,7 +144,7 @@ class RdfDbRequestCountTest {
 
         Network receiver = RdfDbNetworkLoader.load(db, SnapshotRef.of(scenario, "1.0"), null, params(),
                 ReportNode.NO_OP);
-        mark = REQUESTS.get();
+        mark = BenchMeters.FusekiMeter.mark();
         UpdateResult result = RdfDbNetworkLoader.update(receiver, db, SnapshotRef.of(scenario, "1.1"),
                 new RdfDbUpdateOptions(), params(), ReportNode.NO_OP);
         assertTrue(result.route() == UpdateResult.Route.DIFF_APPLIED, result.reasons().toString());
@@ -178,18 +152,18 @@ class RdfDbRequestCountTest {
         assertAtMost("an update to a snapshot over " + result.diffCount() + " difference(s)", since(mark), 3);
 
         String from = catalog.find(SnapshotRef.of(scenario, "1.0")).orElseThrow().iri();
-        mark = REQUESTS.get();
+        mark = BenchMeters.FusekiMeter.mark();
         db.versionGraph(scenario).plan(from, SnapshotRef.of(scenario, "1.1"), new RdfDbUpdateOptions());
         // One request: the rows that say which differences lie on the path also say what they are
         assertAtMost("planning a path", since(mark), 1);
 
-        mark = REQUESTS.get();
+        mark = BenchMeters.FusekiMeter.mark();
         catalog.snapshots();
         // The listing of a whole scenario, including what its members say about the fast route and where a
         // materialisation may start: still one request, because both are read off the same rows
         assertAtMost("listing every snapshot of a scenario", since(mark), 1);
 
-        mark = REQUESTS.get();
+        mark = BenchMeters.FusekiMeter.mark();
         catalog.verify();
         // And checking the invariants is that listing and nothing else: the tree is derived when it is written,
         // so there is no second source of truth left to compare it against
@@ -198,7 +172,7 @@ class RdfDbRequestCountTest {
         // Backwards: the models the path ends at are ancestors, not steps, so their headers are read as well
         Network backward = RdfDbNetworkLoader.load(db, SnapshotRef.of(scenario, "1.1"), null, params(),
                 ReportNode.NO_OP);
-        mark = REQUESTS.get();
+        mark = BenchMeters.FusekiMeter.mark();
         UpdateResult undone = RdfDbNetworkLoader.update(backward, db, SnapshotRef.of(scenario, "1.0"),
                 new RdfDbUpdateOptions(), params(), ReportNode.NO_OP);
         assertTrue(undone.route() == UpdateResult.Route.DIFF_APPLIED, undone.reasons().toString());
@@ -206,7 +180,7 @@ class RdfDbRequestCountTest {
 
         // A network read from files carries no provenance, so the planner has to find it by its model identifiers
         Network fromFiles = Network.read(CgmesConformity1Catalog.microGridBaseCaseBE().dataSource(), params());
-        mark = REQUESTS.get();
+        mark = BenchMeters.FusekiMeter.mark();
         UpdatePlan identified = db.versionGraph(scenario).plan(fromFiles, SnapshotRef.of(scenario, "1.1"),
                 new RdfDbUpdateOptions());
         assertTrue(identified.kind() == UpdatePlan.Kind.DIFF, identified.reasons().toString());
@@ -250,25 +224,25 @@ class RdfDbRequestCountTest {
         // fetch
         Network network = RdfDbNetworkLoader.load(db, SnapshotRef.of(scenario, "1.0"), null, params(),
                 ReportNode.NO_OP);
-        int mark = REQUESTS.get();
+        BenchMeters.FusekiMeter.Reading mark = BenchMeters.FusekiMeter.mark();
         UpdateResult created = RdfDbNetworkLoader.update(network, db, scenario, "1.1", null, "A", params(),
                 ReportNode.NO_OP);
         assertTrue(created.route() == UpdateResult.Route.DIFF_APPLIED, created.reasons().toString());
         assertAtMost("creating a variant at a snapshot", since(mark), 3);
 
         // Updating an existing bound variant: the same three, with only its own chain as a candidate
-        mark = REQUESTS.get();
+        mark = BenchMeters.FusekiMeter.mark();
         UpdateResult moved = RdfDbNetworkLoader.update(network, db, scenario, "1.0", null, "A", params(),
                 ReportNode.NO_OP);
         assertTrue(moved.route() == UpdateResult.Route.DIFF_APPLIED, moved.reasons().toString());
         assertAtMost("updating an existing bound variant", since(mark), 3);
 
         // The bound that carries the design: two timesteps and eight of them cost the same
-        mark = REQUESTS.get();
+        mark = BenchMeters.FusekiMeter.mark();
         RdfDbNetworkLoader.loadVariants(db, scenario, "1.0", timesteps.subList(0, 2),
                 new RdfDbVariantLoadOptions(), null, params(), ReportNode.NO_OP);
         int twoTimesteps = since(mark);
-        mark = REQUESTS.get();
+        mark = BenchMeters.FusekiMeter.mark();
         VariantLoadResult wholeDay = RdfDbNetworkLoader.loadVariants(db, scenario, "1.0", timesteps,
                 new RdfDbVariantLoadOptions(), null, params(), ReportNode.NO_OP);
         int eightTimesteps = since(mark);
@@ -295,7 +269,7 @@ class RdfDbRequestCountTest {
             events.addAll(Changes.record(day, n -> Changes.moveLoad(n, 2.5)));
         }
         day.getVariantManager().setWorkingVariant(RdfDbProvenance.PRIMARY_VARIANT);
-        mark = REQUESTS.get();
+        mark = BenchMeters.FusekiMeter.mark();
         RdfDbExport.exportPerVariant(day, events, db, null, new CgmesDiffExport.ExportOptions(),
                 ReportNode.NO_OP);
         // The seven of a versioned write plus the models read back, and one label resolution per group in the
@@ -309,7 +283,7 @@ class RdfDbRequestCountTest {
             more.addAll(Changes.record(day, n -> Changes.moveLoad(n, 1.5)));
         }
         day.getVariantManager().setWorkingVariant(RdfDbProvenance.PRIMARY_VARIANT);
-        mark = REQUESTS.get();
+        mark = BenchMeters.FusekiMeter.mark();
         RdfDbExport.exportPerVariant(day, more, db, "study-a", new CgmesDiffExport.ExportOptions(),
                 ReportNode.NO_OP);
         assertAtMost("writing one difference per variant for 3 variants, version label given", since(mark),

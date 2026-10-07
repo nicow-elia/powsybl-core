@@ -10,10 +10,13 @@ package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.triplestore.impl.rdf4j.sparql.SparqlEndpoint;
 
+import java.net.URI;
 import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * Which RDF database to talk to, and how to move data in and out of it.
@@ -32,6 +35,10 @@ import java.util.Objects;
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 public final class RdfDatabase {
+
+    /** The parameters of {@link #fromParameters} that configure the connection to a server. */
+    private static final Set<String> ENDPOINT_KEYS = Set.of("update_url", "graph_store_url", "user", "password",
+            "connect_timeout_ms", "read_timeout_ms");
 
     /** Where the CGMES query catalogs are evaluated. */
     public enum QueryMode {
@@ -178,8 +185,7 @@ public final class RdfDatabase {
      * @return a new description
      */
     public RdfDatabase withCredentials(String user, String password) {
-        return new RdfDatabase(requireRemote().withCredentials(user, password), memoryName, queryMode,
-                fetchParallelism, uploadParallelism, gzip, cache);
+        return withEndpoint(requireRemote().withCredentials(user, password));
     }
 
     /**
@@ -190,8 +196,7 @@ public final class RdfDatabase {
      * @return a new description
      */
     public RdfDatabase withHeader(String name, String value) {
-        return new RdfDatabase(requireRemote().withHeader(name, value), memoryName, queryMode,
-                fetchParallelism, uploadParallelism, gzip, cache);
+        return withEndpoint(requireRemote().withHeader(name, value));
     }
 
     /**
@@ -202,8 +207,11 @@ public final class RdfDatabase {
      * @return a new description
      */
     public RdfDatabase withTimeouts(Duration connect, Duration read) {
-        return new RdfDatabase(requireRemote().withTimeouts(connect, read), memoryName, queryMode,
-                fetchParallelism, uploadParallelism, gzip, cache);
+        return withEndpoint(requireRemote().withTimeouts(connect, read));
+    }
+
+    private RdfDatabase withEndpoint(SparqlEndpoint newEndpoint) {
+        return new RdfDatabase(newEndpoint, memoryName, queryMode, fetchParallelism, uploadParallelism, gzip, cache);
     }
 
     /**
@@ -351,8 +359,8 @@ public final class RdfDatabase {
             String graphStoreUrl = p.remove("graph_store_url");
             if (updateUrl != null || graphStoreUrl != null) {
                 endpoint = new SparqlEndpoint(endpoint.queryUrl(),
-                        updateUrl == null ? endpoint.updateUrl() : java.net.URI.create(updateUrl),
-                        graphStoreUrl == null ? endpoint.graphStoreUrl() : java.net.URI.create(graphStoreUrl),
+                        updateUrl == null ? endpoint.updateUrl() : URI.create(updateUrl),
+                        graphStoreUrl == null ? endpoint.graphStoreUrl() : URI.create(graphStoreUrl),
                         endpoint.user(), endpoint.password(), endpoint.headers(),
                         endpoint.connectTimeout(), endpoint.readTimeout());
             }
@@ -375,17 +383,12 @@ public final class RdfDatabase {
             }
             db = of(endpoint);
         } else {
-            p.remove("update_url");
-            p.remove("graph_store_url");
-            p.remove("user");
-            p.remove("password");
-            p.remove("connect_timeout_ms");
-            p.remove("read_timeout_ms");
-            p.keySet().removeIf(k -> k.startsWith("header."));
+            // What configures the connection to a server means nothing to the in-process backend
+            p.keySet().removeIf(k -> ENDPOINT_KEYS.contains(k) || k.startsWith("header."));
         }
         String queryMode = p.remove("query_mode");
         if (queryMode != null) {
-            db = db.withQueryMode(QueryMode.valueOf(queryMode.trim().toUpperCase(java.util.Locale.ROOT)));
+            db = db.withQueryMode(QueryMode.valueOf(queryMode.trim().toUpperCase(Locale.ROOT)));
         }
         String fetch = p.remove("fetch_parallelism");
         if (fetch != null) {

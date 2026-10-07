@@ -10,10 +10,10 @@ package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.commons.PowsyblException;
 import com.powsybl.iidm.network.Network;
-import com.powsybl.iidm.network.VariantManager;
 
 import java.time.ZonedDateTime;
 import java.util.List;
+import java.util.function.Supplier;
 
 /**
  * Makes a network be one of its variants for the duration of an operation, and puts it back.
@@ -24,13 +24,12 @@ import java.util.List;
  * {@link RdfDbProvenance}. While a scope is open they describe the <em>bound variant</em> instead of the primary
  * one, and the working variant of the calling thread is that variant too. Every reader of the identity is therefore
  * correct for the variant without knowing that variants exist &mdash; the update planner, the difference exporter,
- * the {@code Supersedes} of a written difference, the snapshot catalogue &mdash; and not one of them was rewritten
- * for this feature.</p>
+ * the {@code Supersedes} of a written difference, the snapshot catalogue.</p>
  *
  * <h2>The rules</h2>
  * <ul>
- *   <li>Used in a try-with-resources and nowhere else: a scope that stayed open would leave the network claiming to
- *       be a variant it is not.</li>
+ *   <li>Used through {@link #call} or a try-with-resources and nowhere else: a scope that stayed open would leave
+ *       the network claiming to be a variant it is not.</li>
  *   <li>Never clone or remove a variant inside a scope. The binding listener copies the network-level identity for
  *       a clone of the primary, and inside a scope that identity is the bound variant's.</li>
  *   <li>Entering takes the provenance lock, so the variant operations of one network are serialised.</li>
@@ -86,8 +85,7 @@ final class VariantScope implements AutoCloseable {
                         + " cloned from was not bound either. Bind it with RdfDbNetworkLoader.update(network, db,"
                         + " scenario, version, timestep, variant, ...) or RdfDbNetworkLoader.loadVariants");
             }
-            VariantManager variantManager = network.getVariantManager();
-            String previous = currentVariant(variantManager);
+            String previous = workingVariantOrNull(network);
             // A scope on the variant that is already swapped in changes nothing and restores nothing: the outer
             // one owns the identity. It still holds the lock, which is what makes the nesting safe
             boolean swap = !primary && active == null;
@@ -98,7 +96,7 @@ final class VariantScope implements AutoCloseable {
                 applyCaseDate(network, state.caseDate, state.forecastDistance);
                 provenance.setActiveVariant(variantId);
             }
-            variantManager.setWorkingVariant(variantId);
+            network.getVariantManager().setWorkingVariant(variantId);
             entered = true;
             return new VariantScope(network, provenance, variantId, swap, previous);
         } finally {
@@ -109,6 +107,24 @@ final class VariantScope implements AutoCloseable {
                 }
                 provenance.lock().unlock();
             }
+        }
+    }
+
+    /**
+     * Run something as one bound variant of a network, and put the network back as it was.
+     *
+     * @param network    the network
+     * @param provenance the provenance holding the bindings
+     * @param variantId  the variant to become
+     * @param body       what to run
+     * @param <T>        what the body answers
+     * @return what the body answered
+     */
+    // The scope is what the body runs inside, never something it refers to
+    @SuppressWarnings("try")
+    static <T> T call(Network network, RdfDbProvenanceImpl provenance, String variantId, Supplier<T> body) {
+        try (VariantScope scope = enter(network, provenance, variantId)) {
+            return body.get();
         }
     }
 
@@ -163,18 +179,19 @@ final class VariantScope implements AutoCloseable {
         }
     }
 
-    /** The working variant of this thread, or {@code null} when it never selected one. */
-    private static String currentVariant(VariantManager variantManager) {
+    /**
+     * The working variant of the calling thread, or {@code null} when it never selected one: in the thread-local
+     * variant context {@code getWorkingVariantId} throws rather than answering the initial variant.
+     */
+    static String workingVariantOrNull(Network network) {
         try {
-            return variantManager.getWorkingVariantId();
+            return network.getVariantManager().getWorkingVariantId();
         } catch (PowsyblException e) {
             return null;
         }
     }
 
-    /**
-     * @return the variant this scope is on
-     */
+    /** The variant this scope is on; only tests ask. */
     String variantId() {
         return variantId;
     }

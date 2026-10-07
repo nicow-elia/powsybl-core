@@ -10,6 +10,7 @@ package com.powsybl.cgmes.conversion.diff;
 import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.cgmes.conversion.CgmesReports;
 import com.powsybl.cgmes.conversion.Conversion;
+import com.powsybl.cgmes.conversion.UpdateScope;
 import com.powsybl.cgmes.model.CgmesModel;
 import com.powsybl.cgmes.model.CgmesModelException;
 import com.powsybl.cgmes.model.CgmesSubset;
@@ -20,28 +21,36 @@ import com.powsybl.cgmes.model.diff.DifferenceModelSet;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Network;
+import com.powsybl.iidm.network.ValidationLevel;
 import com.powsybl.triplestore.api.TripleStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.ZonedDateTime;
+import java.util.ArrayList;
+import java.util.EnumMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
+import java.util.TreeSet;
 import java.util.UUID;
 
 /**
  * Applies an IEC 61970-552 difference model to a network that is already loaded.
  *
  * <p>A difference model says what a CGMES model said before a change and what it says after it. When every statement
- * it carries is one the CGMES update workflow reads &mdash; the operating values a steady state hypothesis carries
- * &mdash; the change can be applied <em>in place</em>: no file is re-read, no network is rebuilt, the receiving
- * network is updated exactly as a partial steady state hypothesis file would update it. That is the fast route, and
- * it is what this class does.</p>
+ * it carries is one this class can map onto the network &mdash; the operating values a steady state hypothesis
+ * carries and the operational limit values, which the CGMES update workflow reads, plus a few equipment values such
+ * as impedances and voltage level limits, which are set directly &mdash; the change can be applied <em>in place</em>:
+ * no file is re-read, no network is rebuilt. That is the fast route, and it is what this class does.</p>
  *
  * <h2>How the fast route works</h2>
  * <ol>
@@ -53,20 +62,22 @@ import java.util.UUID;
  *       equivalent injections) &mdash; which also yields the CIM class to write;</li>
  *   <li>properties an update query only reads together with others are completed from the receiving network through
  *       the very mapping the change exporter uses, so that a minimal difference of a third party applies;</li>
- *   <li>the result is written as one synthetic partial steady state hypothesis document per profile into a fresh
- *       in-memory triple store and handed to {@code Conversion.update}.</li>
+ *   <li>the statements an update query reads are written as one synthetic update document per profile into a fresh
+ *       in-memory triple store and handed to {@code Conversion.update};</li>
+ *   <li>the equipment statements no update query reads ({@code ACLineSegment.r},
+ *       {@code VoltageLevel.highVoltageLimit}, &hellip;) are applied afterwards with the IIDM setters the equipment import uses ({@code DirectEqApplier}).</li>
  * </ol>
  *
- * <p>Step 5 is what makes this robust: from there on the fast route <em>is</em> the partial steady state hypothesis
- * update path, with the same RDF reader, the same SPARQL queries and the same {@code XxxConversion.update} code. A
- * difference model therefore cannot drift away from what a partial file does.</p>
+ * <p>Step 5 is what makes this robust: from there on the fast route <em>is</em> the partial file update path, with the
+ * same RDF reader, the same SPARQL queries and the same {@code XxxConversion.update} code. A difference model
+ * therefore cannot drift away from what a partial file does. Step 6 only covers what that path cannot express.</p>
  *
  * <p>Previous values are always used ({@code iidm.import.cgmes.use-previous-values-during-update}): a difference is
  * partial by definition, so an attribute it does not mention has to keep the value the network holds.</p>
  *
  * <h2>What it refuses</h2>
- * <p>Creating or removing objects, changing topology, and any property outside the update catalogue cannot be
- * applied to a live network. {@link #canApplyInPlace(Network, DifferenceModelSet)} answers that <em>before</em>
+ * <p>Creating or removing objects, changing topology, and any property outside the catalogue of
+ * {@link FastRouteCapabilities} cannot be applied to a live network. {@link #canApplyInPlace(Network, DifferenceModelSet)} answers that <em>before</em>
  * anything is modified and lists every statement in the way, so a caller can route the difference without trying.
  * Applying such a difference is the generic RDF operation "base graph minus reverse plus forward" and belongs to RDF
  * tooling; {@link #applyToTripleStore} is the building block this library offers for it.</p>
@@ -129,11 +140,6 @@ public final class CgmesDiffImport {
         /** The blocking reasons as lines of text, in the order they were found. */
         public List<String> reasons() {
             return blocking.stream().map(BlockingStatement::asText).toList();
-        }
-
-        /** Whether the difference can be applied without rebuilding the network. */
-        public boolean isFast() {
-            return route == Route.FAST || route == Route.NOOP;
         }
     }
 
@@ -202,14 +208,17 @@ public final class CgmesDiffImport {
             return this;
         }
 
+        /** @return how the reverse statements and preconditions are checked, see {@link #setReverseCheck} */
         public ReverseCheck getReverseCheck() {
             return reverseCheck;
         }
 
+        /** @return whether the base the difference applies on is checked, see {@link #setCheckSupersedes} */
         public boolean isCheckSupersedes() {
             return checkSupersedes;
         }
 
+        /** @return whether the update is restricted to the touched equipment, see {@link #setScopedUpdate} */
         public boolean isScopedUpdate() {
             return scopedUpdate;
         }
@@ -291,6 +300,80 @@ public final class CgmesDiffImport {
         }
     }
 
+    /**
+     * Read every difference model of a data source as the steps of a {@code Supersedes} chain.
+     *
+     * <p>With at most one model per profile this is the single step {@link #read} returns. Several models of one
+     * profile are accepted when each one supersedes the previous one: they are ordered along that chain, and step
+     * {@code k} holds the {@code k}-th model of every profile, to be applied one step after the other.</p>
+     *
+     * @throws CgmesModelException if the models of one profile do not form a single chain; the message names the
+     *                             files
+     */
+    public static List<DifferenceModelSet> readChain(ReadOnlyDataSource dataSource) {
+        Objects.requireNonNull(dataSource);
+        Map<CgmesSubset, Map<String, DifferenceModel>> byProfile = new EnumMap<>(CgmesSubset.class);
+        try {
+            for (String name : new TreeSet<>(dataSource.listNames(".*"))) {
+                if (DifferenceModelParser.isDifferenceModel(dataSource, name)) {
+                    DifferenceModel model = DifferenceModelParser.parse(dataSource, name);
+                    byProfile.computeIfAbsent(model.header().subset(), k -> new LinkedHashMap<>()).put(name, model);
+                }
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        List<List<DifferenceModel>> steps = new ArrayList<>();
+        for (Map.Entry<CgmesSubset, Map<String, DifferenceModel>> entry : byProfile.entrySet()) {
+            List<DifferenceModel> chain = supersedesChain(entry.getValue());
+            if (chain == null) {
+                long distinct = entry.getValue().values().stream().map(model -> model.header().id()).distinct().count();
+                String cause = distinct < entry.getValue().size() ? " that hold the same model twice"
+                        : " that do not form a Supersedes chain";
+                throw new CgmesModelException("A difference model set holds one model per profile, but it was given "
+                        + entry.getValue().size() + " models of the " + entry.getKey().getIdentifier()
+                        + " profile" + cause + ", in the files " + entry.getValue().keySet()
+                        + ": apply them one after the other in Supersedes order, or compose them with"
+                        + " DifferenceModel.compose");
+            }
+            for (int k = 0; k < chain.size(); k++) {
+                if (steps.size() == k) {
+                    steps.add(new ArrayList<>());
+                }
+                steps.get(k).add(chain.get(k));
+            }
+        }
+        return steps.isEmpty() ? List.of(new DifferenceModelSet(List.of()))
+                : steps.stream().map(DifferenceModelSet::new).toList();
+    }
+
+    /** The models in the order their {@code Supersedes} links them, or {@code null} when they are no single chain. */
+    private static List<DifferenceModel> supersedesChain(Map<String, DifferenceModel> modelsByFile) {
+        Map<String, DifferenceModel> byId = new LinkedHashMap<>();
+        modelsByFile.values().forEach(model -> byId.put(model.header().id(), model));
+        if (byId.size() != modelsByFile.size()) {
+            return null; // two files carry the same model
+        }
+        Map<String, DifferenceModel> bySuperseded = new LinkedHashMap<>();
+        List<DifferenceModel> heads = new ArrayList<>();
+        for (DifferenceModel model : byId.values()) {
+            List<String> inSet = model.header().supersedes().stream().filter(byId::containsKey).toList();
+            if (inSet.isEmpty()) {
+                heads.add(model);
+            } else if (inSet.size() > 1 || bySuperseded.put(inSet.get(0), model) != null) {
+                return null; // a model superseding two of the set, or two models superseding the same one
+            }
+        }
+        if (heads.size() != 1) {
+            return null;
+        }
+        List<DifferenceModel> chain = new ArrayList<>();
+        for (DifferenceModel model = heads.get(0); model != null; model = bySuperseded.get(model.header().id())) {
+            chain.add(model);
+        }
+        return chain.size() == byId.size() ? chain : null;
+    }
+
     /** Whether the given difference models can be applied to this network in place, with the default options. */
     public static Decision canApplyInPlace(Network network, DifferenceModelSet diffs) {
         return canApplyInPlace(network, diffs, new Options());
@@ -324,6 +407,10 @@ public final class CgmesDiffImport {
             "a variant-bound update needs the scoped update: the full update writes properties and validation"
                     + " levels shared by all variants";
 
+    /** The refusal of a variant bound update that would need the full update. */
+    private static final Decision NEEDS_SCOPED_UPDATE = new Decision(Route.SLOW_REQUIRED, List.of(
+            new BlockingStatement(CgmesSubset.STEADY_STATE_HYPOTHESIS, null, VARIANT_NEEDS_SCOPED_UPDATE)));
+
     /**
      * Whether a variant bound update can run at all on this network, before a plan is built.
      *
@@ -333,11 +420,8 @@ public final class CgmesDiffImport {
         if (!options.isVariantSafeOnly()) {
             return null;
         }
-        if (!options.isScopedUpdate()
-                || network.getValidationLevel() != com.powsybl.iidm.network.ValidationLevel
-                        .STEADY_STATE_HYPOTHESIS) {
-            return new Decision(Route.SLOW_REQUIRED, List.of(new BlockingStatement(
-                    CgmesSubset.STEADY_STATE_HYPOTHESIS, null, VARIANT_NEEDS_SCOPED_UPDATE)));
+        if (!options.isScopedUpdate() || network.getValidationLevel() != ValidationLevel.STEADY_STATE_HYPOTHESIS) {
+            return NEEDS_SCOPED_UPDATE;
         }
         return null;
     }
@@ -407,13 +491,12 @@ public final class CgmesDiffImport {
     /**
      * How long each phase of an apply took, for the benchmark.
      *
-     * @param parseNs  always zero here: parsing happens before this class is entered
      * @param planNs   resolving subjects, completing groups and checking
      * @param storeNs  writing the synthetic update documents and loading them into a triple store
      * @param updateNs the CGMES update workflow itself
      * @param directNs the equipment statements applied with IIDM setters afterwards
      */
-    record PhaseTimes(long parseNs, long planNs, long storeNs, long updateNs, long directNs) {
+    record PhaseTimes(long planNs, long storeNs, long updateNs, long directNs) {
     }
 
     /** An apply together with what it cost, so that the benchmark does not need a second code path. */
@@ -440,7 +523,7 @@ public final class CgmesDiffImport {
             throw new CgmesDiffNotApplicableException(decision);
         }
         if (decision.route() == Route.NOOP) {
-            return new Applied(decision, new PhaseTimes(0, planNs, 0, 0, 0));
+            return new Applied(decision, new PhaseTimes(planNs, 0, 0, 0));
         }
 
         if (!config.usePreviousValuesDuringUpdate()) {
@@ -452,11 +535,9 @@ public final class CgmesDiffImport {
 
         // The scope is only known once the plan has resolved its subjects, and the conversion configuration can
         // still force the full update; a variant bound update is refused here, before anything is built
-        if (options.isVariantSafeOnly()
-                && plan.updateScope(network, updateConfig, options).isAll()) {
-            throw new CgmesDiffNotApplicableException(new Decision(Route.SLOW_REQUIRED,
-                    List.of(new BlockingStatement(CgmesSubset.STEADY_STATE_HYPOTHESIS, null,
-                            VARIANT_NEEDS_SCOPED_UPDATE))));
+        UpdateScope scope = plan.updateScope(network, updateConfig, options);
+        if (options.isVariantSafeOnly() && scope.isAll()) {
+            throw new CgmesDiffNotApplicableException(NEEDS_SCOPED_UPDATE);
         }
 
         for (FastRoutePlan.PlannedModel model : plan.models()) {
@@ -477,7 +558,7 @@ public final class CgmesDiffImport {
             try {
                 long updateStart = System.nanoTime();
                 new Conversion(cgmes, updateConfig)
-                        .update(network, plan.updateScope(network, updateConfig, options), reportNode);
+                        .update(network, scope, reportNode);
                 updateNs = System.nanoTime() - updateStart;
             } finally {
                 cgmes.close();
@@ -490,7 +571,7 @@ public final class CgmesDiffImport {
         long directStart = System.nanoTime();
         DirectEqApplier.apply(network, plan, reportNode);
         long directNs = System.nanoTime() - directStart;
-        return new Applied(decision, new PhaseTimes(0, planNs, storeNs, updateNs, directNs));
+        return new Applied(decision, new PhaseTimes(planNs, storeNs, updateNs, directNs));
     }
 
     /**

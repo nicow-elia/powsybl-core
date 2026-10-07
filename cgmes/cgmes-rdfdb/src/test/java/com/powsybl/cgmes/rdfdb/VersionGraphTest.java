@@ -8,24 +8,20 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
-import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
-import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Properties;
-import java.util.stream.Stream;
 
+import static com.powsybl.cgmes.rdfdb.Backends.microGridBe;
+import static com.powsybl.cgmes.rdfdb.Backends.params;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -44,20 +40,6 @@ class VersionGraphTest {
     private static final String OTHER = "other";
     private static final String CIM16 = "http://iec.ch/TC57/2013/CIM-schema-cim16#";
     private static final CgmesSubset SSH = CgmesSubset.STEADY_STATE_HYPOTHESIS;
-
-    static Stream<Arguments> backends() {
-        return Backends.backends();
-    }
-
-    private static Properties params() {
-        Properties p = new Properties();
-        p.put(CgmesImport.IMPORT_CGM_WITH_SUBNETWORKS, "false");
-        return p;
-    }
-
-    private static ReadOnlyDataSource be() {
-        return CgmesConformity1Catalog.microGridBaseCaseBE().dataSource();
-    }
 
     /** A fast difference: a property the steady-state update queries read. */
     private static DifferenceModelSet fast(SnapshotInfo parent, String id, String value) {
@@ -91,7 +73,7 @@ class VersionGraphTest {
         db.clear(S);
         db.clear(OTHER);
         SnapshotCatalog catalog = db.snapshots(S);
-        SnapshotInfo a = catalog.putFull(be(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
+        SnapshotInfo a = catalog.putFull(microGridBe(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
         SnapshotInfo b = catalog.putDiff(fast(a, "urn:uuid:ssh-b", "11.0"), SnapshotRef.of(S, "1.1"));
         SnapshotInfo c = catalog.putDiff(slow(b, "urn:uuid:ssh-c"), SnapshotRef.of(S, "1.2"));
         SnapshotInfo d = catalog.putDiff(fast(c, "urn:uuid:ssh-d", "13.0"), SnapshotRef.of(S, "1.3"));
@@ -108,7 +90,7 @@ class VersionGraphTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void oneStepForwardIsADiff(String backend) {
         try (RdfDbConnection db = chain(backend).db) {
             Chain chain = new Chain(db, db.snapshots(S).find(SnapshotRef.of(S, "1.0")).orElseThrow(),
@@ -132,7 +114,7 @@ class VersionGraphTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void backwardsIsADiffOfInvertedSteps(String backend) {
         Chain chain = chain(backend);
         try (RdfDbConnection db = chain.db) {
@@ -151,7 +133,7 @@ class VersionGraphTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aStepThatIsNotFastMakesTheWholePathFull(String backend) {
         Chain chain = chain(backend);
         try (RdfDbConnection db = chain.db) {
@@ -168,7 +150,7 @@ class VersionGraphTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aPathLongerThanAllowedIsFull(String backend) {
         Chain chain = chain(backend);
         try (RdfDbConnection db = chain.db) {
@@ -184,7 +166,7 @@ class VersionGraphTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aCheckpointIsRecommendedWhenTheChainGetsLong(String backend) {
         Chain chain = chain(backend);
         try (RdfDbConnection db = chain.db) {
@@ -199,7 +181,7 @@ class VersionGraphTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void materialisationStartsAtTheNearestFullAncestor(String backend) {
         Chain chain = chain(backend);
         try (RdfDbConnection db = chain.db) {
@@ -221,11 +203,11 @@ class VersionGraphTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void anotherScenarioIsFullWithoutAQuery(String backend) {
         Chain chain = chain(backend);
         try (RdfDbConnection db = chain.db) {
-            SnapshotInfo there = db.snapshots(OTHER).putFull(be(), null, SnapshotRef.of(OTHER, "1.0"), params(),
+            SnapshotInfo there = db.snapshots(OTHER).putFull(microGridBe(), null, SnapshotRef.of(OTHER, "1.0"), params(),
                     ReportNode.NO_OP);
 
             UpdatePlan across = db.versionGraph(S).plan(there.iri(), chain.b.ref(), new RdfDbUpdateOptions());
@@ -246,7 +228,7 @@ class VersionGraphTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void anUnknownTargetIsRefused(String backend) {
         Chain chain = chain(backend);
         try (RdfDbConnection db = chain.db) {
@@ -264,7 +246,7 @@ class VersionGraphTest {
      * about results.</p>
      */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void chainsOfManySidesInOneRequest(String backend) {
         Chain chain = chain(backend);
         try (RdfDbConnection db = chain.db) {
@@ -291,7 +273,7 @@ class VersionGraphTest {
 
     /** A side whose address no snapshot has comes back empty rather than throwing. */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aSideThatResolvesToNothingIsEmpty(String backend) {
         Chain chain = chain(backend);
         try (RdfDbConnection db = chain.db) {
@@ -303,7 +285,7 @@ class VersionGraphTest {
 
     /** The path read off two chains of the multi-side query is the plan the single-side query answers. */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void pathEqualsPlan(String backend) {
         Chain chain = chain(backend);
         try (RdfDbConnection db = chain.db) {
@@ -337,7 +319,7 @@ class VersionGraphTest {
 
     /** The variant-safety flag travels with the plan rows, so a path can be refused without a network. */
     @ParameterizedTest(name = "{0}")
-    @MethodSource("backends")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void thePlanRowsCarryTheVariantSafetyFlag(String backend) {
         Chain chain = chain(backend);
         try (RdfDbConnection db = chain.db) {
