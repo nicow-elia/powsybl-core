@@ -55,11 +55,22 @@ public final class Checkpoint {
     public static SnapshotInfo create(RdfDbConnection db, SnapshotRef ref) {
         Objects.requireNonNull(db);
         Objects.requireNonNull(ref);
-        SnapshotCatalog catalog = db.snapshots(ref.scenario());
-        SnapshotInfo info = catalog.require(ref);
+        return create(db, db.snapshots(ref.scenario()).require(ref));
+    }
+
+    /**
+     * Materialise the profiles a snapshot that was already read reaches by differences.
+     *
+     * @param db   the open connection
+     * @param info the snapshot
+     * @return the snapshot, now with full graphs
+     */
+    static SnapshotInfo create(RdfDbConnection db, SnapshotInfo info) {
         if (info.hasFull()) {
             return info;
         }
+        SnapshotRef ref = info.ref();
+        SnapshotCatalog catalog = db.snapshots(ref.scenario());
         MaterializationPlan plan = db.versionGraph(ref.scenario()).materialization(info.iri());
         Map<String, List<UpdatePlan.DiffStep>> steps = Profiles.map();
         Map<String, String> nodes = Profiles.map();

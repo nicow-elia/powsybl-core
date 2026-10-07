@@ -1614,6 +1614,44 @@ public final class SnapshotCatalog {
         return "the snapshot " + address + " was not written: " + detail;
     }
 
+    // ------------------------------------------------------------------ rollovers
+
+    /**
+     * Make a snapshot a rollover: the snapshot later timestamps of its tree are ingested against by default.
+     *
+     * <p>A day drifts. In the morning every timestamp is "the base plus a handful of differences"; by the evening
+     * the equipment of the day has moved far enough from the base that every ingestion compares against a stale
+     * state and stores the drift again. A rollover moves the default {@linkplain #putAsDiff pin} forward: a
+     * timestamp ingested afterwards, at or after the rollover's own timestamp, hangs off the latest rollover at or
+     * before it instead of the root, so its difference is the change since the rollover. Roll over when the
+     * equipment difference against the pin grows, not on every change of the schedule.</p>
+     *
+     * <p>A rollover is checkpointed in the same call ({@link Checkpoint}): every timestamp pinned to it will start
+     * its materialisation at it, so the chain above it is folded once, here. Flagging is one {@code INSERT DATA}
+     * after the checkpoint, so a failure halfway leaves a checkpointed snapshot that is not yet a rollover &mdash;
+     * correct either way. The call is idempotent; the root of every tree is a rollover from the start. Nothing
+     * that was written before changes: a pin is chosen when a timestamp is written.</p>
+     *
+     * @param ref the address of the snapshot
+     * @return the snapshot, flagged and with full graphs
+     * @throws RdfDbException if the scenario holds no snapshot at that address
+     */
+    public SnapshotInfo rollover(SnapshotRef ref) {
+        SnapshotInfo info = require(ref);
+        if (info.rollover() && info.hasFull()) {
+            return info;
+        }
+        SnapshotInfo checkpointed = Checkpoint.create(connection, info);
+        if (checkpointed.rollover()) {
+            return checkpointed;
+        }
+        sparql().update(RdfDbVocabulary.PREFIXES + "INSERT DATA {" + graphClause() + "{ " + SparqlText.iri(info.iri())
+                + " pdb:rollover " + SparqlText.bool(true) + " } }");
+        SnapshotInfo flagged = info(info.iri()).orElseThrow(() -> noSuchSnapshot(info.iri()));
+        LOGGER.info("Snapshot {} of scenario '{}' is a rollover", flagged, scenario);
+        return flagged;
+    }
+
     // ------------------------------------------------------------------ dropping and checking
 
     /**

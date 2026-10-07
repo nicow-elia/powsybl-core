@@ -170,6 +170,11 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
                         .append(SparqlText.iri(RdfDbVocabulary.EDGE)).append(' ')
                         .append(SparqlText.iri(edge)).append(" ; ");
             }
+            if (parent == null) {
+                // A root is the first rollover of its tree: what a timestamp is ingested against by default
+                query.append(SparqlText.iri(RdfDbVocabulary.ROLLOVER)).append(' ').append(SparqlText.bool(true))
+                        .append(" ; ");
+            }
             query.append(SparqlText.iri(RdfDbVocabulary.DEPTH)).append(' ')
                     .append(SparqlText.integer(depth)).append(" ; ")
                     .append(SparqlText.iri(RdfDbVocabulary.TIMESTAMP_ROOT)).append(' ')

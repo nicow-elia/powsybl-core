@@ -47,6 +47,8 @@ import java.util.Set;
  * @param edge               which kind of link {@link #parent()} is
  * @param depth              how many snapshots lie between this one and the root of its tree
  * @param fast               whether every difference member is fast-route capable; see {@link #fast()}
+ * @param rollover           whether the snapshot is a rollover: a snapshot later timestamps of its tree are
+ *                           ingested against by default, checkpointed when it was flagged. Every root is one
  * @param state              the effective model identifier per profile
  * @param members            the models this snapshot adds
  * @param fullModels         the model identifier with a full graph per profile
@@ -58,7 +60,7 @@ import java.util.Set;
  */
 public record SnapshotInfo(String scenario, String iri, String modellingAuthority, Instant timestamp, String version,
                            int rank, Kind kind, String parent, EdgeKind edge, int depth, boolean fast,
-                           Map<String, String> state, List<String> members,
+                           boolean rollover, Map<String, String> state, List<String> members,
                            Map<String, String> fullModels, String timestampRoot, ZonedDateTime created,
                            String description) {
 
@@ -76,7 +78,7 @@ public record SnapshotInfo(String scenario, String iri, String modellingAuthorit
         NONE,
         /** The previous version of the same timestamp. */
         VERSION,
-        /** The base-chain snapshot a timestamp root was derived from. */
+        /** The snapshot a timestamp root is pinned to: any snapshot of another timestamp of the same tree. */
         TIMESTAMP
     }
 

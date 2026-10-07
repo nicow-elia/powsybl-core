@@ -412,6 +412,50 @@ class RdfDbTimestampFlowTest {
                     .hasMessageContaining("describe the same moment");
         }
     }
+    // ------------------------------------------------------------------ rollovers
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void aRootIsARollover(String backend) {
+        try (RdfDbConnection db = twoDays(backend)) {
+            SnapshotInfo root = db.snapshots(S).root(BE).orElseThrow();
+
+            // The first rollover of a tree is its root: the snapshot every timestamp is ingested against until
+            // a later one is flagged
+            assertThat(root.rollover()).isTrue();
+            assertThat(root.hasFull()).isTrue();
+            assertThat(Backends.count(db, S, db.snapshots(S).metaGraph(), "?s pdb:rollover true")).isEqualTo(1);
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void rolloverFlagsAndCheckpointsInOneCall(String backend) {
+        try (RdfDbConnection db = twoDays(backend)) {
+            SnapshotCatalog catalog = db.snapshots(S);
+            SnapshotInfo written = catalog.putAsDiff(TimestampFixtures.ssh(3, T1, "1100"), null,
+                    ref(S, 1, T1), null, params(), ReportNode.NO_OP);
+            assertThat(written.rollover()).isFalse();
+            assertThat(written.hasFull()).isFalse();
+            Network before = load(db, S, 1, T1);
+
+            SnapshotInfo rollover = catalog.rollover(ref(S, 1, T1));
+
+            // Flagged and checkpointed at once: a materialisation of it starts at it and walks no difference
+            assertThat(rollover.iri()).isEqualTo(written.iri());
+            assertThat(rollover.rollover()).isTrue();
+            assertThat(rollover.hasFull()).isTrue();
+            assertThat(db.versionGraph(S).materialization(ref(S, 1, T1)).steps()).isEmpty();
+            assertThat(catalog.find(ref(S, 1, T1)).orElseThrow().rollover()).isTrue();
+            Networks.assertSameNetwork(before, load(db, S, 1, T1), IDENTITY);
+
+            // Idempotent: a second call changes nothing and writes no second flag
+            assertThat(catalog.rollover(ref(S, 1, T1))).isEqualTo(rollover);
+            assertThat(Backends.count(db, S, catalog.metaGraph(), "?s pdb:rollover true")).isEqualTo(2);
+            catalog.verify();
+        }
+    }
+
     // ------------------------------------------------------------------ the parent index cache
 
     /**

@@ -239,6 +239,7 @@ final class SnapshotRows {
         private int depth;
         /** The conjunction over the difference members seen so far; a snapshot without any is fast. */
         private boolean fast = true;
+        private boolean rollover;
         private ZonedDateTime created;
         private final List<String> members = new ArrayList<>();
         private final Map<String, String> state = Profiles.map();
@@ -266,6 +267,7 @@ final class SnapshotRows {
                 case RdfDbVocabulary.TIMESTAMP_ROOT -> timestampRoot = object.stringValue();
                 case RdfDbVocabulary.DESCRIPTION -> description = object.stringValue();
                 case RdfDbVocabulary.DEPTH -> depth = intOf(object);
+                case RdfDbVocabulary.ROLLOVER -> rollover = booleanOf(object);
                 case RdfDbVocabulary.CREATED -> created = dateOf(object);
                 case RdfDbVocabulary.MEMBER -> {
                     members.add(object.stringValue());
@@ -324,7 +326,7 @@ final class SnapshotRows {
                 edgeKind = SnapshotInfo.EdgeKind.VERSION;
             }
             return Optional.of(new SnapshotInfo(scenario, iri, modellingAuthority, timestamp, version, rank,
-                    snapshotKind, parent, edgeKind, depth, fast, state, members, full,
+                    snapshotKind, parent, edgeKind, depth, fast, rollover, state, members, full,
                     timestampRoot == null ? iri : timestampRoot, created, description));
         }
     }
