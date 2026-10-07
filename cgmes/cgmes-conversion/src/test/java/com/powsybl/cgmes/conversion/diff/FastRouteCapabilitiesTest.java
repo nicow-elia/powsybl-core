@@ -28,123 +28,24 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Keeps the capability table honest against the two things it describes: the SPARQL update catalogue it was derived
- * from, and the documents the change exporter actually writes.
+ * Keeps the capability table honest against the documents the change exporter actually writes, and pins the network
+ * free decision. The table against the SPARQL update catalogue is {@link UpdateCatalogTest}.
  *
- * <p>Both directions matter. A property added to an update query without a table entry would make a difference model
- * carrying it go the slow route for no reason; a table entry whose property no query reads would make a difference
- * apply and change nothing. And a statement the exporter writes that the table does not know would make the round
- * trip of this library's own documents impossible.</p>
+ * <p>A statement the exporter writes that the table does not know would make the round trip of this library's own
+ * documents impossible.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 class FastRouteCapabilitiesTest {
-
-    private static final Pattern CIM_PROPERTY = Pattern.compile("cim:([A-Za-z]+\\.[A-Za-z]+)");
-    private static final String CIM16 = "/CIM16-update.sparql";
-    private static final String CIM100 = "/CIM100-update.sparql";
-
-    private static String catalog(String resource) {
-        try (InputStream is = FastRouteCapabilitiesTest.class.getResourceAsStream(resource)) {
-            return new String(is.readAllBytes(), StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
-    }
-
-    /** The text of one named query of a catalogue, up to the next one. */
-    private static String query(String catalog, String name) {
-        int from = catalog.indexOf("# query: " + name);
-        if (from < 0) {
-            // CIM100 only overrides the queries it changes; everything else is included from CIM16
-            return "";
-        }
-        int to = catalog.indexOf("# query: ", from + 1);
-        return to < 0 ? catalog.substring(from) : catalog.substring(from, to);
-    }
-
-    /**
-     * Limitation: this compares membership only. Whether a property is <em>required</em> or <em>optional</em> in its
-     * group &mdash; which is what the completion of a minimal difference depends on &mdash; is not compared with the
-     * {@code OPTIONAL { }} blocks of the catalogue, because that would need a SPARQL parser. A reviewer changing a
-     * query has to re-derive the groups by hand.
-     */
-    @Test
-    void everyTablePropertyOccursInTheUpdateCatalog() {
-        String cim16 = catalog(CIM16);
-        String cim100 = catalog(CIM100);
-        List<String> missing = new ArrayList<>();
-        for (FamilySpec spec : FastRouteCapabilities.table()) {
-            if (spec.handler() != FastRouteCapabilities.Handler.UPDATE_QUERY) {
-                // A direct setter family has no query at all: nothing in the update catalogue reads an impedance or
-                // a voltage level limit, which is exactly why those values are applied with IIDM setters
-                continue;
-            }
-            String text = query(cim16, spec.updateQuery());
-            for (String property : spec.properties()) {
-                if (!text.contains("cim:" + property)) {
-                    missing.add(spec.family() + " reads " + property + ", " + spec.updateQuery() + " does not");
-                }
-            }
-            if (spec.family() == Family.GENERATING_UNIT) {
-                // The generating unit query binds the type freely (?GeneratingUnit a ?generatingUnitType), so it
-                // names none of the concrete classes
-                continue;
-            }
-            for (String rdfType : spec.rdfTypes()) {
-                // A whole word: "cim:Switch" must not be satisfied by "cim:Switch.open", otherwise a class dropped
-                // from a VALUES block would go unnoticed for every family whose properties start with its name
-                Pattern wholeClass = Pattern.compile("cim:" + Pattern.quote(rdfType) + "(?![A-Za-z.])");
-                boolean known = wholeClass.matcher(text).find()
-                        || wholeClass.matcher(query(cim100, spec.updateQuery())).find();
-                if (!known) {
-                    missing.add(spec.family() + " accepts " + rdfType + ", " + spec.updateQuery() + " does not");
-                }
-            }
-        }
-        assertEquals(List.of(), missing);
-    }
-
-    @Test
-    void everySshPropertyOfTheCatalogIsInTheTableOrExcluded() {
-        Set<String> inCatalog = new LinkedHashSet<>();
-        for (String catalog : List.of(catalog(CIM16), catalog(CIM100))) {
-            Matcher matcher = CIM_PROPERTY.matcher(catalog);
-            while (matcher.find()) {
-                inCatalog.add(matcher.group(1));
-            }
-        }
-        List<String> unknown = inCatalog.stream()
-                .filter(property -> !FastRouteCapabilities.isUpdatableProperty(property))
-                .filter(property -> FastRouteCapabilities.excludedReason(property) == null)
-                .toList();
-        assertEquals(List.of(), unknown,
-                "every property an update query reads is either in the table or explicitly excluded");
-    }
-
-    @Test
-    void everyExcludedPropertyIsReallyReadByTheCatalog() {
-        String both = catalog(CIM16) + catalog(CIM100);
-        List<String> dead = FastRouteCapabilities.notDifferenceUpdatableProperties().stream()
-                .filter(property -> !both.contains("cim:" + property))
-                .toList();
-        assertEquals(List.of(), dead, "an exclusion of a property no query reads is dead weight");
-    }
 
     static List<Scenario> scenarios() {
         // Both profiles: the drift check has to see the equipment statements too
@@ -295,21 +196,6 @@ class FastRouteCapabilitiesTest {
         assertEquals(CgmesDiffImport.Route.SLOW_REQUIRED, inSsh.route());
         assertTrue(inSsh.reasons().get(0).contains("in CGMES 2.4.15 limit values are equipment data"),
                 inSsh.reasons().toString());
-    }
-
-    /**
-     * A direct setter property must not also be read by an update query: it would then be applied twice, once
-     * through the synthetic document and once through the setter.
-     */
-    @Test
-    void directSetterPropertiesAreNotInTheUpdateCatalog() {
-        String both = catalog(CIM16) + catalog(CIM100);
-        List<String> duplicated = FastRouteCapabilities.table().stream()
-                .filter(spec -> spec.handler() == FastRouteCapabilities.Handler.DIRECT_SETTER)
-                .flatMap(spec -> spec.properties().stream())
-                .filter(property -> both.contains("cim:" + property + " "))
-                .toList();
-        assertEquals(List.of(), duplicated);
     }
 
     @Test

@@ -31,7 +31,11 @@ import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.NetworkEventRecorder;
 import com.powsybl.iidm.network.Switch;
 import com.powsybl.iidm.network.events.NetworkEvent;
+import com.powsybl.iidm.network.regulation.RegulationMode;
+import com.powsybl.iidm.network.regulation.VoltageRegulation;
+import com.powsybl.iidm.network.regulation.VoltageRegulationHolder;
 import org.assertj.core.api.SoftAssertions;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -93,6 +97,7 @@ import java.util.function.Supplier;
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
+@Tag("benchmark")
 class ScaleChangeBenchmarkTest {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ScaleChangeBenchmarkTest.class);
@@ -177,15 +182,15 @@ class ScaleChangeBenchmarkTest {
         Map<String, Double> p0 = new HashMap<>();
         sender.getGenerators().forEach(g -> {
             targetP.put(g.getId(), g.getTargetP());
-            targetV.put(g.getId(), g.getTargetV());
+            targetV.put(g.getId(), g.getRegulatingTargetV());
         });
         sender.getLoads().forEach(l -> p0.put(l.getId(), l.getP0()));
         long[] rec = new long[1];
         List<NetworkEvent> rich = BenchMeters.timed(() -> record(sender, () -> {
             for (Generator g : sender.getGenerators()) {
                 g.setTargetP(g.getTargetP() + 1.0);
-                if (g.hasProperty(RC) && !Double.isNaN(g.getTargetV())) {
-                    g.setTargetV(g.getTargetV() + 0.1);
+                if (g.hasProperty(RC) && !Double.isNaN(g.getRegulatingTargetV())) {
+                    setVoltageTarget(g, g.getRegulatingTargetV() + 0.1);
                 }
             }
             for (Load l : sender.getLoads()) {
@@ -200,7 +205,7 @@ class ScaleChangeBenchmarkTest {
             for (Generator g : sender.getGenerators()) {
                 g.setTargetP(targetP.get(g.getId()));
                 if (g.hasProperty(RC) && !Double.isNaN(targetV.get(g.getId()))) {
-                    g.setTargetV(targetV.get(g.getId()));
+                    setVoltageTarget(g, targetV.get(g.getId()));
                 }
             }
             for (Load l : sender.getLoads()) {
@@ -327,14 +332,27 @@ class ScaleChangeBenchmarkTest {
         };
     }
 
+    /**
+     * Set the voltage target a holder regulates to, through the VoltageRegulation API: the target of its regulation
+     * when it regulates voltage at a terminal the regulation names, its local target otherwise.
+     */
+    private static void setVoltageTarget(VoltageRegulationHolder<?> holder, double value) {
+        VoltageRegulation regulation = holder.getVoltageRegulation();
+        if (regulation != null && regulation.isWithTerminal() && regulation.getMode() == RegulationMode.VOLTAGE) {
+            regulation.setTargetValue(value);
+        } else {
+            holder.setLocalTargetV(value);
+        }
+    }
+
     private static List<Runnable> mixedEquipmentChanges(Network network) {
         List<Runnable> changes = new ArrayList<>();
         network.getLoadStream().forEach(l -> changes.add(() -> l.setP0(l.getP0() + 1.0)));
         network.getGeneratorStream().forEach(g -> {
             changes.add(() -> g.setTargetP(g.getTargetP() + 1.0));
             if (g.hasProperty(RC)) {
-                changes.add(() -> g.setTargetV(g.getTargetV() + 1.0));
-                changes.add(() -> g.setVoltageRegulatorOn(!g.isVoltageRegulatorOn()));
+                changes.add(() -> setVoltageTarget(g, g.getRegulatingTargetV() + 1.0));
+                changes.add(() -> g.getVoltageRegulation().setRegulating(!g.getVoltageRegulation().isRegulating()));
             }
         });
         network.getTwoWindingsTransformerStream()
@@ -346,7 +364,7 @@ class ScaleChangeBenchmarkTest {
                 .filter(s -> s.getSectionCount() < s.getMaximumSectionCount())
                 .forEach(s -> changes.add(() -> s.setSectionCount(s.getSectionCount() + 1)));
         network.getStaticVarCompensatorStream()
-                .forEach(s -> changes.add(() -> s.setVoltageSetpoint(s.getVoltageSetpoint() + 1.0)));
+                .forEach(s -> changes.add(() -> setVoltageTarget(s, s.getRegulatingTargetV() + 1.0)));
         return changes;
     }
 

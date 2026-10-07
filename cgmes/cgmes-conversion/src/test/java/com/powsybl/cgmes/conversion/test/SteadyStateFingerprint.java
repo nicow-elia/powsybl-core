@@ -32,7 +32,8 @@ import com.powsybl.iidm.network.VoltageSourceConverter;
 import com.powsybl.iidm.network.VscConverterStation;
 import com.powsybl.iidm.network.extensions.ActivePowerControl;
 import com.powsybl.iidm.network.extensions.ReferencePriority;
-import com.powsybl.iidm.network.extensions.RemoteReactivePowerControl;
+import com.powsybl.iidm.network.regulation.VoltageRegulation;
+import com.powsybl.iidm.network.regulation.VoltageRegulationHolder;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
@@ -82,6 +83,7 @@ public final class SteadyStateFingerprint {
         network.getLccConverterStations().forEach(station -> put(values, station, "powerFactor", station.getPowerFactor()));
         network.getVoltageSourceConverters().forEach(converter -> detailedVsc(values, converter));
         network.getLineCommutatedConverters().forEach(converter -> detailedLcc(values, converter));
+        network.getAreas().forEach(area -> put(values, area, "interchangeTarget", area.getInterchangeTarget().orElse(Double.NaN)));
         // The connection state of every terminal: it is what a difference carrying cim:ACDCTerminal.connected
         // changes, and what the fictitious switches of a node/breaker import stand for
         network.getConnectableStream().forEach(connectable -> terminals(values, connectable));
@@ -190,17 +192,10 @@ public final class SteadyStateFingerprint {
 
     private static void generator(SortedMap<String, String> values, Generator generator) {
         put(values, generator, "targetP", generator.getTargetP());
-        put(values, generator, "targetQ", generator.getTargetQ());
-        put(values, generator, "targetV", generator.getTargetV());
-        put(values, generator, "voltageRegulatorOn", generator.isVoltageRegulatorOn());
+        regulation(values, generator, "", generator);
         ActivePowerControl<Generator> activePowerControl = generator.getExtension(ActivePowerControl.class);
         if (activePowerControl != null) {
             put(values, generator, "participationFactor", activePowerControl.getParticipationFactor());
-        }
-        RemoteReactivePowerControl control = generator.getExtension(RemoteReactivePowerControl.class);
-        if (control != null) {
-            put(values, generator, "remoteTargetQ", control.getTargetQ());
-            put(values, generator, "remoteEnabled", control.isEnabled());
         }
         put(values, generator, "referencePriority", ReferencePriority.get(generator));
     }
@@ -219,16 +214,11 @@ public final class SteadyStateFingerprint {
 
     private static void shunt(SortedMap<String, String> values, ShuntCompensator shunt) {
         put(values, shunt, "sectionCount", shunt.getSectionCount());
-        put(values, shunt, "targetV", shunt.getTargetV());
-        put(values, shunt, "targetDeadband", shunt.getTargetDeadband());
-        put(values, shunt, "voltageRegulatorOn", shunt.isVoltageRegulatorOn());
+        regulation(values, shunt, "", shunt);
     }
 
     private static void staticVarCompensator(SortedMap<String, String> values, StaticVarCompensator svc) {
-        put(values, svc, "voltageSetpoint", svc.getVoltageSetpoint());
-        put(values, svc, "reactivePowerSetpoint", svc.getReactivePowerSetpoint());
-        put(values, svc, "regulating", svc.isRegulating());
-        put(values, svc, "regulationMode", String.valueOf(svc.getRegulationMode()));
+        regulation(values, svc, "", svc);
     }
 
     private static void twoWindings(SortedMap<String, String> values, TwoWindingsTransformer transformer) {
@@ -252,11 +242,10 @@ public final class SteadyStateFingerprint {
         }
         put(values, owner, prefix + ".tapPosition", tapChanger.getTapPosition());
         put(values, owner, prefix + ".regulating", tapChanger.isRegulating());
-        put(values, owner, prefix + ".targetDeadband", tapChanger.getTargetDeadband());
         if (tapChanger instanceof RatioTapChanger ratio) {
-            put(values, owner, prefix + ".regulationValue", ratio.getRegulationValue());
-            put(values, owner, prefix + ".regulationMode", String.valueOf(ratio.getRegulationMode()));
+            regulation(values, owner, prefix + ".", ratio);
         } else if (tapChanger instanceof PhaseTapChanger phase) {
+            put(values, owner, prefix + ".targetDeadband", phase.getTargetDeadband());
             put(values, owner, prefix + ".regulationValue", phase.getRegulationValue());
             put(values, owner, prefix + ".regulationMode", String.valueOf(phase.getRegulationMode()));
         }
@@ -268,18 +257,34 @@ public final class SteadyStateFingerprint {
     }
 
     private static void vsc(SortedMap<String, String> values, VscConverterStation station) {
-        put(values, station, "voltageSetpoint", station.getVoltageSetpoint());
-        put(values, station, "reactivePowerSetpoint", station.getReactivePowerSetpoint());
-        put(values, station, "voltageRegulatorOn", station.isVoltageRegulatorOn());
+        regulation(values, station, "", station);
     }
 
     private static void detailedVsc(SortedMap<String, String> values, VoltageSourceConverter converter) {
         put(values, converter, "targetP", converter.getTargetP());
         put(values, converter, "targetVdc", converter.getTargetVdc());
         put(values, converter, "controlMode", String.valueOf(converter.getControlMode()));
-        put(values, converter, "voltageRegulatorOn", converter.isVoltageRegulatorOn());
-        put(values, converter, "voltageSetpoint", converter.getVoltageSetpoint());
-        put(values, converter, "reactivePowerSetpoint", converter.getReactivePowerSetpoint());
+        regulation(values, converter, "", converter);
+    }
+
+    /**
+     * The voltage regulation of a holder (powsybl-core #3699): the targets it regulates to, local or remote, its
+     * local targets, whether it regulates, in which mode and with which deadband.
+     */
+    private static void regulation(SortedMap<String, String> values, Identifiable<?> owner, String prefix,
+                                   VoltageRegulationHolder<?> holder) {
+        put(values, owner, prefix + "localTargetV", holder.getLocalTargetV());
+        put(values, owner, prefix + "localTargetQ", holder.getLocalTargetQ());
+        VoltageRegulation regulation = holder.getVoltageRegulation();
+        if (regulation == null) {
+            values.put(owner.getId() + "." + prefix + "voltageRegulation", "none");
+            return;
+        }
+        put(values, owner, prefix + "regulatingTargetV", holder.getRegulatingTargetV());
+        put(values, owner, prefix + "regulatingTargetQ", holder.getRegulatingTargetQ());
+        put(values, owner, prefix + "regulating", regulation.isRegulating());
+        put(values, owner, prefix + "regulationMode", String.valueOf(regulation.getMode()));
+        put(values, owner, prefix + "targetDeadband", regulation.getTargetDeadband());
     }
 
     private static void detailedLcc(SortedMap<String, String> values, LineCommutatedConverter converter) {

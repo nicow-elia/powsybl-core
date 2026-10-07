@@ -11,8 +11,8 @@ package com.powsybl.cgmes.rdfdb;
 import com.powsybl.cgmes.model.CgmesModelException;
 import com.powsybl.cgmes.model.CgmesModelReports;
 import com.powsybl.cgmes.model.CgmesOnDataSource;
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
+import com.powsybl.cgmes.model.diff.StatementDiff;
 import com.powsybl.cgmes.model.triplestore.CgmesTripleStoreLoader;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
@@ -23,6 +23,7 @@ import org.eclipse.rdf4j.rio.RDFParser;
 import org.eclipse.rdf4j.rio.Rio;
 import org.eclipse.rdf4j.rio.helpers.AbstractRDFHandler;
 import org.eclipse.rdf4j.rio.helpers.BasicParserSettings;
+import org.eclipse.rdf4j.rio.helpers.StatementCollector;
 import org.eclipse.rdf4j.rio.helpers.XMLParserSettings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,15 +40,15 @@ import java.util.Set;
 import java.util.TreeSet;
 
 /**
- * Reads the instance files of one timestep for the sole purpose of comparing them with a stored state.
+ * Reads the instance files of one timestamp for the sole purpose of comparing them with a stored state.
  *
  * <p>An ingestion does not want a triple store. It wants, per profile, the model header and the statements grouped
- * by subject &mdash; which is what {@link TripleDiffCalculator.Index} is. Building a scratch
+ * by subject &mdash; which is what {@link StatementDiff.Index} is. Building a scratch
  * {@code MemoryStore} first means every statement is written into an indexed sail, queried back out and only then
  * decoded, and every profile the ingestion does not compare (topology, state variables, diagram layout, the
  * boundary) is parsed in full although nothing but its {@code md:FullModel} is ever read. On the CGMES 3 Svedala
- * model that is roughly a third of the steady state cost and, when a TSO ships its whole export per timestep,
- * about four hundred milliseconds of parsing thrown away per timestep.</p>
+ * model that is roughly a third of the steady state cost and, when a TSO ships its whole export per timestamp,
+ * about four hundred milliseconds of parsing thrown away per timestamp.</p>
  *
  * <p>So the statements go straight from the RDF/XML parser into the index, and a profile that is not compared is
  * parsed only as far as its header. What comes out has to be <em>exactly</em> what the store path produced, and
@@ -70,10 +71,6 @@ final class IngestParser {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(IngestParser.class);
 
-    /** The profiles whose statements an ingestion compares; everything else is read for its header alone. */
-    private static final Set<CgmesSubset> COMPARED =
-            Set.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS);
-
     private IngestParser() {
     }
 
@@ -82,17 +79,17 @@ final class IngestParser {
      *
      * @param name    the file name inside the data source
      * @param context the {@code contexts:}-prefixed graph name it would have had in a triple store
-     * @param subset  the CGMES profile the file carries
+     * @param profile the profile the file carries, read off its name ({@link Profiles#ofContextName})
      * @param headerId the identifier of its {@code md:FullModel}
      * @param terms   the {@code md:} terms of that header, in document order, {@code rdf:type} excluded
      * @param index   the statements of the file, header excluded, or {@code null} for a header-only read
      */
-    record ParsedFile(String name, String context, CgmesSubset subset, String headerId,
-                      Map<String, List<Value>> terms, TripleDiffCalculator.Index index) {
+    record ParsedFile(String name, String context, String profile, String headerId,
+                      Map<String, List<Value>> terms, StatementDiff.Index index) {
     }
 
     /**
-     * What one timestep's files say.
+     * What one timestamp's files say.
      *
      * @param cimNamespace   the CIM namespace the files declare
      * @param baseName       the base URI relative identifiers were resolved against
@@ -100,31 +97,32 @@ final class IngestParser {
      */
     record Result(String cimNamespace, String baseName, List<ParsedFile> files) {
 
-        /** @return the file of one profile, or {@code null} when the timestep does not ship it */
-        ParsedFile of(CgmesSubset subset) {
-            return files.stream().filter(file -> file.subset() == subset).findFirst().orElse(null);
+        /** @return the file of one profile, or {@code null} when the timestamp does not ship it */
+        ParsedFile of(String profile) {
+            return files.stream().filter(file -> file.profile().equals(profile)).findFirst().orElse(null);
         }
     }
 
     /**
-     * Read the files of one timestep.
+     * Read the files of one timestamp.
      *
      * <p>The discovery is the one {@code CgmesTripleStoreLoader} does &mdash; the data source's base name, its CIM
      * namespace, its file names in its own iteration order &mdash; and every file is reported before it is read,
      * so the report of an ingestion is the report of a load.</p>
      *
-     * @param main       the data source holding the instance files of the timestep
+     * @param main       the data source holding the instance files of the timestamp
      * @param boundary   the data source to take the boundary from when the main one carries none, or {@code null}
      * @param reportNode where the reader reports the files it read
      * @param unchanged  per profile, the identifier of the model the database holds as that profile's state; a
      *                   compared file whose header names <em>its own profile's</em> identifier is read for its
      *                   header alone, because it is the state it would be compared against. The gate is the
      *                   identifier only: a re-used identifier with changed content is not detected
+     * @param compared   the profiles whose statements are indexed; every other file is read for its header alone
      * @return the headers of every file and the index of every compared profile
      * @throws CgmesModelException if a file cannot be read, naming the file
      */
     static Result read(ReadOnlyDataSource main, ReadOnlyDataSource boundary, ReportNode reportNode,
-                       Map<CgmesSubset, String> unchanged) {
+                       Map<String, String> unchanged, Set<String> compared) {
         Objects.requireNonNull(main);
         Objects.requireNonNull(reportNode);
         CgmesOnDataSource cds = new CgmesOnDataSource(main);
@@ -133,11 +131,11 @@ final class IngestParser {
         String subjectBase = ModelCatalog.subjectBaseOf(baseName);
 
         List<ParsedFile> files =
-                new ArrayList<>(readAll(cds, baseName, subjectBase, cimNamespace, reportNode, unchanged));
+                new ArrayList<>(readAll(cds, baseName, subjectBase, cimNamespace, reportNode, unchanged, compared));
         if (boundary != null && !hasBoundary(files)) {
             LOGGER.debug("The files carry no boundary: reading the headers of the boundary data source");
             files.addAll(readAll(new CgmesOnDataSource(boundary), baseName, subjectBase, cimNamespace, reportNode,
-                    unchanged));
+                    unchanged, compared));
         }
         return new Result(cimNamespace, baseName, List.copyOf(files));
     }
@@ -161,24 +159,25 @@ final class IngestParser {
 
     private static List<ParsedFile> readAll(CgmesOnDataSource cds, String baseName, String subjectBase,
                                             String cimNamespace, ReportNode reportNode,
-                                            Map<CgmesSubset, String> unchanged) {
+                                            Map<String, String> unchanged, Set<String> compared) {
         // Deliberately the data source's iteration order: it decides the order the profiles are compared in and
         // therefore the order of the snapshot's members, exactly as it does for a load
         List<String> names = new ArrayList<>(cds.names());
         names.forEach(name -> CgmesModelReports.readFile(reportNode, name));
         List<ParsedFile> files = new ArrayList<>(names.size());
         for (String name : names) {
-            files.add(readOne(cds.dataSource(), baseName, subjectBase, cimNamespace, name, unchanged));
+            files.add(readOne(cds.dataSource(), baseName, subjectBase, cimNamespace, name, unchanged,
+                    compared.contains(Profiles.ofContextName(CgmesTripleStoreLoader.contextName(name)))));
         }
         return files;
     }
 
     private static ParsedFile readOne(ReadOnlyDataSource ds, String baseName, String subjectBase,
-                                      String cimNamespace, String name, Map<CgmesSubset, String> unchanged) {
+                                      String cimNamespace, String name, Map<String, String> unchanged,
+                                      boolean compared) {
         String context = CgmesTripleStoreLoader.contextName(name);
-        CgmesSubset subset = GraphInfo.subsetOf(context);
-        boolean compared = COMPARED.contains(subset);
-        Handler handler = new Handler(subjectBase, cimNamespace, compared, compared ? unchanged.get(subset) : null);
+        String profile = Profiles.ofContextName(context);
+        Handler handler = new Handler(subjectBase, cimNamespace, compared, compared ? unchanged.get(profile) : null);
         RDFParser parser = parser();
         parser.setRDFHandler(handler);
         try (InputStream is = ds.newInputStream(name)) {
@@ -189,8 +188,33 @@ final class IngestParser {
             throw new CgmesModelException("Reading [" + name + "]", e);
         }
         LOGGER.debug("Read [{}]{}", name, handler.indexed() ? "" : " (header only)");
-        return new ParsedFile(name, context, subset, handler.headerId(), handler.headerTerms(),
+        return new ParsedFile(name, context, profile, handler.headerId(), handler.headerTerms(),
                 handler.indexed() ? handler.index() : null);
+    }
+
+    /**
+     * Read one instance file as it is, statement for statement: the whole graph a custom profile is stored as.
+     *
+     * <p>The same parser and the same base as {@link #read}, so a file stored this way holds what a store filled
+     * from the same data source would hold for it; a statement the file repeats is kept once, as a store keeps
+     * it.</p>
+     *
+     * @param ds       the data source holding the file
+     * @param name     the file name inside it
+     * @param baseName the base URI relative identifiers are resolved against ({@link Result#baseName()})
+     * @return the statements, in document order
+     * @throws CgmesModelException if the file cannot be read, naming the file
+     */
+    static List<Statement> statements(ReadOnlyDataSource ds, String name, String baseName) {
+        Set<Statement> statements = new LinkedHashSet<>();
+        RDFParser parser = parser();
+        parser.setRDFHandler(new StatementCollector(statements));
+        try (InputStream is = ds.newInputStream(name)) {
+            parser.parse(is, baseName);
+        } catch (Exception e) {
+            throw new CgmesModelException("Reading [" + name + "]", e);
+        }
+        return List.copyOf(statements);
     }
 
     /**
@@ -327,7 +351,7 @@ final class IngestParser {
          * ordinary statement; removing the header subjects at the end excludes it, which is what the two-pass
          * index over a store did as well.</p>
          */
-        TripleDiffCalculator.Index index() {
+        StatementDiff.Index index() {
             Set<String> localHeaders = new LinkedHashSet<>();
             String prefix = subjectBase == null || subjectBase.isEmpty() ? null : subjectBase + "_";
             for (String header : headerSubjects) {
@@ -335,7 +359,7 @@ final class IngestParser {
                         ? header.substring(prefix.length()) : header);
             }
             localHeaders.forEach(bySubject::remove);
-            return TripleDiffCalculator.readOnly(bySubject);
+            return StatementDiff.readOnly(bySubject);
         }
     }
 }

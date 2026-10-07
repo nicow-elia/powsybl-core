@@ -9,8 +9,8 @@
 package com.powsybl.cgmes.conversion.elements;
 
 import com.powsybl.cgmes.conversion.Context;
+import com.powsybl.cgmes.conversion.mapping.LoadRows;
 import com.powsybl.cgmes.model.CgmesNames;
-import com.powsybl.cgmes.model.PowerFlow;
 import com.powsybl.iidm.network.Load;
 import com.powsybl.iidm.network.LoadAdder;
 import com.powsybl.iidm.network.LoadType;
@@ -50,16 +50,9 @@ public class AsynchronousMachineConversion extends AbstractConductingEquipmentCo
     public static void update(Load load, PropertyBag cgmesData, Context context) {
         updateTerminals(load, context, load.getTerminal());
 
-        PowerFlow updatedPowerFlow = updatedPowerFlow(cgmesData);
-        load.setP0(updatedPowerFlow.defined() ? updatedPowerFlow.p() : getDefaultP0(load, context));
-        load.setQ0(updatedPowerFlow.defined() ? updatedPowerFlow.q() : getDefaultQ0(load, context));
-    }
-
-    private static double getDefaultP0(Load load, Context context) {
-        return getDefaultValue(null, load.getP0(), 0.0, Double.NaN, context);
-    }
-
-    private static double getDefaultQ0(Load load, Context context) {
-        return getDefaultValue(null, load.getQ0(), 0.0, Double.NaN, context);
+        // The values are read through the rows of the family, which the export writes from; when the query did not bind
+        // them, each falls back on the default chain (the previous value, zero)
+        LoadRows.ASYNCHRONOUS_MACHINE.apply(load, cgmesData::get,
+            row -> getDefaultValue(null, row.getter().applyAsDouble(load), 0.0, Double.NaN, context));
     }
 }

@@ -19,6 +19,7 @@ import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.NetworkEventRecorder;
 import com.powsybl.iidm.network.Switch;
 import com.powsybl.iidm.network.events.NetworkEvent;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,6 +60,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
+@Tag("benchmark")
 class PartialSshExportBenchmarkTest {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(PartialSshExportBenchmarkTest.class);
@@ -107,7 +109,7 @@ class PartialSshExportBenchmarkTest {
         Network network = Network.read(Cgmes3Catalog.svedala().dataSource(), new Properties());
 
         List<NetworkEvent> events = record(network, () -> {
-            List<Runnable> changes = mixedEquipmentChanges(network);
+            List<Runnable> changes = RecordedChangeScenarios.mixedEquipmentChanges(network, true);
             assertTrue(changes.size() >= MANY_CHANGES / 10,
                     () -> "the model is expected to exercise many equipment types, it produced " + changes.size() + " changes");
             changes.stream().limit(MANY_CHANGES).forEach(Runnable::run);
@@ -136,15 +138,15 @@ class PartialSshExportBenchmarkTest {
         List<NetworkEvent> oneTarget = record(network, () ->
                 network.getGeneratorStream().filter(g -> g.hasProperty(REGULATING_CONTROL_PROPERTY))
                         .limit(1)
-                        .forEach(g -> g.setTargetV(g.getTargetV() + 1.0)));
+                        .forEach(g -> RecordedChangeScenarios.setVoltageTarget(g, g.getRegulatingTargetV() + 1.0)));
         assertTrue(!oneTarget.isEmpty(), "the model is expected to hold a generator with a regulating control");
 
         List<NetworkEvent> manyRegulations = record(network, () -> {
             List<Runnable> changes = new ArrayList<>();
             network.getGeneratorStream().filter(g -> g.hasProperty(REGULATING_CONTROL_PROPERTY))
-                    .forEach(g -> changes.add(() -> g.setTargetV(g.getTargetV() + 1.0)));
+                    .forEach(g -> changes.add(() -> RecordedChangeScenarios.setVoltageTarget(g, g.getRegulatingTargetV() + 1.0)));
             network.getShuntCompensatorStream().filter(s -> s.hasProperty(REGULATING_CONTROL_PROPERTY))
-                    .forEach(s -> changes.add(() -> s.setTargetV(s.getTargetV() + 1.0)));
+                    .forEach(s -> changes.add(() -> RecordedChangeScenarios.setVoltageTarget(s, s.getRegulatingTargetV() + 1.0)));
             changes.stream().limit(REGULATION_CHANGES).forEach(Runnable::run);
         });
 
@@ -160,32 +162,6 @@ class PartialSshExportBenchmarkTest {
         assertTrue(many < MAX_EXPORT_TIME_MS, () -> "exporting " + manyRegulations.size()
                 + " regulation changes took " + millis(many) + " ms, more than the " + MAX_EXPORT_TIME_MS + " ms budget");
         assertCheaper(many, manyRegulations.size() + " regulation changes", fullExport, "a full steady state hypothesis");
-    }
-
-    /**
-     * One change of every supported type the model holds: an injection setpoint, a generator target and its
-     * regulation, a tap position, a shunt section count and a static var compensator setpoint.
-     */
-    private static List<Runnable> mixedEquipmentChanges(Network network) {
-        List<Runnable> changes = new ArrayList<>();
-        network.getLoadStream().forEach(l -> changes.add(() -> l.setP0(l.getP0() + 1.0)));
-        network.getGeneratorStream().forEach(g -> {
-            changes.add(() -> g.setTargetP(g.getTargetP() + 1.0));
-            if (g.hasProperty(REGULATING_CONTROL_PROPERTY)) {
-                changes.add(() -> g.setTargetV(g.getTargetV() + 1.0));
-                // Toggled once, so that the change is a real one and not a value the network already had
-                changes.add(() -> g.setVoltageRegulatorOn(!g.isVoltageRegulatorOn()));
-            }
-        });
-        network.getTwoWindingsTransformerStream()
-                .filter(t -> t.hasRatioTapChanger() && t.getRatioTapChanger().getTapPosition() < t.getRatioTapChanger().getHighTapPosition())
-                .forEach(t -> changes.add(() -> t.getRatioTapChanger().setTapPosition(t.getRatioTapChanger().getTapPosition() + 1)));
-        network.getShuntCompensatorStream()
-                .filter(s -> s.getSectionCount() < s.getMaximumSectionCount())
-                .forEach(s -> changes.add(() -> s.setSectionCount(s.getSectionCount() + 1)));
-        network.getStaticVarCompensatorStream()
-                .forEach(s -> changes.add(() -> s.setVoltageSetpoint(s.getVoltageSetpoint() + 1.0)));
-        return changes;
     }
 
     private static List<NetworkEvent> record(Network network, Runnable changes) {

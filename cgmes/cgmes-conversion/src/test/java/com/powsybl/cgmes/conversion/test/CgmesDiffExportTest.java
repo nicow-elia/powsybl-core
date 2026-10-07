@@ -36,6 +36,8 @@ import com.powsybl.iidm.network.Load;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.RatioTapChanger;
 import com.powsybl.iidm.network.ShuntCompensator;
+import com.powsybl.iidm.network.StaticVarCompensator;
+import com.powsybl.iidm.network.Terminal;
 import com.powsybl.iidm.network.TwoWindingsTransformer;
 import com.powsybl.iidm.network.VariantManagerConstants;
 import com.powsybl.iidm.network.VscConverterStation;
@@ -44,6 +46,7 @@ import com.powsybl.iidm.network.events.NetworkEvent;
 import com.powsybl.iidm.network.events.UpdateNetworkEvent;
 import com.powsybl.iidm.network.extensions.ActivePowerControl;
 import com.powsybl.iidm.network.extensions.ReferencePriority;
+import com.powsybl.iidm.network.regulation.RegulationMode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -401,15 +404,20 @@ class CgmesDiffExportTest extends AbstractSerDeTest {
     void vscSetpointsAndRegulationState() {
         Network network = readCgmesResources(HVDC_DIR, "hvdc_EQ.xml", "hvdc_SSH.xml");
         VscConverterStation converter = (VscConverterStation) network.getHvdcLine("DCLineSegment-Vsc").getConverterStation2();
-        converter.setReactivePowerSetpoint(20.0);
-        DifferenceModel model = diff(network, RecordedChangeScenarios.record(network,
-                n -> converter.setVoltageRegulatorOn(false).setReactivePowerSetpoint(30.0)));
+        converter.setLocalTargetQ(20.0);
+        RecordedChangeScenarios.regulateOwnTerminal(converter);
+        // Switching to reactive power regulation is a change of the mode since powsybl-core #3699
+        DifferenceModel model = diff(network, RecordedChangeScenarios.record(network, n -> {
+            converter.getVoltageRegulation().setMode(RegulationMode.REACTIVE_POWER);
+            converter.getVoltageRegulation().setTargetValue(30.0);
+        }));
 
         String subject = "DCLineSegment-Vsc-VscConverter-2";
         assertEquals("VsQpccControlKind.voltagePcc", value(model.reverse(), subject, "VsConverter.qPccControl"));
         assertEquals("VsQpccControlKind.reactivePcc", value(model.forward(), subject, "VsConverter.qPccControl"));
-        // The import reads the setpoint back as -terminalSign * targetQpcc, so the export negates it
-        assertEquals("-20", value(model.reverse(), subject, "VsConverter.targetQpcc"));
+        // The import reads the setpoint back as -terminalSign * targetQpcc, so the export negates it. The target of
+        // the mode the station is not in is written as zero, as the full export does (powsybl-core #3699)
+        assertEquals("0", value(model.reverse(), subject, "VsConverter.targetQpcc"));
         assertEquals("-30", value(model.forward(), subject, "VsConverter.targetQpcc"));
     }
 
@@ -502,7 +510,7 @@ class CgmesDiffExportTest extends AbstractSerDeTest {
         });
         CgmesDiffExport.Result result = CgmesDiffExport.toDifferences(network, events, new ExportOptions());
         assertTrue(result.differences().isEmpty());
-        assertEquals(PartialSshExport.compactEvents(events), result.exportedEvents());
+        assertEquals(PartialSshExport.compactEvents(events, network), result.exportedEvents());
     }
 
     @Test
@@ -584,6 +592,54 @@ class CgmesDiffExportTest extends AbstractSerDeTest {
         PowsyblException exception = assertThrows(PowsyblException.class,
                 () -> CgmesDiffExport.toDifferences(network, events, options));
         assertTrue(exception.getMessage().contains("was created by this change set"), exception.getMessage());
+    }
+
+    /**
+     * A deprecated setter that does not change the value still fires its echo, and the echo of
+     * {@code ShuntCompensator.setTargetDeadband} reports NaN as the old value whatever the deadband was. The canonical
+     * event is suppressed (old value equals new value), so the echo is the only event of its key: it must not be read
+     * as the state before the change set, which would describe a deadband that was added (review 21 finding M5). The
+     * same echo is what a bridge that created the regulation with that deadband reports, so it is refused as the sole
+     * carrier of a change rather than taken for a no-op (review 21 round 3, r3-m7).
+     */
+    @Test
+    @SuppressWarnings("removal")
+    void anEchoOldValueIsNotThePreviousState() {
+        Network network = readCgmesResources(SHUNT_DIR, "shuntCompensator_EQ.xml", "shuntCompensator_SSH.xml");
+        network.getShuntCompensator("LinearShuntCompensator").getVoltageRegulation().setTargetDeadband(1.0);
+        List<NetworkEvent> events = RecordedChangeScenarios.record(network,
+                n -> n.getShuntCompensator("LinearShuntCompensator").setTargetDeadband(1.0));
+        assertEquals(List.of("targetDeadband"), events.stream().map(e -> ((UpdateNetworkEvent) e).attribute()).toList());
+
+        PowsyblException refusal = assertThrows(PowsyblException.class,
+                () -> CgmesDiffExport.toDifferences(network, events, new ExportOptions()));
+        assertTrue(refusal.getMessage().contains("Remedy: "), refusal.getMessage());
+    }
+
+    /**
+     * The regulating terminal is structure: it is not per variant and the state before the change set is read against
+     * the live one. A change set that moved the terminal cannot describe the targets it started from, so a target
+     * change in the same change set is refused rather than exported with a state before computed against the wrong
+     * terminal (review 21 finding m5).
+     */
+    @Test
+    void aTargetChangeNextToATerminalChangeIsUnsupported() {
+        Network network = readCgmesResources("/update/static-var-compensator/", "staticVarCompensator_EQ.xml",
+                "staticVarCompensator_SSH.xml");
+        StaticVarCompensator svc = network.getStaticVarCompensator("StaticVarCompensator-Q");
+        assertTrue(svc.hasRegulatingTerminal());
+        Terminal other = network.getConnectableStream().filter(c -> c != svc)
+                .map(c -> (Terminal) c.getTerminals().get(0))
+                .filter(t -> t != svc.getRegulatingTerminal()).findFirst().orElseThrow();
+        List<NetworkEvent> events = RecordedChangeScenarios.record(network, n -> {
+            svc.getVoltageRegulation().setTerminal(other, 205.0);
+            svc.getVoltageRegulation().setTargetValue(210.0);
+        });
+
+        CgmesDiffExport.Result result = CgmesDiffExport.toDifferences(network, events,
+                new ExportOptions().setUnsupportedChangeBehavior(PartialSshExport.UnsupportedChangeBehavior.IGNORE));
+        assertTrue(events.stream().anyMatch(e -> ((UpdateNetworkEvent) e).attribute().equals("VoltageRegulation.Terminal")));
+        assertTrue(result.exportedEvents().isEmpty(), () -> "nothing is exportable, got " + result.exportedEvents());
     }
 
     @Test

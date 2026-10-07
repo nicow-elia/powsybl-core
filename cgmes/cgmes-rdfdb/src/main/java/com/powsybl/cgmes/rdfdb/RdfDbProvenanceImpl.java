@@ -8,15 +8,14 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.extensions.AbstractExtension;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.NetworkListener;
 
 import java.time.Instant;
 import java.time.ZonedDateTime;
+import java.util.ArrayList;
 import java.util.Collections;
-import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -50,8 +49,13 @@ class RdfDbProvenanceImpl extends AbstractExtension<Network> implements RdfDbPro
     private final String scenario;
     private final List<GraphInfo> graphs;
     private final Instant loadedAt;
-    private final Map<CgmesSubset, String> modelIds = new EnumMap<>(CgmesSubset.class);
+    private final Map<String, String> modelIds = Profiles.map();
     private String snapshot;
+    /** The snapshots of a composed network, in precedence order; empty for an ordinary network. */
+    private final List<SnapshotInfo> composition = new ArrayList<>();
+    private volatile List<String> owned = List.of();
+    /** The modelling authority of every object a composed network's graphs type, by master resource identifier. */
+    private volatile Map<String, String> owners = Map.of();
 
     /**
      * Serialises every variant operation of this network, because each of them swaps network-level state in and
@@ -63,7 +67,7 @@ class RdfDbProvenanceImpl extends AbstractExtension<Network> implements RdfDbPro
     static final class BoundState {
         SnapshotRef ref;
         String snapshotIri;
-        final Map<CgmesSubset, String> modelIds = new EnumMap<>(CgmesSubset.class);
+        final Map<String, String> modelIds = Profiles.map();
         List<NetworkIdentity.Entry> models = List.of();
         ZonedDateTime caseDate;
         int forecastDistance;
@@ -122,7 +126,7 @@ class RdfDbProvenanceImpl extends AbstractExtension<Network> implements RdfDbPro
     }
 
     RdfDbProvenanceImpl(RdfDatabase database, String scenario, List<GraphInfo> graphs, Instant loadedAt,
-                        Map<CgmesSubset, String> modelIds) {
+                        Map<String, String> modelIds) {
         this.database = Objects.requireNonNull(database);
         this.scenario = Objects.requireNonNull(scenario);
         this.graphs = List.copyOf(graphs);
@@ -131,10 +135,10 @@ class RdfDbProvenanceImpl extends AbstractExtension<Network> implements RdfDbPro
     }
 
     /** Record which stored model the network is at, after a difference was applied or written. */
-    void setModelIds(Map<CgmesSubset, String> newModelIds) {
+    void setModelIds(Map<String, String> newModelIds) {
         lock.lock();
         try {
-            Map<CgmesSubset, String> target = activeState() == null ? modelIds : activeState().modelIds;
+            Map<String, String> target = activeState() == null ? modelIds : activeState().modelIds;
             target.clear();
             target.putAll(newModelIds);
         } finally {
@@ -150,7 +154,7 @@ class RdfDbProvenanceImpl extends AbstractExtension<Network> implements RdfDbPro
                 this.snapshot = snapshotIri;
             } else {
                 // The address travels with the IRI: a caller reading the binding wants the version and the
-                // timestep, not a string it would have to parse itself
+                // timestamp, not a string it would have to parse itself
                 activeState().pointAt(snapshotIri, Instant.now());
             }
         } finally {
@@ -184,7 +188,7 @@ class RdfDbProvenanceImpl extends AbstractExtension<Network> implements RdfDbPro
     }
 
     @Override
-    public Map<CgmesSubset, String> modelIds() {
+    public Map<String, String> modelIds() {
         lock.lock();
         try {
             return Map.copyOf(activeState() == null ? modelIds : activeState().modelIds);
@@ -196,6 +200,58 @@ class RdfDbProvenanceImpl extends AbstractExtension<Network> implements RdfDbPro
     @Override
     public Instant loadedAt() {
         return loadedAt;
+    }
+
+    // ------------------------------------------------------------------ composition
+
+    /**
+     * Make this the provenance of a composed network.
+     *
+     * @param snapshots the composed snapshots, in precedence order
+     * @param ownedAuthorities the authorities the network writes into
+     * @param objectOwners the authority of every object, by master resource identifier
+     */
+    void compose(List<SnapshotInfo> snapshots, List<String> ownedAuthorities, Map<String, String> objectOwners) {
+        lock.lock();
+        try {
+            composition.clear();
+            composition.addAll(snapshots);
+            owned = List.copyOf(ownedAuthorities);
+            owners = Map.copyOf(objectOwners);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** Point the composition entry of a tree at the snapshot a write-back just wrote into it. */
+    void advanceComposition(SnapshotInfo written) {
+        lock.lock();
+        try {
+            composition.replaceAll(entry -> entry.modellingAuthority().equals(written.modellingAuthority())
+                    ? written : entry);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public List<SnapshotInfo> composition() {
+        lock.lock();
+        try {
+            return List.copyOf(composition);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public List<String> owned() {
+        return owned;
+    }
+
+    @Override
+    public Optional<String> ownerOf(String mRID) {
+        return Optional.ofNullable(owners.get(mRID));
     }
 
     // ------------------------------------------------------------------ variants

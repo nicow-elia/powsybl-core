@@ -14,8 +14,11 @@ import com.powsybl.triplestore.impl.rdf4j.sparql.GraphStoreClient;
 import com.powsybl.triplestore.impl.rdf4j.sparql.ScenarioGraphNames;
 import org.eclipse.rdf4j.common.transaction.IsolationLevels;
 import org.eclipse.rdf4j.model.IRI;
+import org.eclipse.rdf4j.model.Resource;
 import org.eclipse.rdf4j.model.Statement;
 import org.eclipse.rdf4j.model.Value;
+import org.eclipse.rdf4j.model.ValueFactory;
+import org.eclipse.rdf4j.model.impl.SimpleValueFactory;
 import org.eclipse.rdf4j.model.vocabulary.RDF;
 import org.eclipse.rdf4j.repository.Repository;
 import org.eclipse.rdf4j.repository.RepositoryConnection;
@@ -39,6 +42,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.UnaryOperator;
 
 /**
  * Bulk transfer of the named graphs of a scenario into a local in-memory triple store.
@@ -145,7 +149,27 @@ public final class GraphFetcher {
      * @return what the transfer cost
      */
     public FetchStatistics fetchInto(TripleStoreRDF4J local, Map<String, String> localToRemote) {
+        return fetchInto(local, localToRemote, Map.of());
+    }
+
+    /**
+     * Transfer named graphs into a local store, mapping the statements of some of them on the way in.
+     *
+     * <p>The mapping runs on the fetch thread, on a copy: a cached graph stays as the database holds it, keyed by
+     * its remote IRI, and only what goes into the local store is mapped. The one mapping in use is
+     * {@link #rebase}, which costs a prefix check per term &mdash; far less than rewriting the graph once it is in
+     * the store.</p>
+     *
+     * @param local         the local store to fill
+     * @param localToRemote local context name to the IRI of the graph in the database
+     * @param mappings      per local context name, what each of its statements becomes; contexts without one are
+     *                      stored as fetched
+     * @return what the transfer cost
+     */
+    FetchStatistics fetchInto(TripleStoreRDF4J local, Map<String, String> localToRemote,
+                              Map<String, UnaryOperator<Statement>> mappings) {
         Objects.requireNonNull(local);
+        Objects.requireNonNull(mappings);
         // A copy: the fetch threads read it while the caller's map is the caller's
         Map<String, String> graphs = new LinkedHashMap<>(Objects.requireNonNull(localToRemote));
         List<String> names = new ArrayList<>(graphs.keySet());
@@ -173,7 +197,7 @@ public final class GraphFetcher {
             writer.begin();
             ExecutorCompletionService<FetchedGraph> completion = new ExecutorCompletionService<>(pool);
             for (String name : names) {
-                Callable<FetchedGraph> task = () -> fetchOne(name, graphs.get(name));
+                Callable<FetchedGraph> task = () -> fetchOne(name, graphs.get(name), mappings.get(name));
                 completion.submit(task);
             }
             for (int i = 0; i < names.size(); i++) {
@@ -225,6 +249,47 @@ public final class GraphFetcher {
             }
             throw new RdfDbException("Fetching a graph failed: " + cause.getMessage(), cause);
         }
+    }
+
+    private FetchedGraph fetchOne(String contextName, String remoteGraph, UnaryOperator<Statement> mapping) {
+        FetchedGraph graph = fetchOne(contextName, remoteGraph);
+        if (mapping == null) {
+            return graph;
+        }
+        return new FetchedGraph(contextName, remoteGraph, graph.statements().stream().map(mapping).toList(),
+                graph.cimNamespace(), graph.parseNanos(), graph.elapsedNanos(), graph.fromCache());
+    }
+
+    /**
+     * Move the IRIs of a graph from one subject base to another.
+     *
+     * <p>A subject, and an object that is an IRI, starting with {@code from} gets {@code to} in its place; every
+     * other term, and every statement without such a term, is left as it is (the same instance).</p>
+     *
+     * @param from the subject base the graph was parsed with
+     * @param to   the subject base it is to speak
+     * @return the mapping of one statement
+     */
+    static UnaryOperator<Statement> rebase(String from, String to) {
+        ValueFactory values = SimpleValueFactory.getInstance();
+        UnaryOperator<Value> term = value -> value instanceof IRI iri && iri.stringValue().startsWith(from)
+                ? values.createIRI(to + iri.stringValue().substring(from.length())) : value;
+        return statement -> {
+            Resource subject = (Resource) term.apply(statement.getSubject());
+            Value object = term.apply(statement.getObject());
+            return subject == statement.getSubject() && object == statement.getObject() ? statement
+                    : values.createStatement(subject, statement.getPredicate(), object, statement.getContext());
+        };
+    }
+
+    /**
+     * The statements of one graph, as the database holds them, through the cache when there is one.
+     *
+     * @param remoteGraph the graph IRI in the database
+     * @return the statements
+     */
+    List<Statement> fetch(String remoteGraph) {
+        return fetchOne(remoteGraph, remoteGraph).statements();
     }
 
     private FetchedGraph fetchOne(String contextName, String remoteGraph) {

@@ -82,6 +82,8 @@ import java.util.UUID;
  * Applying such a difference is the generic RDF operation "base graph minus reverse plus forward" and belongs to RDF
  * tooling; {@link #applyToTripleStore} is the building block this library offers for it.</p>
  *
+ * <p>Public API: a client outside this module builds on this signature.</p>
+ *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 public final class CgmesDiffImport {
@@ -143,7 +145,9 @@ public final class CgmesDiffImport {
         }
     }
 
-    /** How a difference model is applied. */
+    /**
+     * How a difference model is applied.
+     */
     public static final class Options {
 
         private ReverseCheck reverseCheck = ReverseCheck.OFF;
@@ -482,7 +486,9 @@ public final class CgmesDiffImport {
         return revert(network, diffs, config(parameters), Options.from(parameters), reportNode);
     }
 
-    /** Undo a difference with an explicit conversion configuration. */
+    /**
+     * Undo a difference with an explicit conversion configuration.
+     */
     public static Decision revert(Network network, DifferenceModelSet diffs, Conversion.Config config, Options options,
                                   ReportNode reportNode) {
         return applyInternal(network, diffs, config, options, reportNode, true).decision();

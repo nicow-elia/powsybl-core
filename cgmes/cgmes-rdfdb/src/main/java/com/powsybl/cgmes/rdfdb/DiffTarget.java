@@ -8,9 +8,6 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
-
-import java.util.EnumMap;
 import java.util.Map;
 import java.util.Objects;
 
@@ -30,9 +27,9 @@ import java.util.Objects;
  */
 public final class DiffTarget {
 
-    private final Map<CgmesSubset, String> modelIds;
+    private final Map<String, String> modelIds;
 
-    private DiffTarget(Map<CgmesSubset, String> modelIds) {
+    private DiffTarget(Map<String, String> modelIds) {
         this.modelIds = modelIds;
     }
 
@@ -51,12 +48,12 @@ public final class DiffTarget {
      * @param modelIds the model identifier per CGMES profile; profiles that are not named are left alone
      * @return the target
      */
-    public static DiffTarget models(Map<CgmesSubset, String> modelIds) {
+    public static DiffTarget models(Map<String, String> modelIds) {
         Objects.requireNonNull(modelIds);
         if (modelIds.isEmpty()) {
             throw new RdfDbException("A difference target names at least one model, or is DiffTarget.head()");
         }
-        return new DiffTarget(new EnumMap<>(modelIds));
+        return new DiffTarget(Profiles.map(modelIds));
     }
 
     /**
@@ -69,7 +66,7 @@ public final class DiffTarget {
     /**
      * @return the named models, empty for {@link #head()}
      */
-    public Map<CgmesSubset, String> modelIds() {
+    public Map<String, String> modelIds() {
         return modelIds == null ? Map.of() : Map.copyOf(modelIds);
     }
 

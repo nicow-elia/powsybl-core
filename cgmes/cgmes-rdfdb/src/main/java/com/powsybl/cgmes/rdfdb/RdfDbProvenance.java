@@ -8,7 +8,6 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.extensions.Extension;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.VariantManager;
@@ -71,7 +70,7 @@ public interface RdfDbProvenance extends Extension<Network> {
      *
      * @return the stored model identifiers, profiles without one absent
      */
-    Map<CgmesSubset, String> modelIds();
+    Map<String, String> modelIds();
 
     /**
      * The snapshot the network is at.
@@ -91,6 +90,44 @@ public interface RdfDbProvenance extends Extension<Network> {
      * @return when the network was loaded
      */
     Instant loadedAt();
+
+    // ------------------------------------------------------------------ composition
+
+    /**
+     * The snapshots a composed network was loaded from, one per modelling authority, in the order the load named
+     * the authorities &mdash; which is the order of precedence: a property two of them state has the value of the
+     * earlier one.
+     *
+     * <p>Empty for an ordinary network. A composed network is at no single snapshot ({@link #snapshot()} is empty,
+     * {@link #modelIds()} is the first authority's); a write-back advances the entry of each tree it wrote into.
+     * Nothing about the composition is stored in the database: it is an argument of the load.</p>
+     *
+     * @return the composed snapshots, or empty
+     */
+    default List<SnapshotInfo> composition() {
+        return List.of();
+    }
+
+    /**
+     * The modelling authorities whose trees a composed network writes its changes into.
+     *
+     * @return the owned authorities, in the order the load named them; empty for an ordinary network
+     */
+    default List<String> owned() {
+        return List.of();
+    }
+
+    /**
+     * The modelling authority a CGMES object of a composed network belongs to: the first one of the composition
+     * whose graphs type it; the boundary's objects belong to the first authority.
+     *
+     * @param mRID the master resource identifier of the object, without the leading {@code _}, as the IIDM
+     *             identifier and a difference statement name it
+     * @return the authority, or empty for an ordinary network and for an object no authority states
+     */
+    default Optional<String> ownerOf(String mRID) {
+        return Optional.empty();
+    }
 
     // ------------------------------------------------------------------ variants bound to snapshots
 

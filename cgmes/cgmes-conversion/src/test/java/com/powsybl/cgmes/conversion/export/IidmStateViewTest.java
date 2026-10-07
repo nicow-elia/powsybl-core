@@ -8,7 +8,10 @@
 package com.powsybl.cgmes.conversion.export;
 
 import com.powsybl.cgmes.conversion.export.EventCompactor.CompactedChanges;
+import com.powsybl.cgmes.conversion.export.IidmStateView.UnreconstructibleStateException;
+import com.powsybl.cgmes.conversion.test.RecordedChangeScenarios;
 import com.powsybl.iidm.network.CurrentLimits;
+import com.powsybl.iidm.network.Generator;
 import com.powsybl.iidm.network.HvdcLine;
 import com.powsybl.iidm.network.Identifiable;
 import com.powsybl.iidm.network.Line;
@@ -21,6 +24,7 @@ import com.powsybl.iidm.network.events.OperationalLimitsInfo;
 import com.powsybl.iidm.network.events.PermanentLimitInfo;
 import com.powsybl.iidm.network.events.TemporaryLimitInfo;
 import com.powsybl.iidm.network.events.UpdateNetworkEvent;
+import com.powsybl.iidm.network.regulation.RegulationMode;
 import com.powsybl.iidm.network.test.EurostagTutorialExample1Factory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,6 +36,7 @@ import java.util.TreeSet;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -54,7 +59,7 @@ class IidmStateViewTest {
     }
 
     private static IidmStateView before(NetworkEvent... events) {
-        CompactedChanges changes = EventCompactor.compact(List.of(events), VARIANT);
+        CompactedChanges changes = EventCompactor.compact(List.of(events), VARIANT, null);
         return IidmStateView.before(changes);
     }
 
@@ -107,6 +112,33 @@ class IidmStateViewTest {
                         () -> HvdcLine.ConvertersMode.SIDE_1_RECTIFIER_SIDE_2_INVERTER));
     }
 
+    /**
+     * A recorded null is a value for an enum: the regulation mode of a VoltageRegulation is undefined in a variant it
+     * was not created in (review 21 finding m7).
+     */
+    @Test
+    void aRecordedNullEnumIsNull() {
+        IidmStateView state = before(update(load, "VoltageRegulation.RegulationMode", null, RegulationMode.VOLTAGE));
+        assertNull(state.getEnum(load, "VoltageRegulation.RegulationMode", RegulationMode.class, () -> RegulationMode.VOLTAGE));
+    }
+
+    /**
+     * The echo of a deprecated setter and its canonical event describe one value: the view reads the old value the
+     * canonical event carried, under the canonical key (plan 21 §3.4).
+     */
+    @Test
+    @SuppressWarnings("removal")
+    void anEchoAndItsCanonicalEventAreOneValue() {
+        Network regulated = EurostagTutorialExample1Factory.create();
+        Generator generator = regulated.getGenerator("GEN");
+        boolean regulating = generator.getVoltageRegulation().isRegulating();
+        List<NetworkEvent> events = RecordedChangeScenarios.record(regulated, n -> generator.setVoltageRegulatorOn(!regulating));
+        assertEquals(2, events.size());
+        IidmStateView state = IidmStateView.before(EventCompactor.compact(events, VARIANT, regulated));
+        assertEquals(regulating, state.getBoolean(generator, CgmesChangeTranslator.VR_REGULATING, () -> !regulating));
+        assertTrue(state.unconsumedKeys().isEmpty());
+    }
+
     @Test
     void anUnrecordedPreviousValueIsUnreconstructible() {
         IidmStateView state = before(update(load, "sectionCount", null, 4));
@@ -155,9 +187,9 @@ class IidmStateViewTest {
     void extensionAttributesAreNamespacedByTheirExtension() {
         IidmStateView state = before(
                 new ExtensionUpdateNetworkEvent(load.getId(), APC, "enabled", VARIANT, true, false),
-                new ExtensionUpdateNetworkEvent(load.getId(), "generatorRemoteReactivePowerControl", "enabled", VARIANT, false, true));
+                new ExtensionUpdateNetworkEvent(load.getId(), "referencePriorities", "enabled", VARIANT, false, true));
         assertTrue(state.getExtensionBoolean(load, APC, "enabled", () -> false));
-        assertFalse(state.getExtensionBoolean(load, "generatorRemoteReactivePowerControl", "enabled", () -> true));
+        assertFalse(state.getExtensionBoolean(load, "referencePriorities", "enabled", () -> true));
     }
 
     @Test
@@ -290,7 +322,7 @@ class IidmStateViewTest {
     @Test
     void changesOfAnotherVariantAreNotInTheOverlay() {
         CompactedChanges changes = EventCompactor.compact(
-                List.of(new UpdateNetworkEvent(load.getId(), "p0", "OtherVariant", 1.0, 2.0)), VARIANT);
+                List.of(new UpdateNetworkEvent(load.getId(), "p0", "OtherVariant", 1.0, 2.0)), VARIANT, network);
         IidmStateView state = IidmStateView.before(changes);
         assertEquals(load.getP0(), state.getDouble(load, "p0", load::getP0), TOLERANCE);
         assertTrue(state.unconsumedKeys().isEmpty());

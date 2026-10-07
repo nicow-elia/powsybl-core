@@ -107,7 +107,7 @@ class RdfDbSplitLoadingDemoTest {
             LOGGER.info("");
             LOGGER.info("--- {} uploaded into scenario '{}' ---", name, scenario);
             catalogue.forEach(g -> LOGGER.info("    {}  subset={}  statements={}  graph={}",
-                    g.contextName(), g.subset(), statements(db, scenario, g), g.remoteGraph()));
+                    g.contextName(), g.profile(), statements(db, scenario, g), g.remoteGraph()));
 
             long t2 = System.nanoTime();
             RdfDbNetworkLoader.LoadResult local = RdfDbNetworkLoader.loadWithStatistics(db, scenario,

@@ -13,6 +13,7 @@
                 <cim:EquivalentInjection.p>184</cim:EquivalentInjection.p>
                 <cim:EquivalentInjection.q>0</cim:EquivalentInjection.q>
                 <cim:EquivalentInjection.regulationStatus>false</cim:EquivalentInjection.regulationStatus>
+                <cim:EquivalentInjection.regulationTarget>400</cim:EquivalentInjection.regulationTarget>
             </rdf:Description>
         </dm:reverseDifferences>
         <dm:forwardDifferences rdf:parseType="Statements">

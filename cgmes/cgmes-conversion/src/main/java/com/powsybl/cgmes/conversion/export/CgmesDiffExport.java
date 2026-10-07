@@ -89,6 +89,8 @@ import java.util.Set;
  * same network supersedes the same source model as the first one. A caller building a chain says so explicitly with
  * {@link HeaderOptions#chainAfter(DifferenceModelHeader)}.</p>
  *
+ * <p>Public API: a client outside this module builds on this signature.</p>
+ *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 public final class CgmesDiffExport {
@@ -201,7 +203,9 @@ public final class CgmesDiffExport {
         }
     }
 
-    /** Optional settings of a difference model export. */
+    /**
+     * Optional settings of a difference model export.
+     */
     public static final class ExportOptions {
 
         private UnsupportedChangeBehavior unsupportedChangeBehavior = UnsupportedChangeBehavior.FAIL;
@@ -473,7 +477,7 @@ public final class CgmesDiffExport {
         context.setModelCreated(exportOptions.created);
         return new DifferenceModelBuilder(network, context,
                 EventCompactor.compact(EventCompactor.ofVariant(events, exportOptions.getVariant()),
-                        network.getVariantManager().getWorkingVariantId()), exportOptions);
+                        network.getVariantManager().getWorkingVariantId(), network), exportOptions);
     }
 
     /**

@@ -10,16 +10,19 @@ package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
 import com.powsybl.cgmes.conversion.export.PartialSshExport;
-import com.powsybl.cgmes.model.CgmesSubset;
+import com.powsybl.cgmes.model.diff.CgmesStatement;
+import com.powsybl.cgmes.model.diff.DifferenceModel;
+import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
+import com.powsybl.cgmes.model.diff.DifferenceModelSet;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.events.NetworkEvent;
 
 import java.time.Instant;
-import java.time.ZonedDateTime;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -27,8 +30,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.function.Function;
-import java.util.function.UnaryOperator;
 
 /**
  * Record a change on a network and store it as a difference in a scenario of an RDF database, in one call.
@@ -51,6 +54,12 @@ import java.util.function.UnaryOperator;
  * {@code iidm.import.cgmes.cgm-with-subnetworks} &mdash; cannot be the sender of a difference: there is no single
  * model for it to supersede. Such a network is refused before anything is translated.</p>
  *
+ * <h2>A composed network writes into the trees it owns</h2>
+ * <p>A network of {@code RdfDbNetworkLoader.loadComposed} is the exception: it knows which tree each of its objects
+ * came from. Its versioned export splits the translated differences by the owner of each subject and writes one
+ * snapshot into each owned tree it touches, superseding that tree's composed state; a change on an object of a tree
+ * it does not own refuses the whole export. The appending and the variant routes refuse a composed network.</p>
+ *
  * <h2>Differences never cross scenarios</h2>
  * <p>A network that was loaded from one scenario cannot be exported into another: its model identifiers name
  * models of the scenario it came from, and a difference on them belongs there. A network that was read from files
@@ -62,8 +71,8 @@ import java.util.function.UnaryOperator;
 public final class RdfDbExport {
 
     /** What a difference can describe; each of them has to be one model to be superseded. */
-    private static final Set<CgmesSubset> DIFF_SUBSETS =
-            Set.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS);
+    private static final Set<String> DIFF_SUBSETS =
+            Set.of(Profiles.EQ, Profiles.SSH);
 
     /**
      * What an export produced.
@@ -86,8 +95,8 @@ public final class RdfDbExport {
          * @param subset the CGMES profile
          * @return the stored difference of a profile, or empty
          */
-        public Optional<StoredModel> get(CgmesSubset subset) {
-            return stored.stream().filter(model -> model.subset() == subset).findFirst();
+        public Optional<StoredModel> get(String subset) {
+            return stored.stream().filter(model -> model.subset().equals(subset)).findFirst();
         }
     }
 
@@ -131,6 +140,7 @@ public final class RdfDbExport {
         Objects.requireNonNull(db);
         RdfDbNames.checkScenario(scenario);
         checkSameScenario(network, scenario);
+        RdfDbNetworkLoader.checkNotComposed(network);
         // In variant mode the whole export - the sender check included - describes the working variant and
         // supersedes the model that variant is at. Outside it, nothing changes
         return inVariantOrClassic(network, options,
@@ -182,14 +192,15 @@ public final class RdfDbExport {
      *
      * <p>The versioned form of {@link #export(Network, Collection, RdfDbConnection, String,
      * CgmesDiffExport.ExportOptions)}: instead of appending to the chain of each profile, the difference becomes
-     * one addressable version of the scenario. The scenario time of every header is set to the target's timestep,
-     * so that the rule "a snapshot's timestep is the scenario time of its members" holds by construction.</p>
+     * one addressable version of the scenario. The scenario time of every header is set to the target's timestamp,
+     * so that the rule "a snapshot's timestamp is the scenario time of its members" holds by construction.</p>
      *
      * @param network    the network the changes were recorded on
      * @param events     the recorded changes
      * @param db         the open connection
-     * @param target     the address the new snapshot gets; a {@code null} version takes the next label of that
-     *                   timestep's chain
+     * @param target     the address the new snapshot gets. A {@code null} modelling authority is the one of the
+     *                   snapshot the network is at, a {@code null} timestamp the base timestamp of that authority's
+     *                   tree, a {@code null} version the lowest registered one ranking above the head's
      * @param options    the granularity, the header values and the unsupported change behaviour
      * @param reportNode where the stored differences are reported
      * @return what was exported, what was stored and the snapshot it became
@@ -199,54 +210,98 @@ public final class RdfDbExport {
     public static SnapshotResult export(Network network, Collection<NetworkEvent> events, RdfDbConnection db,
                                         SnapshotRef target, CgmesDiffExport.ExportOptions options,
                                         ReportNode reportNode) {
+        return export(network, events, db, target, null, options, reportNode);
+    }
+
+    /**
+     * Translate recorded changes and store them as a new snapshot; a new timestamp hangs off the given pin.
+     *
+     * @param network    the network the changes were recorded on
+     * @param events     the recorded changes
+     * @param db         the open connection
+     * @param target     the address the new snapshot gets, as for the form without a pin
+     * @param pin        the snapshot a new timestamp hangs off, of the same tree and stating what the changes
+     *                   supersede, or {@code null} for the snapshot the network is at when it is such a snapshot,
+     *                   else the deepest one that is (see
+     *                   {@link SnapshotCatalog#putDiff(com.powsybl.cgmes.model.diff.DifferenceModelSet, SnapshotRef,
+     *                   SnapshotRef, ReportNode)})
+     * @param options    the granularity, the header values and the unsupported change behaviour
+     * @param reportNode where the stored differences are reported
+     * @return what was exported, what was stored and the snapshot it became
+     * @throws RdfDbException         if the network belongs to another scenario, or the pin does not exist
+     * @throws RdfDbConflictException if the address is taken, the chain would fork, the timestamp exists and a pin
+     *                                is named, or the pin does not state what the changes supersede
+     */
+    public static SnapshotResult export(Network network, Collection<NetworkEvent> events, RdfDbConnection db,
+                                        SnapshotRef target, SnapshotRef pin, CgmesDiffExport.ExportOptions options,
+                                        ReportNode reportNode) {
         Objects.requireNonNull(network);
         Objects.requireNonNull(db);
         Objects.requireNonNull(target);
         SnapshotCatalog catalog = db.snapshots(target.scenario());
         catalog.check(target);
         checkSameScenario(network, target.scenario());
+        if (network.getExtension(RdfDbProvenance.class) instanceof RdfDbProvenanceImpl composed
+                && !composed.composition().isEmpty()) {
+            return exportComposed(network, events, db, catalog, composed, target, pin, options, reportNode);
+        }
 
-        String timestep = target.timestep() == null ? catalog.baseTimestep() : target.timestep();
-        SnapshotRef effective = target.isLatest()
-                ? new SnapshotRef(target.scenario(), catalog.nextVersionLabel(timestep), timestep)
-                : target.at(timestep);
+        String authority = target.modellingAuthority() != null ? target.modellingAuthority()
+                : authorityOf(network);
+        SnapshotRef located = SnapshotRef.latestAt(target.scenario(), authority,
+                target.timestamp() == null ? catalog.baseTimestamp(authority) : target.timestamp());
+        SnapshotRef effective = located.withVersion(target.isLatest() ? catalog.nextVersionName(located)
+                : target.version());
 
         // In variant mode every operation of this package is a variant operation: the difference describes the
         // working variant and supersedes the model that variant is at, not the primary's
         return inVariantOrClassic(network, options,
-                writeOptions -> writeSnapshot(network, events, db, catalog, effective, timestep, writeOptions,
+                writeOptions -> writeSnapshot(network, events, db, catalog, effective, pin, writeOptions,
                         reportNode));
+    }
+
+    /** The modelling authority of the snapshot a network is at, for an export whose address names none. */
+    private static String authorityOf(Network network) {
+        RdfDbProvenance provenance = network.getExtension(RdfDbProvenance.class);
+        SnapshotRef at = provenance == null ? null : provenance.snapshot().map(RdfDbNames::refOf).orElse(null);
+        if (at == null) {
+            throw new RdfDbException("network " + network.getId() + " is at no snapshot, so the address of its"
+                    + " changes has to name the modelling authority");
+        }
+        return at.modellingAuthority();
     }
 
     /** Translate the changes and store them as the given snapshot; the caller decides the variant context. */
     private static SnapshotResult writeSnapshot(Network network, Collection<NetworkEvent> events,
                                                 RdfDbConnection db, SnapshotCatalog catalog, SnapshotRef effective,
-                                                String timestep, CgmesDiffExport.ExportOptions options,
+                                                SnapshotRef pin, CgmesDiffExport.ExportOptions options,
                                                 ReportNode reportNode) {
         // The sender check reads the identity, so it belongs inside whatever variant context the caller set up
         NetworkIdentity.modelIds(network, DIFF_SUBSETS);
-        CgmesDiffExport.Result exported = translate(network, events, timestep, options);
-        return store(network, db, catalog, exported, effective, reportNode);
+        CgmesDiffExport.Result exported = translate(network, events, effective.timestamp(), options);
+        return store(network, db, catalog, exported, effective, pin, reportNode);
     }
 
     /**
-     * Turn the recorded changes into one difference per profile, dated with the timestep being written.
+     * Turn the recorded changes into one difference per profile, dated with the timestamp being written.
      *
      * <p>The scenario time belongs to the snapshot, not to the caller's options, so the options are copied: a
-     * caller reusing its object for a second export into another timestep must not inherit it.</p>
+     * caller reusing its object for a second export into another timestamp must not inherit it.</p>
      */
     private static CgmesDiffExport.Result translate(Network network, Collection<NetworkEvent> events,
-                                                    String timestep, CgmesDiffExport.ExportOptions options) {
+                                                    Instant timestamp, CgmesDiffExport.ExportOptions options) {
         CgmesDiffExport.ExportOptions effectiveOptions = copyOf(options)
-                .setScenarioTime(ZonedDateTime.parse(timestep));
+                .setScenarioTime(timestamp.atZone(ZoneOffset.UTC));
         return CgmesDiffExport.toDifferences(network, events, effectiveOptions);
     }
 
     /** Store an already translated difference set as a snapshot, and advance the sender to it. */
     private static SnapshotResult store(Network network, RdfDbConnection db, SnapshotCatalog catalog,
-                                        CgmesDiffExport.Result exported, SnapshotRef effective,
+                                        CgmesDiffExport.Result exported, SnapshotRef effective, SnapshotRef pin,
                                         ReportNode reportNode) {
-        SnapshotInfo snapshot = catalog.putDiff(exported.differences(), effective,
+        RdfDbProvenance provenance = network.getExtension(RdfDbProvenance.class);
+        String sender = provenance == null ? null : provenance.snapshot().orElse(null);
+        SnapshotInfo snapshot = catalog.putDiff(exported.differences(), effective, pin, sender,
                 reportNode == null ? ReportNode.NO_OP : reportNode);
 
         List<StoredModel> stored = db.catalog(effective.scenario())
@@ -254,11 +309,159 @@ public final class RdfDbExport {
                 .filter(model -> snapshot.members().contains(model.id()))
                 .toList();
         advanceSender(network, db, effective.scenario(), stored);
-        RdfDbProvenance provenance = network.getExtension(RdfDbProvenance.class);
         if (provenance instanceof RdfDbProvenanceImpl impl) {
             impl.setSnapshot(snapshot.iri());
         }
         return new SnapshotResult(exported.exportedEvents(), stored, snapshot);
+    }
+
+    // ------------------------------------------------------------------ composed networks
+
+    /**
+     * Write the changes recorded on a composed network into the trees of the objects they are on.
+     *
+     * <p>Translated once; every statement then goes to the authority that owns its subject
+     * ({@link RdfDbProvenance#ownerOf}), one difference model per profile and authority, each superseding that
+     * authority's state in the composition rather than {@code CgmesMetadataModels}, which holds a model per
+     * authority of the same profile. A statement on an object of an authority the network does not own refuses the
+     * whole export before anything is resolved or written. Each touched tree gets one snapshot through
+     * {@link SnapshotCatalog#putDiff}, hanging off its composed snapshot, and its composition entry is advanced to
+     * it.</p>
+     *
+     * @return the result of the first tree written to, in composition order; the provenance names the others
+     */
+    private static SnapshotResult exportComposed(Network network, Collection<NetworkEvent> events,
+                                                 RdfDbConnection db, SnapshotCatalog catalog,
+                                                 RdfDbProvenanceImpl provenance, SnapshotRef target, SnapshotRef pin,
+                                                 CgmesDiffExport.ExportOptions options, ReportNode reportNode) {
+        if (pin != null) {
+            throw new RdfDbException("the changes of a composed network hang off the snapshots it is composed of,"
+                    + " so it takes no pin (" + pin + ")");
+        }
+        // Every address first, all of them reads: a refusal of one tree must not follow a write into another
+        Map<String, SnapshotRef> targets = new LinkedHashMap<>();
+        for (SnapshotInfo composed : provenance.composition()) {
+            String authority = composed.modellingAuthority();
+            if (provenance.owned().contains(authority)) {
+                targets.put(authority, SnapshotRef.latestAt(target.scenario(), authority,
+                        target.timestamp() == null ? catalog.baseTimestamp(authority) : target.timestamp()));
+            }
+        }
+        Instant first = targets.values().iterator().next().timestamp();
+        CgmesDiffExport.Result exported = translate(network, events, first, options);
+        Map<String, List<DifferenceModel>> byAuthority = route(exported.differences(), provenance, targets);
+        if (byAuthority.isEmpty()) {
+            throw new RdfDbException("no difference to store from composed network " + network.getId()
+                    + " into scenario '" + target.scenario() + "'");
+        }
+        Map<String, SnapshotRef> effective = new LinkedHashMap<>();
+        byAuthority.keySet().forEach(authority -> {
+            SnapshotRef located = targets.get(authority);
+            effective.put(authority, located.withVersion(target.isLatest() ? catalog.nextVersionName(located)
+                    : target.version()));
+        });
+        SnapshotResult result = null;
+        for (Map.Entry<String, List<DifferenceModel>> entry : byAuthority.entrySet()) {
+            String sender = provenance.composition().stream()
+                    .filter(composed -> composed.modellingAuthority().equals(entry.getKey()))
+                    .map(SnapshotInfo::iri).findFirst().orElseThrow();
+            SnapshotInfo written = catalog.putDiff(new DifferenceModelSet(entry.getValue()),
+                    effective.get(entry.getKey()), null, sender, reportNode == null ? ReportNode.NO_OP : reportNode);
+            provenance.advanceComposition(written);
+            if (result == null) {
+                List<StoredModel> stored = db.catalog(target.scenario()).models(written.members()).values()
+                        .stream().toList();
+                result = new SnapshotResult(exported.exportedEvents(), stored, written);
+            }
+        }
+        // The network-level identity is the first composed snapshot's, as after the load
+        Map<String, String> modelIds = Profiles.map();
+        provenance.composition().get(0).state().forEach((profile, id) -> {
+            if (Profiles.isStandard(profile)) {
+                modelIds.put(profile, id);
+            }
+        });
+        provenance.setModelIds(modelIds);
+        return result;
+    }
+
+    /**
+     * Split each difference model of a composed network by the owner of its subjects.
+     *
+     * @return the difference models per owning authority, in composition order
+     * @throws RdfDbException if a statement is on an object no owned authority owns
+     */
+    private static Map<String, List<DifferenceModel>> route(DifferenceModelSet differences,
+                                                            RdfDbProvenanceImpl provenance,
+                                                            Map<String, SnapshotRef> targets) {
+        Map<String, Map<String, String>> states = new LinkedHashMap<>();
+        provenance.composition().forEach(composed -> states.put(composed.modellingAuthority(), composed.state()));
+        Map<String, List<DifferenceModel>> byAuthority = new LinkedHashMap<>();
+        targets.keySet().forEach(authority -> byAuthority.put(authority, new ArrayList<>()));
+        for (DifferenceModel model : differences.models().values()) {
+            Map<String, DifferenceModel> split = new LinkedHashMap<>();
+            for (String authority : targets.keySet()) {
+                DifferenceModel part = new DifferenceModel(model.header(),
+                        ownedBy(model.forward(), authority, provenance),
+                        ownedBy(model.reverse(), authority, provenance),
+                        ownedBy(model.preconditions(), authority, provenance));
+                if (!part.isEmpty()) {
+                    split.put(authority, part);
+                }
+            }
+            for (Map.Entry<String, DifferenceModel> entry : split.entrySet()) {
+                String authority = entry.getKey();
+                String profile = Profiles.of(model.header().subset());
+                Map<String, String> state = states.get(authority);
+                // A new identifier per part: the translated one is derived from the network's identity, which a
+                // composed network does not advance, so a second write-back would repeat it
+                DifferenceModelHeader original = model.header();
+                DifferenceModelHeader header = DifferenceModelHeader.builder("urn:uuid:" + UUID.randomUUID(),
+                                original.subset(), original.cimNamespace())
+                        .created(original.created()).description(original.description())
+                        .version(original.version()).profiles(original.profiles())
+                        .modelingAuthoritySet(authority)
+                        .scenarioTime(targets.get(authority).timestamp().atZone(ZoneOffset.UTC))
+                        .supersedes(List.of(state.get(profile)))
+                        .dependentOn(original.dependentOn().stream()
+                                .map(id -> sameProfileIn(id, states, state)).distinct().toList())
+                        .build();
+                byAuthority.get(authority).add(new DifferenceModel(header, entry.getValue().forward(),
+                        entry.getValue().reverse(), entry.getValue().preconditions()));
+            }
+        }
+        byAuthority.values().removeIf(List::isEmpty);
+        return byAuthority;
+    }
+
+    /**
+     * The statements of one owned authority; a statement on an object of an authority the network does not own,
+     * or of none, refuses the export.
+     */
+    private static List<CgmesStatement> ownedBy(List<CgmesStatement> statements, String authority,
+                                                RdfDbProvenanceImpl provenance) {
+        List<CgmesStatement> mine = new ArrayList<>();
+        for (CgmesStatement statement : statements) {
+            String owner = provenance.ownerOf(statement.subjectId()).orElse(null);
+            if (owner == null || !provenance.owned().contains(owner)) {
+                throw new RdfDbException("the change on " + statement.subjectId() + " belongs to "
+                        + (owner == null ? "no modelling authority of the composition "
+                        + provenance.composition().stream().map(SnapshotInfo::modellingAuthority).toList()
+                        : "modelling authority '" + owner + "', which this composed network does not own (owned: "
+                        + provenance.owned() + ")") + "; nothing was written");
+            }
+            if (owner.equals(authority)) {
+                mine.add(statement);
+            }
+        }
+        return mine;
+    }
+
+    /** A model identifier one authority's state names, as the model of the same profile another one's names. */
+    private static String sameProfileIn(String id, Map<String, Map<String, String>> states, Map<String, String> state) {
+        return states.values().stream().flatMap(other -> other.entrySet().stream())
+                .filter(entry -> entry.getValue().equals(id)).map(Map.Entry::getKey).findFirst()
+                .map(profile -> state.getOrDefault(profile, id)).orElse(id);
     }
 
     /**
@@ -300,35 +503,9 @@ public final class RdfDbExport {
          * @param subset the CGMES profile
          * @return the stored difference of a profile, or empty
          */
-        public Optional<StoredModel> get(CgmesSubset subset) {
-            return stored.stream().filter(model -> model.subset() == subset).findFirst();
+        public Optional<StoredModel> get(String subset) {
+            return stored.stream().filter(model -> model.subset().equals(subset)).findFirst();
         }
-    }
-
-    /**
-     * Translate recorded changes and store them as a new snapshot, addressing the timestep by text.
-     *
-     * <p>The form a user interface calls: the timestep may be a {@code "8:30"} label, which is resolved against the
-     * base day of <em>this</em> scenario.</p>
-     *
-     * @param network      the network the changes were recorded on
-     * @param events       the recorded changes
-     * @param db           the open connection
-     * @param scenario     the scenario to write into, required
-     * @param version      the version label the new snapshot gets, or {@code null} for the next label of that
-     *                     timestep's chain
-     * @param timestepText the timestep as an instant, an offset date-time or an {@code "8:30"} label, or
-     *                     {@code null} for the base timestep
-     * @param options      the granularity, the header values and the unsupported change behaviour
-     * @param reportNode   where the stored differences are reported
-     * @return what was exported, what was stored and the snapshot it became
-     */
-    public static SnapshotResult export(Network network, Collection<NetworkEvent> events, RdfDbConnection db,
-                                        String scenario, String version, String timestepText,
-                                        CgmesDiffExport.ExportOptions options, ReportNode reportNode) {
-        Objects.requireNonNull(db);
-        return export(network, events, db, db.snapshots(scenario).resolve(version, timestepText), options,
-                reportNode);
     }
 
     // ------------------------------------------------------------------ one variant at a time
@@ -336,10 +513,10 @@ public final class RdfDbExport {
     /**
      * Write the changes recorded on one variant as the successor of <em>that variant's</em> snapshot.
      *
-     * <p>A network whose variants stand for the timesteps of a day is a day of parallel histories, and a change
+     * <p>A network whose variants stand for the timestamps of a day is a day of parallel histories, and a change
      * recorded on {@code 08:30} belongs after {@code 08:30}, not after whatever the primary variant happens to be
-     * at. The target is therefore derived from the binding of the variant: same scenario, same timestep, next
-     * version of that timestep's chain.</p>
+     * at. The target is therefore derived from the binding of the variant: same scenario, same modelling
+     * authority, same timestamp, next version of that timestamp's chain.</p>
      *
      * <p>The whole export runs inside the variant's scope, so the values written are that variant's values and
      * the {@code md:Model.Supersedes} of the difference names that variant's model. Changes recorded on another
@@ -350,13 +527,13 @@ public final class RdfDbExport {
      * @param events     the recorded changes
      * @param db         the open connection
      * @param variantId  the variant whose history is being written
-     * @param newVersion the version label the new snapshot gets, or {@code null} for the next one of that
-     *                   timestep's chain
+     * @param newVersion the version name the new snapshot gets, or {@code null} for the next one of that
+     *                   timestamp's chain
      * @param options    the granularity, the header values and the unsupported change behaviour
      * @param reportNode where the stored differences are reported
      * @return what was exported, what was stored and the snapshot it became
      * @throws RdfDbException if the variant is not bound to a snapshot, or if the options name a scenario time
-     *                        that is not the variant's timestep
+     *                        that is not the variant's timestamp
      */
     public static SnapshotResult exportVariant(Network network, Collection<NetworkEvent> events,
                                                RdfDbConnection db, String variantId, String newVersion,
@@ -364,19 +541,18 @@ public final class RdfDbExport {
         Objects.requireNonNull(network);
         Objects.requireNonNull(db);
         Objects.requireNonNull(variantId);
+        RdfDbNetworkLoader.checkNotComposed(network);
         RdfDbProvenanceImpl provenance = boundProvenance(network, variantId);
         // Naming a variant is the opt-in here exactly as it is for an update: from now on every in-place
         // operation of this module is a variant operation, so nothing can quietly write across the variants
         provenance.enableVariantMode();
         VariantBinding binding = binding(provenance, network, variantId);
-        SnapshotRef target = targetOf(binding, newVersion, options, variantId,
-                db.snapshots(binding.scenario())::nextVersionLabel);
-        SnapshotCatalog catalog = db.snapshots(target.scenario());
-        catalog.check(target);
+        SnapshotCatalog catalog = db.snapshots(binding.scenario());
+        SnapshotRef target = targetOf(binding, newVersion, options, variantId, catalog::nextVersionName);
 
         CgmesDiffExport.ExportOptions variantOptions = variantOptions(network, options, variantId);
         return VariantScope.call(network, provenance, variantId, () -> store(network, db, catalog,
-                translate(network, events, target.timestep(), variantOptions), target, reportNode));
+                translate(network, events, target.timestamp(), variantOptions), target, null, reportNode));
     }
 
     /**
@@ -413,8 +589,8 @@ public final class RdfDbExport {
      * @param network    the network the changes were recorded on
      * @param events     the recorded changes
      * @param db         the open connection
-     * @param newVersion the version label every new snapshot gets, or {@code null} for the next one of each
-     *                   timestep's chain
+     * @param newVersion the version name every new snapshot gets, or {@code null} for the next one of each
+     *                   timestamp's chain
      * @param options    the granularity, the header values and the unsupported change behaviour
      * @param reportNode where the stored differences are reported
      * @return one entry per variant the changes were recorded on, in first-occurrence order
@@ -427,6 +603,7 @@ public final class RdfDbExport {
                                                               ReportNode reportNode) {
         Objects.requireNonNull(network);
         Objects.requireNonNull(db);
+        RdfDbNetworkLoader.checkNotComposed(network);
         RdfDbProvenance provenance = network.getExtension(RdfDbProvenance.class);
         if (!(provenance instanceof RdfDbProvenanceImpl impl)) {
             throw new RdfDbException("network " + network.getId() + " was not loaded from an RDF database, so"
@@ -438,8 +615,8 @@ public final class RdfDbExport {
                 .getUnsupportedChangeBehavior() == PartialSshExport.UnsupportedChangeBehavior.FAIL;
 
         Map<String, List<NetworkEvent>> byVariant = groupByVariant(network, events);
-        // One label lookup per distinct timestep, and none at all when the caller named the version
-        Map<String, String> versionByTimestep = new LinkedHashMap<>();
+        // One version lookup per distinct moment, and none at all when the caller named the version
+        Map<SnapshotRef, String> versionByMoment = new LinkedHashMap<>();
         // Phase one: everything that can refuse, with nothing written
         Map<String, Translated> translated = new LinkedHashMap<>();
         for (Map.Entry<String, List<NetworkEvent>> group : byVariant.entrySet()) {
@@ -455,10 +632,11 @@ public final class RdfDbExport {
             }
             VariantBinding binding = impl.variantBinding(variantId).orElseThrow();
             SnapshotRef target = targetOf(binding, newVersion, options, variantId,
-                    ts -> versionByTimestep.computeIfAbsent(ts, db.snapshots(binding.scenario())::nextVersionLabel));
+                    moment -> versionByMoment.computeIfAbsent(moment,
+                            db.snapshots(binding.scenario())::nextVersionName));
             CgmesDiffExport.ExportOptions variantOptions = variantOptions(network, options, variantId);
             translated.put(variantId, VariantScope.call(network, impl, variantId, () -> {
-                CgmesDiffExport.Result exported = translate(network, events, target.timestep(), variantOptions);
+                CgmesDiffExport.Result exported = translate(network, events, target.timestamp(), variantOptions);
                 return new Translated(target, exported, rejectedOf(group.getValue(), exported.exportedEvents()));
             }));
         }
@@ -478,7 +656,7 @@ public final class RdfDbExport {
             SnapshotCatalog catalog = db.snapshots(one.target().scenario());
             try {
                 SnapshotResult stored = VariantScope.call(network, impl, variantId,
-                        () -> store(network, db, catalog, one.exported(), one.target(), reportNode));
+                        () -> store(network, db, catalog, one.exported(), one.target(), null, reportNode));
                 results.put(variantId, new VariantExport(variantId, stored, one.rejected()));
             } catch (RdfDbConflictException e) {
                 throw new RdfDbConflictException("writing the changes of variant '" + variantId + "' failed after"
@@ -547,23 +725,23 @@ public final class RdfDbExport {
         return group.stream().filter(event -> !written.contains(event)).map(Object::toString).toList();
     }
 
-    /** The snapshot a variant's changes become: the next version of that variant's own timestep. */
+    /** The snapshot a variant's changes become: the next version of that variant's own timestamp. */
     private static SnapshotRef targetOf(VariantBinding binding, String newVersion,
                                         CgmesDiffExport.ExportOptions options, String variantId,
-                                        UnaryOperator<String> nextVersion) {
-        String timestep = binding.timestep();
-        if (timestep == null) {
+                                        Function<SnapshotRef, String> nextVersionName) {
+        Instant timestamp = binding.timestamp();
+        if (timestamp == null) {
             throw new RdfDbException("variant '" + variantId + "' is not at a snapshot of a versioned scenario,"
-                    + " so there is no timestep to write its changes into");
+                    + " so there is no timestamp to write its changes into");
         }
         if (options != null && options.getScenarioTime() != null
-                && !options.getScenarioTime().toInstant().equals(ZonedDateTime.parse(timestep).toInstant())) {
-            throw new RdfDbException("variant '" + variantId + "' stands for the timestep " + timestep
+                && !options.getScenarioTime().toInstant().truncatedTo(ChronoUnit.SECONDS).equals(timestamp)) {
+            throw new RdfDbException("variant '" + variantId + "' stands for the timestamp " + timestamp
                     + ", but the export was given the scenario time " + options.getScenarioTime()
-                    + ": a variant's changes are written into its own timestep");
+                    + ": a variant's changes are written into its own timestamp");
         }
-        String version = newVersion != null ? newVersion : nextVersion.apply(timestep);
-        return new SnapshotRef(binding.scenario(), version, timestep);
+        SnapshotRef moment = SnapshotRef.latestAt(binding.scenario(), binding.modellingAuthority(), timestamp);
+        return moment.withVersion(newVersion != null ? newVersion : nextVersionName.apply(moment));
     }
 
     /**
@@ -623,11 +801,11 @@ public final class RdfDbExport {
         if (stored.isEmpty()) {
             return;
         }
-        Map<CgmesSubset, StoredModel> bySubset = new EnumMap<>(CgmesSubset.class);
+        Map<String, StoredModel> bySubset = Profiles.map();
         stored.forEach(model -> bySubset.put(model.subset(), model));
         NetworkIdentity.advance(network, bySubset);
 
-        Map<CgmesSubset, String> ids = NetworkIdentity.modelIds(network);
+        Map<String, String> ids = NetworkIdentity.modelIds(network);
         RdfDbProvenance provenance = network.getExtension(RdfDbProvenance.class);
         if (provenance instanceof RdfDbProvenanceImpl impl && provenance.scenario().equals(scenario)) {
             impl.setModelIds(ids);

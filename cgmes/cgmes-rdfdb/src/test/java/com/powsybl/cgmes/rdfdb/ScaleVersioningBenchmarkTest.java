@@ -14,6 +14,7 @@ import com.powsybl.iidm.network.Load;
 import com.powsybl.iidm.network.Network;
 import org.assertj.core.api.SoftAssertions;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -63,6 +64,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
+@Tag("benchmark")
 class ScaleVersioningBenchmarkTest {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ScaleVersioningBenchmarkTest.class);
@@ -121,13 +123,13 @@ class ScaleVersioningBenchmarkTest {
             List<String> others = new ArrayList<>();
             SnapshotCatalog catalog = db.snapshots(scenario);
             long build = System.nanoTime();
-            SnapshotInfo head = catalog.putFull(ds, null, SnapshotRef.of(scenario, "1.0"), Backends.params(),
+            SnapshotInfo head = catalog.putFull(ds, null, SnapshotRef.latest(scenario, null), null, Backends.params(),
                     ReportNode.NO_OP);
             List<SnapshotRef> refs = new ArrayList<>();
             refs.add(head.ref());
             for (int i = 1; i <= DEPTH; i++) {
                 head = catalog.putDiff(ScaleLoadBenchmarkTest.step(head, i, loadId, loadClass, !grid.svedala()),
-                        SnapshotRef.of(scenario, "1." + i));
+                        head.ref().withVersion(String.valueOf(i + 1)));
                 refs.add(head.ref());
             }
             long buildMs = (System.nanoTime() - build) / 1_000_000;

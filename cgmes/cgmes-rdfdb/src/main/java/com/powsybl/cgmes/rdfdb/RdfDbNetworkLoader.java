@@ -13,7 +13,7 @@ import com.powsybl.cgmes.conversion.Conversion;
 import com.powsybl.cgmes.conversion.TripleStoreNetworkLoader;
 import com.powsybl.cgmes.conversion.diff.CgmesDiffImport;
 import com.powsybl.cgmes.conversion.diff.CgmesDiffNotApplicableException;
-import com.powsybl.cgmes.model.CgmesSubset;
+import com.powsybl.cgmes.conversion.diff.FastRouteCapabilities;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
@@ -38,8 +38,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.EnumMap;
-import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -47,6 +46,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 /**
@@ -71,12 +71,36 @@ import java.util.stream.Collectors;
 public final class RdfDbNetworkLoader {
 
     /**
-     * A loaded network and where the time went.
+     * A loaded network, where the time went, and what the network does not hold.
      *
-     * @param network    the network
-     * @param statistics the timings of the load
+     * @param network       the network
+     * @param statistics    the timings of the load
+     * @param extraProfiles the custom profiles of the snapshot ({@link Profiles}) and the graph holding each of
+     *                      them, as the metadata graph records it: the conversion reads only the nine standard
+     *                      profiles, so these are handed to the caller instead, to be read with
+     *                      {@link RdfDbConnection#fetchGraph}. Empty for a scenario-addressed load and for a
+     *                      projection that names none
      */
-    public record LoadResult(Network network, LoadStatistics statistics) {
+    public record LoadResult(Network network, LoadStatistics statistics, Map<String, String> extraProfiles) {
+
+        /**
+         * @param network       see {@link #network()}
+         * @param statistics    see {@link #statistics()}
+         * @param extraProfiles see {@link #extraProfiles()}
+         */
+        public LoadResult {
+            extraProfiles = Collections.unmodifiableSortedMap(Profiles.map(extraProfiles));
+        }
+
+        /**
+         * A load without custom profiles.
+         *
+         * @param network    the network
+         * @param statistics the timings of the load
+         */
+        LoadResult(Network network, LoadStatistics statistics) {
+            this(network, statistics, Map.of());
+        }
     }
 
     private RdfDbNetworkLoader() {
@@ -155,7 +179,8 @@ public final class RdfDbNetworkLoader {
         // path lists. The catalogue read above already knows, so this costs no request
         if (snapshot.isVersioned()) {
             refusePartialLoad(scenario, options, "is versioned", "a snapshot of it");
-            LoadResult versioned = loadWithStatistics(db, SnapshotRef.latest(scenario), factory, params, rn);
+            LoadResult versioned = loadWithStatistics(db,
+                    SnapshotRef.latest(scenario, db.snapshots(scenario).onlyAuthority()), factory, params, rn);
             applyPostProcessors(versioned.network(), options, rn);
             return versioned;
         }
@@ -191,9 +216,9 @@ public final class RdfDbNetworkLoader {
 
     private static List<GraphInfo> graphsToRead(RdfDbConnection db, String scenario, RdfDbLoadOptions options) {
         List<GraphInfo> all = db.graphs(scenario);
-        EnumSet<CgmesSubset> subsets = options.getSubsets();
+        Set<String> subsets = options.getProfiles();
         List<GraphInfo> graphs = subsets == null ? all
-                : all.stream().filter(g -> subsets.contains(g.subset())).toList();
+                : all.stream().filter(g -> g.profile() != null && subsets.contains(g.profile())).toList();
         if (graphs.isEmpty()) {
             throw new RdfDbException("No CGMES graphs in " + db.database() + " for scenario '" + scenario + "'"
                     + (subsets == null ? "" : " and subsets " + subsets)
@@ -290,6 +315,7 @@ public final class RdfDbNetworkLoader {
                               Properties params, ReportNode reportNode) {
         Objects.requireNonNull(network);
         Objects.requireNonNull(db);
+        checkNotComposed(network);
         RdfDbLoadOptions effective = options == null ? RdfDbLoadOptions.forUpdate() : options;
         ReportNode rn = reportNode == null ? ReportNode.NO_OP : reportNode;
         checkNotVariantMode(network, new RdfDbUpdateOptions(), "a whole-profile replacement");
@@ -346,7 +372,7 @@ public final class RdfDbNetworkLoader {
 
     /** A difference states properties of its profile: a partial load would build a state that never existed. */
     private static void refusePartialLoad(String scenario, RdfDbLoadOptions options, String what, String instead) {
-        if (options.getSubsets() != null) {
+        if (options.getProfiles() != null) {
             throw new RdfDbException("Scenario '" + scenario + "' " + what + ", and a partial load of a versioned"
                     + " scenario is not supported: a difference states properties of the profile it belongs to,"
                     + " and leaving a profile out would build a network from a state that never existed. Load the"
@@ -387,6 +413,7 @@ public final class RdfDbNetworkLoader {
         Objects.requireNonNull(db);
         Objects.requireNonNull(target);
         RdfDbNames.checkScenario(scenario);
+        checkNotComposed(network);
         RdfDbUpdateOptions effective = options == null ? new RdfDbUpdateOptions() : options;
         ReportNode rn = reportNode == null ? ReportNode.NO_OP : reportNode;
 
@@ -400,7 +427,8 @@ public final class RdfDbNetworkLoader {
         // which is what a caller addressing individual stored models asked for. The catalogue read above knows
         // whether the scenario is versioned, so the decision costs no request
         if (target.isHead() && snapshot != null && snapshot.isVersioned()) {
-            return update(network, db, SnapshotRef.latest(scenario), effective, params, rn);
+            return update(network, db, SnapshotRef.latest(scenario, db.snapshots(scenario).onlyAuthority()), effective,
+                    params, rn);
         }
         // Everything below addresses individual stored models rather than snapshots, and a variant stands for a
         // snapshot. Silently doing it on the whole network would write into every bound variant at once
@@ -424,48 +452,48 @@ public final class RdfDbNetworkLoader {
     private static DiffUpdatePlanner.Plan planUpdate(Network network, RdfDbProvenance provenance,
                                                      CatalogSnapshot snapshot, String scenario, DiffTarget target,
                                                      RdfDbUpdateOptions options) {
-        Map<CgmesSubset, String> identity = provenance != null && !provenance.modelIds().isEmpty()
-                ? provenance.modelIds() : NetworkIdentity.modelIds(network, options.getSubsets());
-        Map<CgmesSubset, String> currentIds = new EnumMap<>(CgmesSubset.class);
+        Map<String, String> identity = provenance != null && !provenance.modelIds().isEmpty()
+                ? provenance.modelIds() : NetworkIdentity.modelIds(network, options.getProfiles());
+        Map<String, String> currentIds = Profiles.map();
         currentIds.putAll(identity);
-        currentIds.keySet().retainAll(options.getSubsets());
+        currentIds.keySet().retainAll(options.getProfiles());
         if (currentIds.isEmpty()) {
             throw new RdfDbException("The network carries no CGMES model identity for the profiles "
-                    + options.getSubsets() + ", so there is nothing to bring forward from");
+                    + options.getProfiles() + ", so there is nothing to bring forward from");
         }
-        Map<CgmesSubset, String> targetIds = targetIds(snapshot, target, currentIds.keySet());
+        Map<String, String> targetIds = targetIds(snapshot, target, currentIds.keySet());
         if (targetIds.isEmpty()) {
             return new DiffUpdatePlanner.Plan(DiffUpdatePlanner.Route.FULL, Map.of(), Map.of(), Map.of(),
                     List.of("scenario '" + scenario + "' holds no model of the profiles " + currentIds.keySet()));
         }
-        Map<CgmesSubset, List<StoredModel>> targetChains = snapshot.chainsDown(targetIds);
-        Map<CgmesSubset, List<StoredModel>> currentChains = snapshot.chainsDown(currentIds);
+        Map<String, List<StoredModel>> targetChains = snapshot.chainsDown(targetIds);
+        Map<String, List<StoredModel>> currentChains = snapshot.chainsDown(currentIds);
         return DiffUpdatePlanner.plan(scenario, currentIds, targetChains, currentChains,
                 options.getMaxDiffChain());
     }
 
-    private static Map<CgmesSubset, String> targetIds(CatalogSnapshot snapshot, DiffTarget target,
-                                                      Set<CgmesSubset> subsets) {
+    private static Map<String, String> targetIds(CatalogSnapshot snapshot, DiffTarget target,
+                                                      Set<String> subsets) {
         if (!target.isHead()) {
-            return new EnumMap<>(target.modelIds());
+            return Profiles.map(target.modelIds());
         }
-        Map<CgmesSubset, String> heads = new EnumMap<>(CgmesSubset.class);
+        Map<String, String> heads = Profiles.map();
         subsets.forEach(subset -> snapshot.head(subset).ifPresent(model -> heads.put(subset, model.id())));
         return heads;
     }
 
     /** Every profile the scenario holds, at the state the target names. */
-    private static Map<CgmesSubset, StoredModel> targetsOf(CatalogSnapshot snapshot, DiffTarget target) {
+    private static Map<String, StoredModel> targetsOf(CatalogSnapshot snapshot, DiffTarget target) {
         if (target.isHead()) {
             return snapshot.heads();
         }
-        Map<CgmesSubset, StoredModel> targets = new EnumMap<>(CgmesSubset.class);
+        Map<String, StoredModel> targets = Profiles.map();
         target.modelIds().forEach((subset, id) -> {
             StoredModel model = snapshot.model(id).orElseThrow(() -> new RdfDbException("Scenario '"
                     + snapshot.scenario() + "' holds no model " + id));
-            if (model.subset() != subset) {
+            if (!model.subset().equals(subset)) {
                 throw new RdfDbException("Model " + id + " of scenario '" + snapshot.scenario() + "' describes the "
-                        + model.subset().getIdentifier() + " profile, not " + subset.getIdentifier());
+                        + model.subset() + " profile, not " + subset);
             }
             targets.put(subset, model);
         });
@@ -492,9 +520,9 @@ public final class RdfDbNetworkLoader {
         Duration fetch = Duration.ofNanos(System.nanoTime() - fetchStart);
 
         long composeStart = System.nanoTime();
-        Map<CgmesSubset, List<DifferenceModel>> chains = new EnumMap<>(CgmesSubset.class);
-        Map<CgmesSubset, DifferenceModelHeader> headers = new EnumMap<>(CgmesSubset.class);
-        Map<CgmesSubset, List<String>> appliedIds = new EnumMap<>(CgmesSubset.class);
+        Map<String, List<DifferenceModel>> chains = Profiles.map();
+        Map<String, DifferenceModelHeader> headers = Profiles.map();
+        Map<String, List<String>> appliedIds = Profiles.map();
         plan.paths().forEach((subset, path) -> {
             if (path.isEmpty()) {
                 return;
@@ -537,7 +565,7 @@ public final class RdfDbNetworkLoader {
      * composed difference is the one being undone, so it carries the identity of the model the network holds and
      * supersedes the target, which is where the network ends up.</p>
      */
-    private static DifferenceModelHeader composedHeader(DiffUpdatePlanner.Plan plan, CgmesSubset subset,
+    private static DifferenceModelHeader composedHeader(DiffUpdatePlanner.Plan plan, String subset,
                                                         List<StoredModel> path) {
         boolean inverted = Boolean.TRUE.equals(plan.inverted().get(subset));
         StoredModel target = plan.targets().get(subset);
@@ -604,7 +632,7 @@ public final class RdfDbNetworkLoader {
     }
 
     private static void recordIdentity(Network network, RdfDbConnection db, String scenario,
-                                       Map<CgmesSubset, StoredModel> targets) {
+                                       Map<String, StoredModel> targets) {
         NetworkIdentity.advance(network, targets);
         provenanceAt(network, db, scenario);
         classicOperationDone(network);
@@ -612,7 +640,7 @@ public final class RdfDbNetworkLoader {
 
     /** The provenance of a network that was just advanced, now stating the models it holds. */
     private static RdfDbProvenanceImpl provenanceAt(Network network, RdfDbConnection db, String scenario) {
-        Map<CgmesSubset, String> ids = NetworkIdentity.modelIds(network);
+        Map<String, String> ids = NetworkIdentity.modelIds(network);
         RdfDbProvenance provenance = network.getExtension(RdfDbProvenance.class);
         if (provenance instanceof RdfDbProvenanceImpl impl && provenance.scenario().equals(scenario)) {
             impl.setModelIds(ids);
@@ -629,8 +657,9 @@ public final class RdfDbNetworkLoader {
      * Build the network of one snapshot.
      *
      * <p>The mandated entry point of the versioning layer. The address is always complete: the scenario says which
-     * base grid model, the timestep which moment of it, the version which study state. A {@code null} version
-     * means the newest one of that timestep, a {@code null} timestep the base timestep of the scenario.</p>
+     * base grid model, the modelling authority whose grid, the timestamp which moment of it, the version which study
+     * state. A {@code null} version means the newest one of that timestamp, a {@code null} timestamp the base
+     * timestamp of the authority's tree.</p>
      *
      * @param db             the open connection
      * @param ref            the address of the snapshot
@@ -641,26 +670,31 @@ public final class RdfDbNetworkLoader {
      */
     public static Network load(RdfDbConnection db, SnapshotRef ref, NetworkFactory networkFactory,
                                Properties params, ReportNode reportNode) {
-        return loadWithStatistics(db, ref, networkFactory, params, reportNode).network();
+        return loadWithStatistics(db, ref, Set.of(), networkFactory, params, reportNode).network();
     }
 
     /**
-     * Build the network of one snapshot, addressed by plain strings.
+     * Build the network of one snapshot from some of its profiles.
+     *
+     * <p>The profiles are a projection, not a part of the address: the snapshot is the same, and the network holds
+     * the profiles named here, each at the state the snapshot has for it, and always the boundary, which belongs to
+     * the scenario rather than to a projection. The equipment profile is what a network
+     * is built from, so a projection without it fails in the conversion.</p>
      *
      * @param db             the open connection
-     * @param scenario       the scenario, required
-     * @param version        the version label, or {@code null} for the newest one
-     * @param timestep       the timestep as an ISO instant, an offset date-time or a {@code "8:30"} label of the
-     *                       scenario's base day; {@code null} for the base timestep
+     * @param ref            the address of the snapshot
+     * @param profiles       the profiles to read, or {@code null} or empty for every profile of the snapshot. A
+     *                       custom profile ({@link Profiles}) is never read into the network: a load with statistics
+     *                       names its graph in {@link LoadResult#extraProfiles()}
      * @param networkFactory the factory the network is created with
      * @param params         the CGMES import parameters
      * @param reportNode     where the load reports
      * @return the network, at that snapshot
+     * @throws RdfDbException if the snapshot does not hold one of the profiles
      */
-    public static Network load(RdfDbConnection db, String scenario, String version, String timestep,
+    public static Network load(RdfDbConnection db, SnapshotRef ref, Set<String> profiles,
                                NetworkFactory networkFactory, Properties params, ReportNode reportNode) {
-        Objects.requireNonNull(db);
-        return load(db, db.snapshots(scenario).resolve(version, timestep), networkFactory, params, reportNode);
+        return loadWithStatistics(db, ref, profiles, networkFactory, params, reportNode).network();
     }
 
     /**
@@ -675,35 +709,157 @@ public final class RdfDbNetworkLoader {
      */
     public static LoadResult loadWithStatistics(RdfDbConnection db, SnapshotRef ref, NetworkFactory networkFactory,
                                                 Properties params, ReportNode reportNode) {
+        return loadWithStatistics(db, ref, Set.of(), networkFactory, params, reportNode);
+    }
+
+    /**
+     * Build the network of some profiles of one snapshot, and say where the time went.
+     *
+     * @param db             the open connection
+     * @param ref            the address of the snapshot
+     * @param profiles       the profiles to read, or {@code null} or empty for every profile of the snapshot. A
+     *                       custom profile ({@link Profiles}) is never read into the network: a load with statistics
+     *                       names its graph in {@link LoadResult#extraProfiles()}
+     * @param networkFactory the factory the network is created with
+     * @param params         the CGMES import parameters
+     * @param reportNode     where the load reports
+     * @return the network and the timings
+     */
+    public static LoadResult loadWithStatistics(RdfDbConnection db, SnapshotRef ref, Set<String> profiles,
+                                                NetworkFactory networkFactory, Properties params,
+                                                ReportNode reportNode) {
         Objects.requireNonNull(db);
         Objects.requireNonNull(ref);
         NetworkFactory factory = networkFactory == null ? NetworkFactory.findDefault() : networkFactory;
         ReportNode rn = reportNode == null ? ReportNode.NO_OP : reportNode;
         long t0 = System.nanoTime();
-        LoadResult materialised = materialize(db, ref, factory, params, rn);
+        LoadResult materialised = materialize(db, ref, profiles, factory, params, rn);
         Duration readCatalog = Duration.ofNanos(System.nanoTime() - t0)
                 .minus(materialised.statistics().total());
         LoadStatistics statistics = materialised.statistics()
                 .withListGraphs(readCatalog.isNegative() ? Duration.ZERO : readCatalog);
         LOGGER.info("Loaded network {} from snapshot {} of {}: {}", materialised.network().getId(), ref,
                 db.database(), statistics.summary());
+        return new LoadResult(materialised.network(), statistics, materialised.extraProfiles());
+    }
+
+    // ------------------------------------------------------------------ composition
+
+    /**
+     * Build one network from the snapshots several modelling authorities hold at one moment, the first one winning.
+     *
+     * <p>The form of {@link #loadComposed(RdfDbConnection, SnapshotRef, List, List, Set, NetworkFactory, Properties,
+     * ReportNode)} that writes back into the first authority's tree only and reads every profile.</p>
+     *
+     * @param db          the open connection
+     * @param moment      the scenario, the timestamp and the version; no modelling authority
+     * @param authorities the modelling authorities, in precedence order
+     * @param factory     the factory the network is created with
+     * @param params      the CGMES import parameters
+     * @param reportNode  where the load reports
+     * @return the network and the timings
+     */
+    public static LoadResult loadComposed(RdfDbConnection db, SnapshotRef moment, List<String> authorities,
+                                          NetworkFactory factory, Properties params, ReportNode reportNode) {
+        return loadComposed(db, moment, authorities, null, null, factory, params, reportNode);
+    }
+
+    /**
+     * Build one network from the snapshots several modelling authorities hold at one moment: a common grid model
+     * of their individual grid models, loaded at once.
+     *
+     * <p>Each authority is resolved at the moment as an ordinary load would resolve it &mdash; its own tree, the
+     * timestamp (the base timestamp of its tree when {@code null}), the latest version at or below the named one
+     * &mdash; and all of them in one chain query. The snapshots are materialised into one local store with the
+     * boundary once and one subject base, and converted as one flat network: the tie lines are paired on the
+     * boundary nodes, as for the assembled files. A property two authorities state has the value of the earlier
+     * one in {@code authorities}; that order is the only composition rule.</p>
+     *
+     * <p>Nothing about the composition is stored: the network's {@link RdfDbProvenance#composition()} names the
+     * snapshots, {@link RdfDbProvenance#owned()} the trees a recorded change is written into
+     * ({@link RdfDbExport#export(Network, java.util.Collection, RdfDbConnection, SnapshotRef,
+     * com.powsybl.cgmes.conversion.export.CgmesDiffExport.ExportOptions, ReportNode)} routes each change to the
+     * tree of the object it is on), and
+     * {@link RdfDbProvenance#ownerOf(String)} the authority of each object. A composed network is not updated in
+     * place and holds no variant: to reach another moment, compose again.</p>
+     *
+     * @param db          the open connection
+     * @param moment      the scenario, the timestamp and the version; the modelling authority must be {@code null},
+     *                    the authorities are the list
+     * @param authorities the modelling authorities, in precedence order, each once
+     * @param owned       the authorities a recorded change may be written into, a subset of {@code authorities};
+     *                    {@code null} for the first one
+     * @param profiles    the profiles to read, or {@code null} or empty for every standard profile; custom profiles
+     *                    are not composed
+     * @param factory     the factory the network is created with
+     * @param params      the CGMES import parameters
+     * @param reportNode  where the load reports
+     * @return the network and the timings
+     * @throws RdfDbException if an authority holds no snapshot at the moment (naming it), the list is empty or names
+     *                        one twice, {@code owned} names one outside it, or two authorities name different
+     *                        boundaries; nothing is loaded then
+     */
+    public static LoadResult loadComposed(RdfDbConnection db, SnapshotRef moment, List<String> authorities,
+                                          List<String> owned, Set<String> profiles, NetworkFactory factory,
+                                          Properties params, ReportNode reportNode) {
+        Objects.requireNonNull(db);
+        Objects.requireNonNull(moment);
+        Objects.requireNonNull(authorities);
+        String scenario = moment.scenario();
+        if (moment.modellingAuthority() != null) {
+            throw new RdfDbException("the moment " + moment + " of a composition names no modelling authority:"
+                    + " the authorities are the list " + authorities);
+        }
+        if (authorities.isEmpty() || new HashSet<>(authorities).size() != authorities.size()) {
+            throw new RdfDbException("a composition names each modelling authority once, and at least one: "
+                    + authorities + (authorities.isEmpty() ? "" : " names one twice"));
+        }
+        List<String> writers = owned == null ? List.of(authorities.get(0)) : List.copyOf(owned);
+        writers.stream().filter(authority -> !authorities.contains(authority)).findFirst().ifPresent(stranger -> {
+            throw new RdfDbException("the owned modelling authority '" + stranger + "' is not in the composition "
+                    + authorities + ": a composed network writes only into trees it was composed of");
+        });
+        long t0 = System.nanoTime();
+        SnapshotCatalog catalog = db.snapshots(scenario);
+        catalog.checkSchema();
+        VersionGraph versionGraph = db.versionGraph(scenario);
+        Map<String, VersionGraph.Start> starts = new LinkedHashMap<>();
+        authorities.forEach(authority -> starts.put(authority, new VersionGraph.Start(null,
+                new SnapshotRef(scenario, authority, moment.timestamp(), moment.version(), moment.exact()))));
+        VersionGraph.Chains chains = versionGraph.chains(starts);
+        List<SnapshotInfo> snapshots = new ArrayList<>();
+        List<MaterializationPlan> plans = new ArrayList<>();
+        for (String authority : authorities) {
+            List<SnapshotInfo> chain = chains.bySide().get(authority);
+            if (chain.isEmpty()) {
+                throw new RdfDbException("modelling authority '" + authority + "' holds no snapshot at "
+                        + starts.get(authority).ref() + ", and a common grid model of " + authorities
+                        + " needs every one of them; nothing was loaded");
+            }
+            snapshots.add(chain.get(0));
+            plans.add(versionGraph.materialization(chain, chains.fullGraphs(), chains.diffs()).project(profiles));
+        }
+        Map<String, StoredModel> stateModels = db.catalog(scenario).models(plans.stream()
+                .flatMap(plan -> plan.targetState().values().stream()).collect(Collectors.toSet()));
+        LoadResult materialised = RdfDbMaterializer.materializeComposed(db, scenario, snapshots, plans, stateModels,
+                writers, factory == null ? NetworkFactory.findDefault() : factory, params,
+                reportNode == null ? ReportNode.NO_OP : reportNode);
+        Duration readCatalog = Duration.ofNanos(System.nanoTime() - t0).minus(materialised.statistics().total());
+        LoadStatistics statistics = materialised.statistics()
+                .withListGraphs(readCatalog.isNegative() ? Duration.ZERO : readCatalog);
+        LOGGER.info("Composed network {} of {} at {} of {}: {}", materialised.network().getId(), authorities,
+                moment, db.database(), statistics.summary());
         return new LoadResult(materialised.network(), statistics);
     }
 
-    private static LoadResult materialize(RdfDbConnection db, SnapshotRef ref,
-                                                              NetworkFactory factory, Properties params,
-                                                              ReportNode rn) {
-        SnapshotCatalog catalog = db.snapshots(ref.scenario());
-        SnapshotInfo info = catalog.find(ref).orElseThrow(() -> new RdfDbException("scenario '" + ref.scenario()
-                + "' of " + db.database() + " holds no snapshot " + ref + "; it holds "
-                + catalog.snapshots().stream().map(SnapshotInfo::toString).toList()));
-        return materialize(db, info, factory, params, rn);
+    private static LoadResult materialize(RdfDbConnection db, SnapshotRef ref, Set<String> profiles,
+                                          NetworkFactory factory, Properties params, ReportNode rn) {
+        return materialize(db, db.snapshots(ref.scenario()).require(ref), profiles, factory, params, rn);
     }
 
-    private static LoadResult materialize(RdfDbConnection db, SnapshotInfo info,
-                                                              NetworkFactory factory, Properties params,
-                                                              ReportNode rn) {
-        MaterializationPlan plan = db.versionGraph(info.scenario()).materialization(info.iri());
+    private static LoadResult materialize(RdfDbConnection db, SnapshotInfo info, Set<String> profiles,
+                                          NetworkFactory factory, Properties params, ReportNode rn) {
+        MaterializationPlan plan = db.versionGraph(info.scenario()).materialization(info.iri()).project(profiles);
         Map<String, StoredModel> stateModels =
                 db.catalog(info.scenario()).models(plan.targetState().values());
         return RdfDbMaterializer.materialize(db, info.scenario(), info, plan, stateModels, factory, params, rn);
@@ -741,6 +897,7 @@ public final class RdfDbNetworkLoader {
         Objects.requireNonNull(network);
         Objects.requireNonNull(db);
         Objects.requireNonNull(target);
+        checkNotComposed(network);
         RdfDbUpdateOptions effective = options == null ? new RdfDbUpdateOptions() : options;
         ReportNode rn = reportNode == null ? ReportNode.NO_OP : reportNode;
         String scenario = target.scenario();
@@ -758,7 +915,7 @@ public final class RdfDbNetworkLoader {
 
         return switch (plan.kind()) {
             case NOOP -> {
-                yield terminal(rn, scenario, UpdateResult.Route.NOOP, network, List.of(), planning,
+                yield terminal(rn, target.toString(), UpdateResult.Route.NOOP, network, List.of(), planning,
                         Duration.ZERO);
             }
             case DIFF -> applySnapshotDifferences(network, db, target, plan, effective, params, rn, planning);
@@ -767,34 +924,15 @@ public final class RdfDbNetworkLoader {
     }
 
     /**
-     * Bring a network to a snapshot, addressed by plain strings.
-     *
-     * @param network    the network to bring up to date
-     * @param db         the open connection
-     * @param scenario   the scenario, required
-     * @param version    the version label, or {@code null} for the newest one
-     * @param timestep   the timestep text, or {@code null} for the base timestep
-     * @param params     the CGMES import parameters
-     * @param reportNode where the update reports
-     * @return what was done
-     */
-    public static UpdateResult update(Network network, RdfDbConnection db, String scenario, String version,
-                                      String timestep, Properties params, ReportNode reportNode) {
-        Objects.requireNonNull(db);
-        return update(network, db, db.snapshots(scenario).resolve(version, timestep), new RdfDbUpdateOptions(),
-                params, reportNode);
-    }
-
-    /**
      * Load many snapshots of one scenario as the variants of a single network.
      *
      * <p>A whole day in one network: the first requested snapshot is converted from the data and becomes the
      * network, every requested snapshot &mdash; including the first &mdash; gets a named variant, and the rest of
      * them are clones plus the differences between them. One chain query, one statement fetch and one conversion,
-     * whatever the number of timesteps.</p>
+     * whatever the number of timestamps.</p>
      *
      * <p>A snapshot that cannot be reached inside a variant does not fail the load: its variant is not created and
-     * its {@link VariantOutcome} says why, so a day with one drifted timestep still gives the other ninety-five.
+     * its {@link VariantOutcome} says why, so a day with one drifted timestamp still gives the other ninety-five.
      * A snapshot the scenario does not hold at all is an error, raised before anything is loaded.</p>
      *
      * <p>The working variant of the calling thread is the primary one when the call returns.</p>
@@ -821,63 +959,24 @@ public final class RdfDbNetworkLoader {
     }
 
     /**
-     * Load many timesteps of one version as the variants of a single network, addressed by text.
+     * Refuse an in-place operation on a composed network.
      *
-     * <p>The form a user interface calls: the timesteps may be {@code "8:30"} labels, which are resolved against
-     * the base day of this scenario, and the variants are named after them.</p>
+     * <p>A composition is a load-time argument: the network is several trees at one moment, with no single
+     * snapshot to walk from and no variant that could stand for one. Reaching another moment means composing
+     * again; only a recorded change is written back, routed to the trees the network owns.</p>
      *
-     * @param db             the open connection
-     * @param scenario       the scenario, required
-     * @param version        the version label every timestep is taken at, or {@code null} for the newest one of
-     *                       each
-     * @param timestepTexts  the timesteps, as instants, offset date-times or {@code "8:30"} labels
-     * @param options        the naming rule and how each variant is brought to its snapshot
-     * @param networkFactory the factory the network is created with
-     * @param params         the CGMES import parameters
-     * @param reportNode     where the load reports
-     * @return the network, one outcome per timestep, and where the time went
+     * @param network the network
+     * @throws RdfDbException if the network was loaded by {@link #loadComposed}
      */
-    public static VariantLoadResult loadVariants(RdfDbConnection db, String scenario, String version,
-                                                 List<String> timestepTexts, RdfDbVariantLoadOptions options,
-                                                 NetworkFactory networkFactory, Properties params,
-                                                 ReportNode reportNode) {
-        Objects.requireNonNull(db);
-        Objects.requireNonNull(timestepTexts);
-        SnapshotCatalog catalog = db.snapshots(scenario);
-        List<VariantRequest> requests = timestepTexts.stream()
-                .map(text -> VariantRequest.of(catalog.resolve(version, text)))
-                .toList();
-        return loadVariants(db, scenario, requests, options, networkFactory, params, reportNode);
-    }
-
-    /**
-     * Create or update one variant of a network so that it stands for a snapshot, addressed by plain strings.
-     *
-     * <p>The opt-in form of {@link #update(Network, RdfDbConnection, SnapshotRef, RdfDbUpdateOptions, Properties,
-     * ReportNode)}: the state of the named variant is brought to the snapshot, every other variant of the network
-     * is left exactly as it is, and anything that could not be done without writing state shared by all variants
-     * is refused with {@link UpdateResult.Route#VARIANT_REFUSED} rather than applied.</p>
-     *
-     * <p>A variant that does not exist is created, by cloning the variant nearest to the target in difference
-     * terms; a variant that exists is moved from wherever it stands. The working variant of the calling thread is
-     * unchanged when the call returns.</p>
-     *
-     * @param network       the network holding the variant
-     * @param db            the open connection
-     * @param scenario      the scenario, required
-     * @param version       the version label, or {@code null} for the newest one of that timestep
-     * @param timestep      the timestep text, or {@code null} for the base timestep
-     * @param targetVariant the variant to create or update, {@code null} for the working one
-     * @param params        the CGMES import parameters
-     * @param reportNode    where the update reports
-     * @return what was done, with {@link UpdateResult#variantId()} naming the variant
-     */
-    public static UpdateResult update(Network network, RdfDbConnection db, String scenario, String version,
-                                      String timestep, String targetVariant, Properties params,
-                                      ReportNode reportNode) {
-        Objects.requireNonNull(db);
-        return update(network, db, db.snapshots(scenario).resolve(version, timestep),
-                new RdfDbUpdateOptions().setTargetVariant(targetVariant), params, reportNode);
+    static void checkNotComposed(Network network) {
+        List<SnapshotInfo> composition = network.getExtension(RdfDbProvenance.class) instanceof RdfDbProvenance p
+                ? p.composition() : List.of();
+        if (!composition.isEmpty()) {
+            throw new RdfDbException("network " + network.getId() + " is a composition of "
+                    + composition.stream().map(SnapshotInfo::modellingAuthority).toList()
+                    + ": composed networks are read-only for the diff and variant routes; reload it with"
+                    + " RdfDbNetworkLoader.loadComposed");
+        }
     }
 
     /**
@@ -893,7 +992,8 @@ public final class RdfDbNetworkLoader {
         if (variant != null) {
             throw new RdfDbException("network " + network.getId() + " is in variant mode, so " + what
                     + " cannot be applied to it: variant mode addresses snapshots. Use"
-                    + " RdfDbNetworkLoader.update(network, db, scenario, version, timestep, variant, ...)");
+                    + " RdfDbNetworkLoader.update(network, db, ref, new RdfDbUpdateOptions().setTargetVariant(variant),"
+                    + " ...)");
         }
     }
 
@@ -988,7 +1088,7 @@ public final class RdfDbNetworkLoader {
      * @param compose         how long composing them took
      * @param apply           how long applying them took
      */
-    record AppliedDiffs(Map<CgmesSubset, List<String>> appliedModelIds, Duration compose, Duration apply) {
+    record AppliedDiffs(Map<String, List<String>> appliedModelIds, Duration compose, Duration apply) {
     }
 
     /**
@@ -1007,36 +1107,20 @@ public final class RdfDbNetworkLoader {
      * @param config  the conversion configuration
      * @param rn      where the update reports
      * @return what was applied
-     * @throws CgmesDiffNotApplicableException if the composed difference cannot be applied in place
+     * @throws CgmesDiffNotApplicableException if the composed difference cannot be applied in place, or a
+     *                                         difference of a capability version this reader does not trust fails
+     *                                         its table
      */
     static AppliedDiffs composeAndApply(Network network, RdfDbConnection db, String scenario, UpdatePlan plan,
                                         FetchedDiffs fetched, RdfDbUpdateOptions options, Conversion.Config config,
                                         ReportNode rn) {
-        // A path that walks up one branch and down another - which is what a step from one timestep to the next
+        recheck(plan, fetched, options.getDiffOptions().isVariantSafeOnly());
+        // A path that walks up one branch and down another - which is what a step from one timestamp to the next
         // is - is composed with the upward differences already turned round, and then applied forwards like any
         // other. Only a path that is entirely upward is reverted as a whole
-        boolean mixed = plan.isMixedDirection();
         boolean inverted = plan.isAllInverted();
-        Map<String, DifferenceModel> byId = fetched.byId();
-        Map<String, StoredModel> stateModels = fetched.stateModels();
-
         long composeStart = System.nanoTime();
-        Map<CgmesSubset, List<DifferenceModel>> chains = new EnumMap<>(CgmesSubset.class);
-        Map<CgmesSubset, DifferenceModelHeader> headers = new EnumMap<>(CgmesSubset.class);
-        Map<CgmesSubset, List<String>> appliedIds = new EnumMap<>(CgmesSubset.class);
-        plan.stepsBySubset().forEach((subset, steps) -> {
-            // The path is in application order; composing wants it oldest first, which for an undo is the
-            // reverse of the order the steps are undone in
-            List<UpdatePlan.DiffStep> path = new ArrayList<>(steps);
-            if (inverted) {
-                Collections.reverse(path);
-            }
-            chains.put(subset, composable(path, byId, mixed));
-            headers.put(subset, snapshotHeader(path.stream().map(UpdatePlan.DiffStep::model).toList(), inverted,
-                    steps, plan.targetState().get(subset), stateModels));
-            appliedIds.put(subset, steps.stream().map(step -> step.model().id()).toList());
-        });
-        DifferenceModelSet composed = RdfDbDiffSource.compose(chains, headers);
+        DifferenceModelSet composed = compose(plan, fetched, inverted);
         Duration compose = Duration.ofNanos(System.nanoTime() - composeStart);
 
         long applyStart = System.nanoTime();
@@ -1047,8 +1131,119 @@ public final class RdfDbNetworkLoader {
         }
         Duration apply = Duration.ofNanos(System.nanoTime() - applyStart);
 
-        recordSnapshotIdentity(network, db, scenario, plan, stateModels);
+        recordSnapshotIdentity(network, db, scenario, plan, fetched.stateModels());
+        Map<String, List<String>> appliedIds = Profiles.map();
+        plan.stepsBySubset().forEach((subset, steps) -> appliedIds.put(subset,
+                steps.stream().map(step -> step.model().id()).toList()));
         return new AppliedDiffs(appliedIds, compose, apply);
+    }
+
+    /**
+     * Compose the differences of a path into one difference per profile.
+     *
+     * @param plan       the path
+     * @param fetched    what {@link #fetchSteps} returned for it
+     * @param revertable whether the set is to be reverted as a whole: then the steps, all upward, are composed as
+     *                   they were written, oldest first, and the set carries the identity of the model being undone.
+     *                   Otherwise every upward step is turned round here and the set is applied forwards
+     * @return the composed set
+     */
+    private static DifferenceModelSet compose(UpdatePlan plan, FetchedDiffs fetched, boolean revertable) {
+        Map<String, List<DifferenceModel>> chains = Profiles.map();
+        Map<String, DifferenceModelHeader> headers = Profiles.map();
+        plan.stepsBySubset().forEach((subset, steps) -> {
+            // The path is in application order; composing wants it oldest first, which for an undo is the
+            // reverse of the order the steps are undone in
+            List<UpdatePlan.DiffStep> path = new ArrayList<>(steps);
+            if (revertable) {
+                Collections.reverse(path);
+            }
+            chains.put(subset, composable(path, fetched.byId(), !revertable));
+            headers.put(subset, snapshotHeader(path.stream().map(UpdatePlan.DiffStep::model).toList(), revertable,
+                    steps, plan.targetState().get(subset), fetched.stateModels()));
+        });
+        return RdfDbDiffSource.compose(chains, headers);
+    }
+
+    /**
+     * The changes between two snapshots of one tree, as one difference per profile.
+     *
+     * <p>What a network at {@code from} has to apply to be at {@code to}: the path between the two
+     * ({@link VersionGraph}), its differences fetched, and the steps composed as an update composes them &mdash; the
+     * ones up out of {@code from} turned round, the ones down into {@code to} as they are &mdash; into a set that is
+     * applied forwards. It is a statement set, not an in-place update, so it is made whether or not the differences
+     * are fast-route capable and however long the path is. Each composed difference carries the identity of
+     * {@code to}'s model of its profile and supersedes {@code from}'s. A custom profile stored whole is not a
+     * difference and is not in it ({@link SnapshotCatalog#graphsOf}).</p>
+     *
+     * <p>Three requests: the plan, the differences, and the models the path starts and ends at.</p>
+     *
+     * @param db   the open connection
+     * @param from the address of the first snapshot
+     * @param to   the address of the second snapshot, of the same scenario and modelling authority
+     * @return the composed set, empty when the two are the same snapshot
+     * @throws RdfDbException if the two are of different scenarios or modelling authorities, or either is not
+     *                        held
+     */
+    public static DifferenceModelSet changesBetween(RdfDbConnection db, SnapshotRef from, SnapshotRef to) {
+        Objects.requireNonNull(db);
+        Objects.requireNonNull(from);
+        Objects.requireNonNull(to);
+        if (!from.scenario().equals(to.scenario())) {
+            throw new RdfDbException("no difference leads from " + from + " to " + to + ": diffs never cross"
+                    + " scenarios");
+        }
+        UpdatePlan plan = db.versionGraph(from.scenario()).plan(from, to,
+                new RdfDbUpdateOptions().setMaxDiffChain(Integer.MAX_VALUE));
+        if (plan.steps().isEmpty()) {
+            if (plan.kind() == UpdatePlan.Kind.FULL) {
+                throw new RdfDbException("no difference leads from " + from + " to " + to + ": "
+                        + String.join("; ", plan.reasons()));
+            }
+            return new DifferenceModelSet(List.of());
+        }
+        return compose(plan, fetchSteps(db, from.scenario(), plan), false);
+    }
+
+    /** How many differences {@link #recheck} checked against this reader's table, for the tests. */
+    private static final AtomicInteger RECHECKED = new AtomicInteger();
+
+    static int recheckedDifferences() {
+        return RECHECKED.get();
+    }
+
+    /**
+     * Check the differences whose stored verdicts this reader does not trust against its own capability table.
+     *
+     * <p>The planner took {@code pdb:fastPredicatesOnly} and {@code pdb:variantSafe} as they are stored. For a
+     * difference written by a newer capability table ({@link UpdatePlan.DiffStep#recheck()}) they may promise more
+     * than this reader can do, so its fetched statements go through {@link FastRouteCapabilities#check} &mdash;
+     * and {@link FastRouteCapabilities#checkVariantSafe} on a variant route &mdash; before anything is composed. A
+     * refusal is the ordinary not-applicable answer, with reasons naming both versions: the caller then takes its
+     * usual fallback (a full reload, or the refusal of the variant). No request: the statements are in hand.</p>
+     *
+     * @throws CgmesDiffNotApplicableException if a re-checked difference cannot be applied in place by this reader
+     */
+    private static void recheck(UpdatePlan plan, FetchedDiffs fetched, boolean variantRoute) {
+        for (UpdatePlan.DiffStep step : plan.steps()) {
+            if (!step.recheck()) {
+                continue;
+            }
+            RECHECKED.incrementAndGet();
+            DifferenceModelSet one = new DifferenceModelSet(List.of(fetched.byId().get(step.model().id())));
+            CgmesDiffImport.Decision decision = FastRouteCapabilities.check(one);
+            if (decision.route() == CgmesDiffImport.Route.FAST && variantRoute) {
+                decision = FastRouteCapabilities.checkVariantSafe(one);
+            }
+            if (decision.route() == CgmesDiffImport.Route.SLOW_REQUIRED) {
+                String why = "difference " + step.model().id() + " of snapshot " + step.snapshot()
+                        + " was written by capability version " + step.model().capabilities() + " and this reader ("
+                        + FastRouteCapabilities.version() + ") cannot apply it in place: ";
+                throw new CgmesDiffNotApplicableException(new CgmesDiffImport.Decision(decision.route(),
+                        decision.blocking().stream().map(blocking -> new CgmesDiffImport.BlockingStatement(
+                                blocking.subset(), blocking.statement(), why + blocking.reason())).toList()));
+            }
+        }
     }
 
     private static UpdateResult applySnapshotDifferences(Network network, RdfDbConnection db, SnapshotRef target,
@@ -1071,7 +1266,7 @@ public final class RdfDbNetworkLoader {
                 ? List.of("the chain since the last full snapshot is longer than " + options.getCheckpointAfter()
                         + " differences; consider Checkpoint.create")
                 : List.of();
-        RdfDbReports.updateRouteReport(rn, scenario, UpdateResult.Route.DIFF_APPLIED, plan.chainLength(), reasons);
+        RdfDbReports.updateRouteReport(rn, target.toString(), UpdateResult.Route.DIFF_APPLIED, plan.chainLength(), reasons);
         LOGGER.info("Updated network {} to snapshot {} by applying {} difference(s): {}", network.getId(),
                 plan.to(), plan.chainLength(), statistics.summary());
         return new UpdateResult(UpdateResult.Route.DIFF_APPLIED, network, applied.appliedModelIds(), reasons,
@@ -1085,11 +1280,11 @@ public final class RdfDbNetworkLoader {
      * be undone are inverted here and the composed result is applied forwards like any other difference.</p>
      */
     private static List<DifferenceModel> composable(List<UpdatePlan.DiffStep> path,
-                                                    Map<String, DifferenceModel> byId, boolean mixed) {
+                                                    Map<String, DifferenceModel> byId, boolean turnUpward) {
         return path.stream()
                 .map(step -> {
                     DifferenceModel model = byId.get(step.model().id());
-                    return mixed && step.inverted() ? model.inverted(step.model().toHeader()) : model;
+                    return turnUpward && step.inverted() ? model.inverted(step.model().toHeader()) : model;
                 })
                 .toList();
     }
@@ -1159,7 +1354,7 @@ public final class RdfDbNetworkLoader {
      * @return the model identifiers
      */
     static Set<String> endModelIds(UpdatePlan plan) {
-        Set<CgmesSubset> touched = plan.stepsBySubset().keySet();
+        Set<String> touched = plan.stepsBySubset().keySet();
         Set<String> needed = new LinkedHashSet<>();
         plan.stepsBySubset().forEach((subset, steps) -> {
             needed.add(steps.get(0).model().id());
@@ -1218,15 +1413,15 @@ public final class RdfDbNetworkLoader {
                                                   ReportNode rn, Duration planning) {
         String scenario = target.scenario();
         if (!options.isAllowFullReload()) {
-            return terminal(rn, scenario, UpdateResult.Route.FULL_REQUIRED, network, plan.reasons(), planning,
+            return terminal(rn, target.toString(), UpdateResult.Route.FULL_REQUIRED, network, plan.reasons(), planning,
                     Duration.ZERO);
         }
         long applyStart = System.nanoTime();
         LoadResult replacement =
-                materialize(db, target, options.getNetworkFactory(), params, rn);
+                materialize(db, target, Set.of(), options.getNetworkFactory(), params, rn);
         Duration apply = Duration.ofNanos(System.nanoTime() - applyStart);
-        return terminal(rn, scenario, UpdateResult.Route.FULL_RELOAD, replacement.network(), plan.reasons(), planning,
-                apply);
+        return terminal(rn, target.toString(), UpdateResult.Route.FULL_RELOAD, replacement.network(), plan.reasons(),
+                planning, apply);
     }
 
     private static void recordSnapshotIdentity(Network network, RdfDbConnection db, String scenario,
@@ -1235,9 +1430,9 @@ public final class RdfDbNetworkLoader {
         // forward that model is the last step of that profile; walking backwards it is an ancestor the path
         // undid its way to, which is not among the steps and is then read in one request
         Map<String, StoredModel> stepModels = new LinkedHashMap<>();
-        Set<CgmesSubset> touched = plan.stepsBySubset().keySet();
+        Set<String> touched = plan.stepsBySubset().keySet();
         plan.steps().forEach(step -> stepModels.put(step.model().id(), step.model()));
-        Map<CgmesSubset, StoredModel> ends = new EnumMap<>(CgmesSubset.class);
+        Map<String, StoredModel> ends = Profiles.map();
         plan.targetState().forEach((subset, id) -> {
             if (!touched.contains(subset)) {
                 return;

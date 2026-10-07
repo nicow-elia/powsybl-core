@@ -8,14 +8,12 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.iidm.network.Network;
 import org.eclipse.rdf4j.model.Value;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -34,10 +32,11 @@ import static com.powsybl.cgmes.rdfdb.SnapshotRows.text;
  *
  * <h2>One round trip</h2>
  * <p>Both chains come back in a single request. A {@code UNION} binds the start of each side &mdash; the snapshot
- * the network is at, and the snapshot the caller asked for, resolved by {@code (timestep, version)} in the same
+ * the network is at, and the snapshot the caller asked for, resolved by its address in the same
  * query &mdash; and a {@code pdb:parent*} property path walks each of them up to the root. The client then finds
- * the lowest common ancestor, which on a chain that never branches is simply the deepest snapshot both sides
- * reached, and reads the path off the two chains.</p>
+ * the lowest common ancestor, which in a tree is simply the deepest snapshot both sides reached, and reads the path
+ * off the two chains. The tree is the versions of each timestamp, linear, and the timestamps pinned to any snapshot
+ * of another one; a walk from one timestamp to another goes up to their common pin and down again.</p>
  *
  * <p>The cost is bounded by the <em>depth</em> of the two snapshots, not by how much the scenario holds: a
  * database with a thousand snapshots, or with ten other scenarios next to this one, answers the same query in the
@@ -96,13 +95,13 @@ public final class VersionGraph {
      * @return the plan
      */
     public UpdatePlan plan(Network network, SnapshotRef target, RdfDbUpdateOptions options) {
-        catalog.check(target);
+        catalog.readable(target);
         RdfDbProvenance provenance = network.getExtension(RdfDbProvenance.class);
         if (provenance != null && !scenario.equals(provenance.scenario())) {
             return crossScenario(provenance.scenario());
         }
         String from = provenance == null ? null : provenance.snapshot().orElse(null);
-        Map<CgmesSubset, String> identity = from == null
+        Map<String, String> identity = from == null
                 ? NetworkIdentity.modelIds(network) : Map.of();
         return plan(from, identity, target, options);
     }
@@ -114,6 +113,18 @@ public final class VersionGraph {
     }
 
     /**
+     * A plan between two trees of one scenario: the same string arithmetic as across scenarios, since the snapshot
+     * IRI carries its modelling authority. The trees share only the boundary, so no difference leads from one to
+     * the other.
+     */
+    private UpdatePlan crossAuthority(String from, String networkAuthority, SnapshotRef target) {
+        return new UpdatePlan(UpdatePlan.Kind.FULL, from, null, List.of(),
+                List.of("network is at modelling authority '" + networkAuthority + "', target is '"
+                        + target.modellingAuthority() + "': diffs never cross modelling authorities"),
+                0, false, 0, Map.of());
+    }
+
+    /**
      * Plan the way to a target from a snapshot named by its IRI or by the models a network holds.
      *
      * @param fromSnapshotIri the IRI of the snapshot the network is at, or {@code null}
@@ -122,19 +133,26 @@ public final class VersionGraph {
      * @param options         how far the caller allows the plan to go
      * @return the plan
      */
-    public UpdatePlan plan(String fromSnapshotIri, Map<CgmesSubset, String> identity, SnapshotRef target,
+    public UpdatePlan plan(String fromSnapshotIri, Map<String, String> identity, SnapshotRef target,
                            RdfDbUpdateOptions options) {
-        catalog.check(target);
+        catalog.readable(target);
         RdfDbUpdateOptions effective = options == null ? new RdfDbUpdateOptions() : options;
         if (fromSnapshotIri != null && !scenario.equals(RdfDbNames.scenarioOf(fromSnapshotIri))) {
             return crossScenario(String.valueOf(RdfDbNames.scenarioOf(fromSnapshotIri)));
         }
+        SnapshotRef fromRef = fromSnapshotIri == null ? null : RdfDbNames.refOf(fromSnapshotIri);
+        if (fromRef != null && !fromRef.modellingAuthority().equals(target.modellingAuthority())) {
+            return crossAuthority(fromSnapshotIri, fromRef.modellingAuthority(), target);
+        }
+        catalog.checkSchema();
         String from = fromSnapshotIri;
         if (from == null && !identity.isEmpty()) {
             from = catalog.byState(identity).map(SnapshotInfo::iri).orElse(null);
         }
+        // A network at an archived snapshot is reloaded, not walked from: the differences of its chain may be gone
+        Optional<RdfDbException> archived = from == null ? Optional.empty() : catalog.archived(from);
         Map<String, Start> starts = new LinkedHashMap<>();
-        if (from != null) {
+        if (from != null && archived.isEmpty()) {
             starts.put(SIDE_A, new Start(from, null));
         }
         starts.put(SIDE_B, new Start(null, target));
@@ -142,15 +160,44 @@ public final class VersionGraph {
         List<SnapshotInfo> a = chains.bySide().getOrDefault(SIDE_A, List.of());
         List<SnapshotInfo> b = chains.bySide().get(SIDE_B);
         if (b.isEmpty()) {
-            throw new RdfDbException("scenario '" + scenario + "' holds no snapshot " + target);
+            throw catalog.noSuchSnapshot(target);
         }
         if (from != null && a.isEmpty()) {
-            return new UpdatePlan(UpdatePlan.Kind.FULL, from, b.get(0).iri(), List.of(),
-                    List.of("scenario '" + scenario + "' no longer holds the snapshot " + from), 0,
+            String reason = archived.map(Throwable::getMessage)
+                    .orElse("scenario '" + scenario + "' no longer holds the snapshot " + from);
+            return new UpdatePlan(UpdatePlan.Kind.FULL, from, b.get(0).iri(), List.of(), List.of(reason), 0,
                     checkpointRecommended(b, effective), distanceToFull(b), b.get(0).state());
         }
         // No start (FULL), the start is the target (NOOP) and the path itself are what path() answers
         return path(a, b, chains.diffs(), effective);
+    }
+
+    /**
+     * Plan the way between two snapshots named by their addresses, both resolved in the one request.
+     *
+     * @param from    the address of the snapshot to start at
+     * @param to      the address of the snapshot to reach
+     * @param options how long a chain the caller allows
+     * @return the plan; {@code FULL} without steps when the two are in different trees
+     * @throws RdfDbException if either address names another scenario or resolves to no snapshot
+     */
+    UpdatePlan plan(SnapshotRef from, SnapshotRef to, RdfDbUpdateOptions options) {
+        catalog.readable(from);
+        catalog.readable(to);
+        if (!from.modellingAuthority().equals(to.modellingAuthority())) {
+            return crossAuthority(null, from.modellingAuthority(), to);
+        }
+        catalog.checkSchema();
+        Map<String, Start> starts = new LinkedHashMap<>();
+        starts.put(SIDE_A, new Start(null, from));
+        starts.put(SIDE_B, new Start(null, to));
+        Chains chains = chains(starts);
+        List<SnapshotInfo> a = chains.bySide().get(SIDE_A);
+        List<SnapshotInfo> b = chains.bySide().get(SIDE_B);
+        if (a.isEmpty() || b.isEmpty()) {
+            throw catalog.noSuchSnapshot(a.isEmpty() ? from : to);
+        }
+        return path(a, b, chains.diffs(), options);
     }
 
     /**
@@ -164,10 +211,11 @@ public final class VersionGraph {
         if (!scenario.equals(RdfDbNames.scenarioOf(snapshotIri))) {
             throw new RdfDbException("snapshot " + snapshotIri + " does not belong to scenario '" + scenario + "'");
         }
+        catalog.checkSchema();
         Chains chains = chains(Map.of(SIDE_B, new Start(snapshotIri, null)));
         List<SnapshotInfo> chain = chains.bySide().get(SIDE_B);
         if (chain.isEmpty()) {
-            throw new RdfDbException("scenario '" + scenario + "' holds no snapshot " + snapshotIri);
+            throw catalog.noSuchSnapshot(snapshotIri);
         }
         return materialization(chain, chains.fullGraphs(), chains.diffs());
     }
@@ -179,9 +227,7 @@ public final class VersionGraph {
      * @return the plan
      */
     public MaterializationPlan materialization(SnapshotRef ref) {
-        SnapshotInfo info = catalog.find(ref)
-                .orElseThrow(() -> new RdfDbException("scenario '" + scenario + "' holds no snapshot " + ref));
-        return materialization(info.iri());
+        return materialization(catalog.require(ref).iri());
     }
 
     /**
@@ -194,9 +240,9 @@ public final class VersionGraph {
     MaterializationPlan materialization(List<SnapshotInfo> chain, Map<String, String> fullGraphs,
                                         Map<String, StoredModel> models) {
         SnapshotInfo target = chain.get(0);
-        Map<CgmesSubset, MaterializationPlan.FullSource> start = new EnumMap<>(CgmesSubset.class);
-        Map<CgmesSubset, Integer> startIndex = new EnumMap<>(CgmesSubset.class);
-        for (CgmesSubset subset : target.state().keySet()) {
+        Map<String, MaterializationPlan.FullSource> start = Profiles.map();
+        Map<String, Integer> startIndex = Profiles.map();
+        for (String subset : target.state().keySet()) {
             for (int i = 0; i < chain.size(); i++) {
                 String modelId = chain.get(i).fullModels().get(subset);
                 if (modelId != null) {
@@ -208,14 +254,14 @@ public final class VersionGraph {
             }
             if (!start.containsKey(subset)) {
                 throw new RdfDbException("no snapshot on the chain of " + target + " of scenario '" + scenario
-                        + "' holds a full " + subset.getIdentifier() + " model to start a materialisation from");
+                        + "' holds a full " + subset + " model to start a materialisation from");
             }
         }
         // Down the chain, oldest first, taking the difference members of each profile below its start snapshot
         List<Hop> steps = new ArrayList<>();
         for (int i = chain.size() - 1; i >= 0; i--) {
             SnapshotInfo snapshot = chain.get(i);
-            for (Map.Entry<CgmesSubset, Integer> entry : startIndex.entrySet()) {
+            for (Map.Entry<String, Integer> entry : startIndex.entrySet()) {
                 if (i >= entry.getValue()) {
                     continue;
                 }
@@ -231,8 +277,8 @@ public final class VersionGraph {
     /**
      * The path from one chain to another, read off two chains that were already queried.
      *
-     * <p>A lowest-common-ancestor walk on a chain that never branches: up from the first chain to the snapshot the
-     * two share, undoing each difference, then down to the second one applying each one forward. It sends nothing:
+     * <p>A lowest-common-ancestor walk on the tree of one modelling authority: up from the first chain to the deepest
+     * snapshot the two share, undoing each difference, then down to the second one applying each one forward. It sends nothing:
      * both chains and every model they name came out of one request, which is what lets a bulk load plan a whole
      * day from a single query.</p>
      *
@@ -245,7 +291,7 @@ public final class VersionGraph {
     UpdatePlan path(List<SnapshotInfo> from, List<SnapshotInfo> to, Map<String, StoredModel> models,
                     RdfDbUpdateOptions options) {
         SnapshotInfo b = to.get(0);
-        Map<CgmesSubset, String> targetState = b.state();
+        Map<String, String> targetState = b.state();
         if (from.isEmpty()) {
             return new UpdatePlan(UpdatePlan.Kind.FULL, null, b.iri(), List.of(),
                     List.of("the network is at no snapshot of scenario '" + scenario + "': it has to be rebuilt"),
@@ -258,9 +304,11 @@ public final class VersionGraph {
         Set<String> bChain = new LinkedHashSet<>(to.stream().map(SnapshotInfo::iri).toList());
         SnapshotInfo lca = from.stream().filter(info -> bChain.contains(info.iri())).findFirst().orElse(null);
         if (lca == null) {
+            String why = from.get(0).modellingAuthority().equals(b.modellingAuthority()) ? ""
+                    : ": diffs never cross modelling authorities";
             return new UpdatePlan(UpdatePlan.Kind.FULL, from.get(0).iri(), b.iri(), List.of(),
                     List.of("no common ancestor of " + from.get(0) + " and " + b + " in scenario '" + scenario
-                            + "'"), 0, checkpointRecommended(to, options), distanceToFull(to),
+                            + "'" + why), 0, checkpointRecommended(to, options), distanceToFull(to),
                     targetState);
         }
         List<Hop> steps = new ArrayList<>();
@@ -269,7 +317,7 @@ public final class VersionGraph {
             if (info.iri().equals(lca.iri())) {
                 break;
             }
-            info.members().forEach(id -> steps.add(new Hop(info.iri(), id, true)));
+            differences(info).forEach(id -> steps.add(new Hop(info.iri(), id, true)));
         }
         // Down to B, exclusive of the common ancestor, oldest first
         List<SnapshotInfo> down = new ArrayList<>();
@@ -280,7 +328,7 @@ public final class VersionGraph {
             down.add(info);
         }
         Collections.reverse(down);
-        down.forEach(info -> info.members()
+        down.forEach(info -> differences(info)
                 .forEach(id -> steps.add(new Hop(info.iri(), id, false))));
 
         List<UpdatePlan.DiffStep> resolved = resolve(steps, models);
@@ -301,7 +349,15 @@ public final class VersionGraph {
                 checkpointRecommended(to, options), distanceToFull(to), targetState);
     }
 
-    private static Optional<String> memberOf(SnapshotInfo snapshot, CgmesSubset subset) {
+    /**
+     * The members of a snapshot a walk applies: every one but a whole graph it stores, which is a custom profile's
+     * new state ({@link Profiles}) and never a step.
+     */
+    private static List<String> differences(SnapshotInfo snapshot) {
+        return snapshot.members().stream().filter(id -> !snapshot.fullModels().containsValue(id)).toList();
+    }
+
+    private static Optional<String> memberOf(SnapshotInfo snapshot, String subset) {
         String state = snapshot.state().get(subset);
         return state != null && snapshot.members().contains(state) ? Optional.of(state) : Optional.empty();
     }
@@ -320,12 +376,12 @@ public final class VersionGraph {
      * what made the plan query expensive.</p>
      */
     private StoredModel storedModel(String id, Map<String, Value> row) {
-        return new StoredModel(scenario, id, SnapshotRows.subsetOf(row.get("sub")), StoredModel.Kind.DIFF, null,
+        return new StoredModel(scenario, id, SnapshotRows.profileOf(row.get("sub")), StoredModel.Kind.DIFF, null,
                 text(row, "fwd"), text(row, "rev"), 1, null, null, null, null, List.of(), List.of(), List.of(),
                 row.get("mfast") != null && SnapshotRows.booleanOf(row.get("mfast")),
                 longOf(row.get("n"), -1L), text(row, "sbase"), text(row, "cim"),
                 (int) longOf(row.get("cdepth"), -1L),
-                row.get("vsafe") == null ? null : SnapshotRows.booleanOf(row.get("vsafe")));
+                row.get("vsafe") == null ? null : SnapshotRows.booleanOf(row.get("vsafe")), text(row, "cap"));
     }
 
     /**
@@ -385,7 +441,7 @@ public final class VersionGraph {
     /**
      * Walk the version graph up from many snapshots at once.
      *
-     * <p>A day of ninety-six timesteps is ninety-six chains, and asking for them one by one would be ninety-six
+     * <p>A day of ninety-six timestamps is ninety-six chains, and asking for them one by one would be ninety-six
      * round trips over a path walk that mostly reads the <em>same</em> ancestors. One request instead: a
      * {@code UNION} binds the start of every side, one branch returns which snapshots each side reached, and a
      * second branch returns the detail rows of each reached snapshot <em>once</em>, through a
@@ -400,6 +456,15 @@ public final class VersionGraph {
      * @return the chains
      */
     Chains chains(Map<String, Start> starts) {
+        Chains chains = chainsOnce(starts);
+        // A named start is resolved from the cached registry at one revision: a side it found nothing for is asked
+        // again once, when the registry changed meanwhile
+        boolean namedMiss = starts.entrySet().stream().anyMatch(e -> e.getValue().snapshotIri() == null
+                && SnapshotCatalog.isNamed(e.getValue().ref()) && chains.bySide().get(e.getKey()).isEmpty());
+        return namedMiss && catalog.registry().changedAfterMiss() ? chainsOnce(starts) : chains;
+    }
+
+    private Chains chainsOnce(Map<String, Start> starts) {
         Objects.requireNonNull(starts);
         if (starts.isEmpty()) {
             return new Chains(Map.of(), Map.of(), Map.of());
@@ -414,10 +479,13 @@ public final class VersionGraph {
         }
         String starting = startPattern.toString();
 
+        // The membership branch needs no rdf:type on ?snap: pdb:parent only links snapshots, and a member the detail
+        // branch does not describe is dropped below. The type made the in-process engine join it first and
+        // evaluate the start of every side once per snapshot of the scenario
         String query = RdfDbVocabulary.PREFIXES
-                + "SELECT ?side ?snap ?p ?o ?sub ?graph ?fwd ?rev ?mfast ?vsafe ?n ?sbase ?cim ?cdepth"
+                + "SELECT ?side ?snap ?p ?o ?sub ?graph ?fwd ?rev ?mfast ?vsafe ?cap ?n ?sbase ?cim ?cdepth ?rank"
                 + " WHERE { GRAPH " + SparqlText.iri(metaGraph) + " {"
-                + " {" + starting + " ?start pdb:parent* ?snap . ?snap a pdb:Snapshot }"
+                + " {" + starting + " ?start pdb:parent* ?snap }"
                 + " UNION"
                 + " { { SELECT DISTINCT ?snap WHERE {" + starting + " ?start pdb:parent* ?snap } }"
                 + "   ?snap a pdb:Snapshot ; ?p ?o "
@@ -426,7 +494,7 @@ public final class VersionGraph {
                 + "     OPTIONAL { ?o pdb:forwardGraph ?fwd ; pdb:reverseGraph ?rev ;"
                 + "       pdb:fastPredicatesOnly ?mfast ; pdb:subjectBase ?sbase ; pdb:cimNamespace ?cim ;"
                 + "       pdb:chainDepth ?cdepth . OPTIONAL { ?o pdb:tripleCount ?n }"
-                + "       OPTIONAL { ?o pdb:variantSafe ?vsafe } } } } } }";
+                + "       OPTIONAL { ?o pdb:variantSafe ?vsafe } OPTIONAL { ?o pdb:capabilities ?cap } } }" + SnapshotRows.RANK_CLAUSE + "} } }";
 
         List<Map<String, Value>> rows = connection.sparql(scenario).select(query);
         List<Map<String, Value>> detailRows = new ArrayList<>();
@@ -476,11 +544,6 @@ public final class VersionGraph {
         if (start.snapshotIri() != null) {
             return "BIND(" + SparqlText.iri(start.snapshotIri()) + " AS ?start)";
         }
-        SnapshotRef ref = start.ref();
-        String timestep = ref.timestep() == null ? catalog.baseTimestep() : ref.timestep();
-        return "?start a pdb:Snapshot ; pdb:timestep " + SparqlText.str(timestep)
-                + (ref.version() == null
-                        ? " . FILTER NOT EXISTS { ?c pdb:parent ?start ; pdb:edge pdb:VersionEdge }"
-                        : " ; pdb:version " + SparqlText.str(ref.version()));
+        return catalog.addressPattern("?start", catalog.readable(start.ref()));
     }
 }

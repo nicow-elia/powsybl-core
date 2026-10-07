@@ -8,7 +8,6 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -34,8 +33,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DiffUpdatePlannerTest {
 
     private static final String S = "2016-01-01";
-    private static final CgmesSubset SSH = CgmesSubset.STEADY_STATE_HYPOTHESIS;
-    private static final CgmesSubset EQ = CgmesSubset.EQUIPMENT;
+    private static final String SSH = Profiles.SSH;
+    private static final String EQ = Profiles.EQ;
 
     // ------------------------------------------------------------------ nothing to do
 
@@ -188,8 +187,8 @@ class DiffUpdatePlannerTest {
      * A chain of {@code diffs} differences on top of a full model, head first, exactly as
      * {@link ModelCatalog#chainsDown} answers it.
      */
-    private static List<StoredModel> chain(CgmesSubset subset, int diffs, boolean fast) {
-        String prefix = subset.getIdentifier() + "-";
+    private static List<StoredModel> chain(String subset, int diffs, boolean fast) {
+        String prefix = subset + "-";
         List<StoredModel> chain = new ArrayList<>();
         for (int depth = diffs; depth >= 1; depth--) {
             chain.add(new StoredModel(S, prefix + depth, subset, StoredModel.Kind.DIFF, null,
@@ -197,11 +196,11 @@ class DiffUpdatePlannerTest {
                     "http://powsybl.org/rdfdb/s/graph/" + prefix + depth + "/reverse",
                     depth + 1, null, null, null, null, List.of(), List.of(),
                     List.of(depth == 1 ? prefix + "full" : prefix + (depth - 1)), fast, 10L,
-                    "http://x/#", "http://iec.ch/TC57/2013/CIM-schema-cim16#", depth, null));
+                    "http://x/#", "http://iec.ch/TC57/2013/CIM-schema-cim16#", depth, null, null));
         }
         chain.add(new StoredModel(S, prefix + "full", subset, StoredModel.Kind.FULL, "contexts:s/" + prefix + ".xml",
                 null, null, 1, null, null, null, null, List.of(), List.of(), List.of(), false, 1000L,
-                "http://x/#", "http://iec.ch/TC57/2013/CIM-schema-cim16#", 0, null));
+                "http://x/#", "http://iec.ch/TC57/2013/CIM-schema-cim16#", 0, null, null));
         return List.copyOf(chain);
     }
 
@@ -211,6 +210,6 @@ class DiffUpdatePlannerTest {
                 model.forwardGraph(), model.reverseGraph(), model.version(), model.description(),
                 model.scenarioTime(), model.created(), model.modelingAuthoritySet(), model.profiles(),
                 model.dependentOn(), model.supersedes(), false, model.tripleCount(), model.subjectBase(),
-                model.cimNamespace(), model.chainDepth(), null);
+                model.cimNamespace(), model.chainDepth(), null, model.capabilities());
     }
 }

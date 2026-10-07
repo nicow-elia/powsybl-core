@@ -8,6 +8,7 @@
 
 package com.powsybl.cgmes.rdfdb;
 
+import com.powsybl.cgmes.conversion.diff.FastRouteCapabilities;
 import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Load;
@@ -18,14 +19,19 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static com.powsybl.cgmes.rdfdb.Backends.BE;
+import static com.powsybl.cgmes.rdfdb.Backends.NL;
 import static com.powsybl.cgmes.rdfdb.Backends.microGridBe;
+import static com.powsybl.cgmes.rdfdb.Backends.microGridNl;
 import static com.powsybl.cgmes.rdfdb.Backends.params;
+import static com.powsybl.cgmes.rdfdb.Backends.ref;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -50,7 +56,8 @@ class RdfDbVariantFlowTest {
 
     private static final String S = "2016-01-01";
     private static final String OTHER = "other";
-    private static final String BASE_TIMESTEP = "2014-06-01T10:30:00Z";
+    private static final Instant BASE_TIMESTAMP = Instant.parse("2014-06-01T10:30:00Z");
+    private static final Instant T11 = Instant.parse("2014-06-01T11:00:00Z");
 
     /** The identity of a network is its own assertion, so it is kept out of the network comparison. */
     private static final Set<String> IDENTITY = Set.of("cgmesMetadataModels", "rdfDbProvenance");
@@ -59,18 +66,19 @@ class RdfDbVariantFlowTest {
         RdfDbConnection db = RdfDbConnection.open(Backends.database(backend, "variant-flow"));
         db.clear(S);
         db.clear(OTHER);
-        db.snapshots(S).putFull(microGridBe(), null, SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
+        db.snapshots(S).putFull(microGridBe(), null, ref(S, 1), null, params(), ReportNode.NO_OP);
         return db;
     }
 
-    private static Network load(RdfDbConnection db, String scenario, String version, String timestep) {
-        return RdfDbNetworkLoader.load(db, scenario, version, timestep, null, params(), ReportNode.NO_OP);
+    private static Network load(RdfDbConnection db, String scenario, Integer version, Instant timestamp) {
+        return RdfDbNetworkLoader.load(db, SnapshotRef.of(scenario, BE, timestamp, version == null ? null : version.toString()), null, params(),
+                ReportNode.NO_OP);
     }
 
-    private static UpdateResult bring(Network network, RdfDbConnection db, String version, String timestep,
+    private static UpdateResult bring(Network network, RdfDbConnection db, Integer version, Instant timestamp,
                                       String variant) {
-        return RdfDbNetworkLoader.update(network, db, S, version, timestep, variant, params(),
-                ReportNode.NO_OP);
+        return RdfDbNetworkLoader.update(network, db, SnapshotRef.of(S, BE, timestamp, version == null ? null : version.toString()),
+                new RdfDbUpdateOptions().setTargetVariant(variant), params(), ReportNode.NO_OP);
     }
 
     /** How many {@code pdb:variantSafe} flags the metadata graph of the scenario holds. */
@@ -104,12 +112,12 @@ class RdfDbVariantFlowTest {
         }
     }
 
-    /** A scenario with versions 1.0, 1.1 and 1.2 of the base timestep, each one load step apart. */
+    /** A scenario with versions 1.0, 1.1 and 1.2 of the base timestamp, each one load step apart. */
     private static RdfDbConnection threeVersions(String backend) {
         RdfDbConnection db = rootOnly(backend);
-        Network sender = load(db, S, "1.0", null);
-        Changes.export(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 11.0));
-        Changes.export(sender, db, SnapshotRef.of(S, "1.2"), n -> Changes.moveLoad(n, 13.0));
+        Network sender = load(db, S, 1, null);
+        Changes.export(sender, db, ref(S, 2), n -> Changes.moveLoad(n, 11.0));
+        Changes.export(sender, db, ref(S, 3), n -> Changes.moveLoad(n, 13.0));
         return db;
     }
 
@@ -119,12 +127,12 @@ class RdfDbVariantFlowTest {
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void applyOnVariantLeavesOthersByteIdentical(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
-            Network network = load(db, S, "1.0", null);
-            UpdateResult a = bring(network, db, "1.1", null, "A");
+            Network network = load(db, S, 1, null);
+            UpdateResult a = bring(network, db, 2, null, "A");
             assertThat(a.route()).isEqualTo(UpdateResult.Route.DIFF_APPLIED);
 
             Map<String, String> before = xiidmPerVariant(network);
-            UpdateResult b = bring(network, db, "1.2", null, "B");
+            UpdateResult b = bring(network, db, 3, null, "B");
             assertThat(b.route()).isEqualTo(UpdateResult.Route.DIFF_APPLIED);
             assertThat(b.variantId()).isEqualTo("B");
             Map<String, String> after = xiidmPerVariant(network);
@@ -144,12 +152,12 @@ class RdfDbVariantFlowTest {
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void everyVariantEqualsASeparateLoad(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
-            Network network = load(db, S, "1.0", null);
-            bring(network, db, "1.1", null, "A");
-            bring(network, db, "1.2", null, "B");
+            Network network = load(db, S, 1, null);
+            bring(network, db, 2, null, "A");
+            bring(network, db, 3, null, "B");
 
-            for (String version : List.of("1.1", "1.2")) {
-                String variant = "1.1".equals(version) ? "A" : "B";
+            for (int version : List.of(2, 3)) {
+                String variant = version == 2 ? "A" : "B";
                 Network separate = load(db, S, version, null);
                 network.getVariantManager().setWorkingVariant(variant);
                 try {
@@ -169,22 +177,22 @@ class RdfDbVariantFlowTest {
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void createOrUpdateSemantics(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
-            Network network = load(db, S, "1.0", null);
-            assertThat(bring(network, db, "1.1", null, "A").route())
+            Network network = load(db, S, 1, null);
+            assertThat(bring(network, db, 2, null, "A").route())
                     .isEqualTo(UpdateResult.Route.DIFF_APPLIED);
             assertThat(network.getVariantManager().getVariantIds()).contains("A");
             double atOneOne = loadP0(network, "A");
 
             // Present: the variant is moved, not created again
-            assertThat(bring(network, db, "1.2", null, "A").route())
+            assertThat(bring(network, db, 3, null, "A").route())
                     .isEqualTo(UpdateResult.Route.DIFF_APPLIED);
             assertThat(loadP0(network, "A")).isNotEqualTo(atOneOne);
-            assertThat(db.snapshots(S).find(SnapshotRef.of(S, "1.2")).orElseThrow().iri())
+            assertThat(db.snapshots(S).find(ref(S, 3)).orElseThrow().iri())
                     .isEqualTo(network.getExtension(RdfDbProvenance.class).variantBinding("A")
                             .orElseThrow().snapshotIri());
 
             // Already there: nothing to do
-            UpdateResult again = bring(network, db, "1.2", null, "A");
+            UpdateResult again = bring(network, db, 3, null, "A");
             assertThat(again.route()).isEqualTo(UpdateResult.Route.NOOP);
             assertThat(again.variantId()).isEqualTo("A");
         }
@@ -195,11 +203,11 @@ class RdfDbVariantFlowTest {
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void newVariantIsClonedFromTheNearestBoundVariant(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
-            Network network = load(db, S, "1.0", null);
-            bring(network, db, "1.1", null, "A");
+            Network network = load(db, S, 1, null);
+            bring(network, db, 2, null, "A");
 
             // 1.2 is one difference from 1.1 and two from the primary at 1.0
-            UpdateResult result = bring(network, db, "1.2", null, "B");
+            UpdateResult result = bring(network, db, 3, null, "B");
             assertThat(result.route()).isEqualTo(UpdateResult.Route.DIFF_APPLIED);
             assertThat(result.diffCount()).isEqualTo(1);
             assertThat(network.getExtension(RdfDbProvenance.class).variantBinding("B").orElseThrow()
@@ -212,13 +220,13 @@ class RdfDbVariantFlowTest {
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void backwardsOnAVariant(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
-            Network network = load(db, S, "1.0", null);
-            bring(network, db, "1.2", null, "A");
+            Network network = load(db, S, 1, null);
+            bring(network, db, 3, null, "A");
             Map<String, String> before = xiidmPerVariant(network);
 
-            UpdateResult back = bring(network, db, "1.1", null, "A");
+            UpdateResult back = bring(network, db, 2, null, "A");
             assertThat(back.route()).isEqualTo(UpdateResult.Route.DIFF_APPLIED);
-            Network separate = load(db, S, "1.1", null);
+            Network separate = load(db, S, 2, null);
             network.getVariantManager().setWorkingVariant("A");
             try {
                 Networks.assertSameNetworkIgnoringStateVariables(separate, network, IDENTITY,
@@ -237,15 +245,15 @@ class RdfDbVariantFlowTest {
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void equipmentDifferenceIsRefused(String backend) {
         try (RdfDbConnection db = rootOnly(backend)) {
-            Network sender = load(db, S, "1.0", null);
+            Network sender = load(db, S, 1, null);
             String line = sender.getLineStream().map(l -> l.getId()).sorted().findFirst().orElseThrow();
-            Changes.export(sender, db, SnapshotRef.of(S, "1.1"),
+            Changes.export(sender, db, ref(S, 2),
                 n -> n.getLine(line).setR(n.getLine(line).getR() + 1.0));
 
-            Network network = load(db, S, "1.0", null);
+            Network network = load(db, S, 1, null);
             Map<String, String> before = xiidmPerVariant(network);
 
-            UpdateResult result = bring(network, db, "1.1", null, "A");
+            UpdateResult result = bring(network, db, 2, null, "A");
 
             assertThat(result.route()).isEqualTo(UpdateResult.Route.VARIANT_REFUSED);
             assertThat(result.network()).isSameAs(network);
@@ -265,13 +273,13 @@ class RdfDbVariantFlowTest {
     void eqDriftIsRefused(String backend) {
         try (RdfDbConnection db = rootOnly(backend)) {
             // A renamed line is an equipment change no in-place update can apply at all
-            db.snapshots(S).putAsDiff(TimestepFixtures.eqDrift(1, "2014-06-01T11:00:00Z", "drift"), null,
-                    new SnapshotRef(S, "1.0", "2014-06-01T11:00:00Z"), params(), ReportNode.NO_OP);
+            db.snapshots(S).putAsDiff(TimestampFixtures.eqDrift(1, T11, "drift"), null, ref(S, 1, T11), null,
+                    params(), ReportNode.NO_OP);
 
-            Network network = load(db, S, "1.0", null);
+            Network network = load(db, S, 1, null);
             Map<String, String> before = xiidmPerVariant(network);
 
-            UpdateResult result = bring(network, db, "1.0", "2014-06-01T11:00:00Z", "A");
+            UpdateResult result = bring(network, db, 1, T11, "A");
 
             assertThat(result.route()).isEqualTo(UpdateResult.Route.VARIANT_REFUSED);
             assertThat(result.reasons()).isNotEmpty();
@@ -285,15 +293,15 @@ class RdfDbVariantFlowTest {
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void separateNetworkFallbackLeavesTheOriginalUntouched(String backend) {
         try (RdfDbConnection db = rootOnly(backend)) {
-            Network sender = load(db, S, "1.0", null);
+            Network sender = load(db, S, 1, null);
             String line = sender.getLineStream().map(l -> l.getId()).sorted().findFirst().orElseThrow();
-            Changes.export(sender, db, SnapshotRef.of(S, "1.1"),
+            Changes.export(sender, db, ref(S, 2),
                 n -> n.getLine(line).setR(n.getLine(line).getR() + 1.0));
 
-            Network network = load(db, S, "1.0", null);
+            Network network = load(db, S, 1, null);
             Map<String, String> before = xiidmPerVariant(network);
 
-            UpdateResult result = RdfDbNetworkLoader.update(network, db, SnapshotRef.of(S, "1.1"),
+            UpdateResult result = RdfDbNetworkLoader.update(network, db, ref(S, 2),
                     new RdfDbUpdateOptions().setTargetVariant("A")
                             .setVariantFallback(RdfDbUpdateOptions.VariantFallback.SEPARATE_NETWORK),
                     params(), ReportNode.NO_OP);
@@ -301,7 +309,7 @@ class RdfDbVariantFlowTest {
             assertThat(result.route()).isEqualTo(UpdateResult.Route.FULL_RELOAD);
             assertThat(result.network()).isNotSameAs(network);
             assertThat(result.reasons()).isNotEmpty();
-            Networks.assertSameNetwork(load(db, S, "1.1", null), result.network(), IDENTITY);
+            Networks.assertSameNetwork(load(db, S, 2, null), result.network(), IDENTITY);
             assertThat(network.getVariantManager().getVariantIds()).doesNotContain("A");
             assertThat(xiidmPerVariant(network)).isEqualTo(before);
         }
@@ -311,10 +319,10 @@ class RdfDbVariantFlowTest {
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void crossScenarioIsRefusedWithoutAQuery(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
-            db.snapshots(OTHER).putFull(microGridBe(), null, SnapshotRef.of(OTHER, "1.0"), params(), ReportNode.NO_OP);
-            Network network = load(db, OTHER, "1.0", null);
+            db.snapshots(OTHER).putFull(microGridBe(), null, ref(OTHER, 1), null, params(), ReportNode.NO_OP);
+            Network network = load(db, OTHER, 1, null);
 
-            UpdateResult result = RdfDbNetworkLoader.update(network, db, SnapshotRef.of(S, "1.1"),
+            UpdateResult result = RdfDbNetworkLoader.update(network, db, ref(S, 2),
                     new RdfDbUpdateOptions().setTargetVariant("A"), params(), ReportNode.NO_OP);
 
             assertThat(result.route()).isEqualTo(UpdateResult.Route.VARIANT_REFUSED);
@@ -333,16 +341,16 @@ class RdfDbVariantFlowTest {
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aClassicUpdateDropsTheBindingsOfTrackedClones(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
-            Network network = load(db, S, "1.0", null);
+            Network network = load(db, S, 1, null);
             network.getVariantManager().cloneVariant(VariantManagerConstants.INITIAL_VARIANT_ID, "c");
             assertThat(network.getExtension(RdfDbProvenance.class).variantBindings()).containsKey("c");
 
-            UpdateResult classic = RdfDbNetworkLoader.update(network, db, SnapshotRef.of(S, "1.1"),
+            UpdateResult classic = RdfDbNetworkLoader.update(network, db, ref(S, 2),
                     new RdfDbUpdateOptions(), params(), ReportNode.NO_OP);
             assertThat(classic.route()).isEqualTo(UpdateResult.Route.DIFF_APPLIED);
             assertThat(network.getExtension(RdfDbProvenance.class).variantBindings()).isEmpty();
 
-            assertThatThrownBy(() -> bring(network, db, "1.2", null, "c"))
+            assertThatThrownBy(() -> bring(network, db, 3, null, "c"))
                     .isInstanceOf(RdfDbException.class)
                     .hasMessageContaining("is not bound to a snapshot");
         }
@@ -355,8 +363,8 @@ class RdfDbVariantFlowTest {
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void overwritingThePrimaryMovesTheIdentityWithTheState(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
-            Network network = load(db, S, "1.0", null);
-            assertThat(bring(network, db, "1.1", null, "A").route())
+            Network network = load(db, S, 1, null);
+            assertThat(bring(network, db, 2, null, "A").route())
                     .isEqualTo(UpdateResult.Route.DIFF_APPLIED);
             double atOneOne = loadP0(network, "A");
             double atOneZero = loadP0(network, VariantManagerConstants.INITIAL_VARIANT_ID);
@@ -366,12 +374,12 @@ class RdfDbVariantFlowTest {
 
             RdfDbProvenance provenance = network.getExtension(RdfDbProvenance.class);
             assertThat(provenance.variantBinding(VariantManagerConstants.INITIAL_VARIANT_ID).orElseThrow()
-                    .version()).isEqualTo("1.1");
+                    .version()).isEqualTo("2");
             assertThat(provenance.variantBindings()).doesNotContainKey(
                     VariantManagerConstants.INITIAL_VARIANT_ID);
 
             // And the primary can be taken back to 1.0, which is a real step and not a NOOP
-            UpdateResult back = bring(network, db, "1.0", null,
+            UpdateResult back = bring(network, db, 1, null,
                     VariantManagerConstants.INITIAL_VARIANT_ID);
             assertThat(back.route()).isEqualTo(UpdateResult.Route.DIFF_APPLIED);
             assertThat(loadP0(network, VariantManagerConstants.INITIAL_VARIANT_ID)).isEqualTo(atOneZero);
@@ -388,29 +396,29 @@ class RdfDbVariantFlowTest {
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void variantModeStaysOnAfterARefusalAndAfterRemovingEveryVariant(String backend) {
         try (RdfDbConnection db = rootOnly(backend)) {
-            Network sender = load(db, S, "1.0", null);
-            Changes.export(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 11.0));
+            Network sender = load(db, S, 1, null);
+            Changes.export(sender, db, ref(S, 2), n -> Changes.moveLoad(n, 11.0));
             String line = sender.getLineStream().map(l -> l.getId()).sorted().findFirst().orElseThrow();
-            Changes.export(sender, db, SnapshotRef.of(S, "1.2"),
+            Changes.export(sender, db, ref(S, 3),
                 n -> n.getLine(line).setR(n.getLine(line).getR() + 1.0));
 
             // (a) a refused first opt-in still switches the mode on
-            Network refusedFirst = load(db, S, "1.0", null);
-            assertThat(bring(refusedFirst, db, "1.2", null, "A").route())
+            Network refusedFirst = load(db, S, 1, null);
+            assertThat(bring(refusedFirst, db, 3, null, "A").route())
                     .isEqualTo(UpdateResult.Route.VARIANT_REFUSED);
             assertThat(refusedFirst.getVariantManager().getVariantIds())
                     .containsExactly(VariantManagerConstants.INITIAL_VARIANT_ID);
-            assertThat(RdfDbNetworkLoader.update(refusedFirst, db, SnapshotRef.of(S, "1.2"),
+            assertThat(RdfDbNetworkLoader.update(refusedFirst, db, ref(S, 3),
                     new RdfDbUpdateOptions(), params(), ReportNode.NO_OP).route())
                     .isEqualTo(UpdateResult.Route.VARIANT_REFUSED);
 
             // (b) removing every variant again does not switch it off
-            Network removed = load(db, S, "1.0", null);
-            assertThat(bring(removed, db, "1.1", null, "A").route())
+            Network removed = load(db, S, 1, null);
+            assertThat(bring(removed, db, 2, null, "A").route())
                     .isEqualTo(UpdateResult.Route.DIFF_APPLIED);
             removed.getVariantManager().removeVariant("A");
             assertThat(removed.getExtension(RdfDbProvenance.class).variantBindings()).isEmpty();
-            assertThat(RdfDbNetworkLoader.update(removed, db, SnapshotRef.of(S, "1.2"),
+            assertThat(RdfDbNetworkLoader.update(removed, db, ref(S, 3),
                     new RdfDbUpdateOptions(), params(), ReportNode.NO_OP).route())
                     .isEqualTo(UpdateResult.Route.VARIANT_REFUSED);
         }
@@ -421,16 +429,16 @@ class RdfDbVariantFlowTest {
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aRefusalOnAFileLoadedNetworkLeavesNoProvenance(String backend) {
         try (RdfDbConnection db = rootOnly(backend)) {
-            Network sender = load(db, S, "1.0", null);
+            Network sender = load(db, S, 1, null);
             String line = sender.getLineStream().map(l -> l.getId()).sorted().findFirst().orElseThrow();
-            Changes.export(sender, db, SnapshotRef.of(S, "1.1"),
+            Changes.export(sender, db, ref(S, 2),
                 n -> n.getLine(line).setR(n.getLine(line).getR() + 1.0));
 
             Network network = Network.read(microGridBe(), params());
             RdfDbProvenance before = network.getExtension(RdfDbProvenance.class);
             assertThat(before).isNull();
 
-            UpdateResult result = bring(network, db, "1.1", null, "A");
+            UpdateResult result = bring(network, db, 2, null, "A");
 
             assertThat(result.route()).isEqualTo(UpdateResult.Route.VARIANT_REFUSED);
             RdfDbProvenance after = network.getExtension(RdfDbProvenance.class);
@@ -439,36 +447,36 @@ class RdfDbVariantFlowTest {
         }
     }
 
-    /** F5: a variant created with an open address reports the version and the timestep it really reached. */
+    /** F5: a variant created with an open address reports the version and the timestamp it really reached. */
     @ParameterizedTest(name = "{0}")
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aBindingCarriesTheResolvedAddress(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
-            Network network = load(db, S, "1.0", null);
+            Network network = load(db, S, 1, null);
 
-            // version given, timestep left open (the base timestep of the scenario)
-            assertThat(bring(network, db, "1.1", null, "A").route())
+            // version given, timestamp left open (the base timestamp of the scenario)
+            assertThat(bring(network, db, 2, null, "A").route())
                     .isEqualTo(UpdateResult.Route.DIFF_APPLIED);
             VariantBinding a = network.getExtension(RdfDbProvenance.class).variantBinding("A").orElseThrow();
-            assertThat(a.version()).isEqualTo("1.1");
-            assertThat(a.timestep()).isEqualTo(BASE_TIMESTEP);
+            assertThat(a.version()).isEqualTo("2");
+            assertThat(a.timestamp()).isEqualTo(BASE_TIMESTAMP);
 
-            // both left open: the newest version of the base timestep
+            // both left open: the newest version of the base timestamp
             assertThat(bring(network, db, null, null, "B").route())
                     .isEqualTo(UpdateResult.Route.DIFF_APPLIED);
             VariantBinding b = network.getExtension(RdfDbProvenance.class).variantBinding("B").orElseThrow();
-            assertThat(b.version()).isEqualTo("1.2");
-            assertThat(b.timestep()).isEqualTo(BASE_TIMESTEP);
+            assertThat(b.version()).isEqualTo("3");
+            assertThat(b.timestamp()).isEqualTo(BASE_TIMESTAMP);
 
-            // ... which is exactly what the export needs to find the timestep to write into. B is at the head
-            // of that timestep, so its successor is the next version of it
+            // ... which is exactly what the export needs to find the timestamp to write into. B is at the head
+            // of that timestamp, so its successor is the next version of it
             network.getVariantManager().setWorkingVariant("B");
             List<NetworkEvent> events = Changes.record(network, n -> Changes.moveLoad(n, 5.0));
             network.getVariantManager().setWorkingVariant(VariantManagerConstants.INITIAL_VARIANT_ID);
             RdfDbExport.SnapshotResult written = RdfDbExport.exportVariant(network, events, db, "B", null,
                     new CgmesDiffExport.ExportOptions(), ReportNode.NO_OP);
-            assertThat(written.snapshot().timestep()).isEqualTo(BASE_TIMESTEP);
-            assertThat(written.snapshot().version()).isEqualTo("1.3");
+            assertThat(written.snapshot().timestamp()).isEqualTo(BASE_TIMESTAMP);
+            assertThat(written.snapshot().version()).isEqualTo("4");
         }
     }
 
@@ -484,26 +492,26 @@ class RdfDbVariantFlowTest {
     void isVariantModeAnswersWhoOptedIn(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
             // A plain load, and a clone the user made: bindings tracked, mode off
-            Network plain = load(db, S, "1.0", null);
+            Network plain = load(db, S, 1, null);
             assertThat(plain.getExtension(RdfDbProvenance.class).isVariantMode()).isFalse();
             plain.getVariantManager().cloneVariant(VariantManagerConstants.INITIAL_VARIANT_ID, "c");
             assertThat(plain.getExtension(RdfDbProvenance.class).variantBindings()).containsKey("c");
             assertThat(plain.getExtension(RdfDbProvenance.class).isVariantMode()).isFalse();
 
             // (1) an update that names a target variant
-            Network named = load(db, S, "1.0", null);
-            assertThat(bring(named, db, "1.1", null, "A").route()).isEqualTo(UpdateResult.Route.DIFF_APPLIED);
+            Network named = load(db, S, 1, null);
+            assertThat(bring(named, db, 2, null, "A").route()).isEqualTo(UpdateResult.Route.DIFF_APPLIED);
             assertThat(named.getExtension(RdfDbProvenance.class).isVariantMode()).isTrue();
 
             // (2) loadVariants
             Network day = RdfDbNetworkLoader.loadVariants(db, S, List.of(
-                    VariantRequest.of(SnapshotRef.of(S, "1.0")),
-                    VariantRequest.of(SnapshotRef.of(S, "1.1"))),
+                    VariantRequest.of(ref(S, 1)),
+                    VariantRequest.of(ref(S, 2))),
                     new RdfDbVariantLoadOptions(), null, params(), ReportNode.NO_OP).network();
             assertThat(day.getExtension(RdfDbProvenance.class).isVariantMode()).isTrue();
 
             // (3) a variant export. It writes the successor of the variant's own snapshot, so the network is
-            // loaded at the head of the timestep: a chain is linear, and 1.0 is no longer its head here
+            // loaded at the head of the timestamp: a chain is linear, and 1.0 is no longer its head here
             Network exporter = load(db, S, null, null);
             exporter.getVariantManager().cloneVariant(VariantManagerConstants.INITIAL_VARIANT_ID, "e");
             assertThat(exporter.getExtension(RdfDbProvenance.class).isVariantMode()).isFalse();
@@ -515,9 +523,9 @@ class RdfDbVariantFlowTest {
             assertThat(exporter.getExtension(RdfDbProvenance.class).isVariantMode()).isTrue();
 
             // ... and a refused first opt-in switches it on too, which is what makes the answer usable
-            db.snapshots(OTHER).putFull(microGridBe(), null, SnapshotRef.of(OTHER, "1.0"), params(), ReportNode.NO_OP);
-            Network refused = load(db, OTHER, "1.0", null);
-            assertThat(RdfDbNetworkLoader.update(refused, db, SnapshotRef.of(S, "1.1"),
+            db.snapshots(OTHER).putFull(microGridBe(), null, ref(OTHER, 1), null, params(), ReportNode.NO_OP);
+            Network refused = load(db, OTHER, 1, null);
+            assertThat(RdfDbNetworkLoader.update(refused, db, ref(S, 2),
                     new RdfDbUpdateOptions().setTargetVariant("A"), params(), ReportNode.NO_OP).route())
                     .isEqualTo(UpdateResult.Route.VARIANT_REFUSED);
             assertThat(refused.getExtension(RdfDbProvenance.class).isVariantMode()).isTrue();
@@ -536,17 +544,17 @@ class RdfDbVariantFlowTest {
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aCrossScenarioRefusalIsStillAnOptIn(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
-            db.snapshots(OTHER).putFull(microGridBe(), null, SnapshotRef.of(OTHER, "1.0"), params(), ReportNode.NO_OP);
-            Network network = load(db, OTHER, "1.0", null);
+            db.snapshots(OTHER).putFull(microGridBe(), null, ref(OTHER, 1), null, params(), ReportNode.NO_OP);
+            Network network = load(db, OTHER, 1, null);
             Map<String, String> before = xiidmPerVariant(network);
 
             // The first opt-in, refused without a query because the scenarios differ
-            UpdateResult first = RdfDbNetworkLoader.update(network, db, SnapshotRef.of(S, "1.1"),
+            UpdateResult first = RdfDbNetworkLoader.update(network, db, ref(S, 2),
                     new RdfDbUpdateOptions().setTargetVariant("A"), params(), ReportNode.NO_OP);
             assertThat(first.route()).isEqualTo(UpdateResult.Route.VARIANT_REFUSED);
 
             // The network is in variant mode now, so the classic update refuses too instead of rebuilding
-            UpdateResult classic = RdfDbNetworkLoader.update(network, db, SnapshotRef.of(S, "1.1"),
+            UpdateResult classic = RdfDbNetworkLoader.update(network, db, ref(S, 2),
                     new RdfDbUpdateOptions(), params(), ReportNode.NO_OP);
             assertThat(classic.route()).isEqualTo(UpdateResult.Route.VARIANT_REFUSED);
             assertThat(classic.isReplacement()).isFalse();
@@ -561,9 +569,9 @@ class RdfDbVariantFlowTest {
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void anOlderStoreWithoutTheFlagStillRefusesAtApply(String backend) {
         try (RdfDbConnection db = rootOnly(backend)) {
-            Network sender = load(db, S, "1.0", null);
+            Network sender = load(db, S, 1, null);
             String line = sender.getLineStream().map(l -> l.getId()).sorted().findFirst().orElseThrow();
-            Changes.export(sender, db, SnapshotRef.of(S, "1.1"),
+            Changes.export(sender, db, ref(S, 2),
                 n -> n.getLine(line).setR(n.getLine(line).getR() + 1.0));
             // Make the store look like one written before the flag existed. The prefix has to be the real one:
             // a DELETE against a wrong namespace matches nothing and the test would pass on the plan-time path
@@ -573,10 +581,10 @@ class RdfDbVariantFlowTest {
                     + RdfDbNames.metaGraph(S) + "> { ?m pdb:variantSafe ?v } }");
             assertThat(variantSafeFlags(db)).as("the flags really have to be gone").isEqualTo(0L);
 
-            Network network = load(db, S, "1.0", null);
+            Network network = load(db, S, 1, null);
             Map<String, String> before = xiidmPerVariant(network);
 
-            UpdateResult result = bring(network, db, "1.1", null, "A");
+            UpdateResult result = bring(network, db, 2, null, "A");
 
             assertThat(result.route()).isEqualTo(UpdateResult.Route.VARIANT_REFUSED);
             // The network aware reason, which only the apply-time check can produce: the plan-time one names the
@@ -589,26 +597,62 @@ class RdfDbVariantFlowTest {
         }
     }
 
+    /**
+     * The twin of the older store: a newer writer's difference that claims variant safety is re-checked against
+     * this reader's table, and the variant is refused before the apply, naming both capability versions.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void aNewerWritersVariantSafetyIsRecheckedBeforeTheApply(String backend) {
+        try (RdfDbConnection db = rootOnly(backend)) {
+            Network sender = load(db, S, 1, null);
+            String line = sender.getLineStream().map(l -> l.getId()).sorted().findFirst().orElseThrow();
+            Changes.export(sender, db, ref(S, 2),
+                n -> n.getLine(line).setR(n.getLine(line).getR() + 1.0));
+            // A newer table that would call the impedance variant safe: both the flag and the version are its own
+            String meta = "<" + RdfDbNames.metaGraph(S) + ">";
+            String newer = "ffffffffffff/99.0.0";
+            db.sparql(S).update(RdfDbVocabulary.PREFIXES + "DELETE { GRAPH " + meta + " { ?m pdb:variantSafe ?v ;"
+                    + " pdb:capabilities ?c } } INSERT { GRAPH " + meta + " { ?m pdb:variantSafe true ;"
+                    + " pdb:capabilities \"" + newer + "\" } } WHERE { GRAPH " + meta + " { ?m pdb:variantSafe ?v ;"
+                    + " pdb:capabilities ?c } }");
+            assertThat(Backends.count(db, S, RdfDbNames.metaGraph(S), "?m pdb:variantSafe false")).isZero();
+
+            Network network = load(db, S, 1, null);
+            Map<String, String> before = xiidmPerVariant(network);
+
+            UpdateResult result = bring(network, db, 2, null, "A");
+
+            assertThat(result.route()).isEqualTo(UpdateResult.Route.VARIANT_REFUSED);
+            assertThat(String.join(" ", result.reasons()))
+                    .contains("was written by capability version " + newer)
+                    .contains("this reader (" + FastRouteCapabilities.version() + ")")
+                    .contains("branch impedances are not stored per variant");
+            assertThat(network.getVariantManager().getVariantIds()).doesNotContain("A");
+            assertThat(xiidmPerVariant(network)).isEqualTo(before);
+        }
+    }
+
     // ------------------------------------------------------------------ what a user may do to the variants
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void userRemovedVariantAndUserClonedVariant(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
-            Network network = load(db, S, "1.0", null);
-            bring(network, db, "1.1", null, "A");
+            Network network = load(db, S, 1, null);
+            bring(network, db, 2, null, "A");
 
             // A clone the user made is bound to the same snapshot, and can be updated from there
             network.getVariantManager().cloneVariant("A", "A-copy");
             assertThat(network.getExtension(RdfDbProvenance.class).variantBinding("A-copy").orElseThrow()
-                    .version()).isEqualTo("1.1");
-            assertThat(bring(network, db, "1.2", null, "A-copy").route())
+                    .version()).isEqualTo("2");
+            assertThat(bring(network, db, 3, null, "A-copy").route())
                     .isEqualTo(UpdateResult.Route.DIFF_APPLIED);
 
             // A removed variant is forgotten, and asking for it again creates it from scratch
             network.getVariantManager().removeVariant("A");
             assertThat(network.getExtension(RdfDbProvenance.class).variantBinding("A")).isEmpty();
-            assertThat(bring(network, db, "1.1", null, "A").route())
+            assertThat(bring(network, db, 2, null, "A").route())
                     .isEqualTo(UpdateResult.Route.DIFF_APPLIED);
         }
     }
@@ -620,10 +664,10 @@ class RdfDbVariantFlowTest {
             Network network = Network.read(microGridBe(), params());
             network.getVariantManager().cloneVariant(VariantManagerConstants.INITIAL_VARIANT_ID, "stray");
             // Bind another variant so that the network is in variant mode at all
-            RdfDbNetworkLoader.update(network, db, SnapshotRef.of(S, "1.1"),
+            RdfDbNetworkLoader.update(network, db, ref(S, 2),
                     new RdfDbUpdateOptions().setTargetVariant("A"), params(), ReportNode.NO_OP);
 
-            assertThatThrownBy(() -> bring(network, db, "1.2", null, "stray"))
+            assertThatThrownBy(() -> bring(network, db, 3, null, "stray"))
                     .isInstanceOf(RdfDbException.class)
                     .hasMessageContaining("is not bound to a snapshot");
         }
@@ -637,18 +681,18 @@ class RdfDbVariantFlowTest {
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void classicApiWithBoundVariantsIsAVariantOperation(String backend) {
         try (RdfDbConnection db = rootOnly(backend)) {
-            Network sender = load(db, S, "1.0", null);
-            Changes.export(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 11.0));
+            Network sender = load(db, S, 1, null);
+            Changes.export(sender, db, ref(S, 2), n -> Changes.moveLoad(n, 11.0));
             String line = sender.getLineStream().map(l -> l.getId()).sorted().findFirst().orElseThrow();
-            Changes.export(sender, db, SnapshotRef.of(S, "1.2"),
+            Changes.export(sender, db, ref(S, 3),
                 n -> n.getLine(line).setR(n.getLine(line).getR() + 1.0));
 
-            Network network = load(db, S, "1.0", null);
-            bring(network, db, "1.1", null, "A");
+            Network network = load(db, S, 1, null);
+            bring(network, db, 2, null, "A");
             Map<String, String> before = xiidmPerVariant(network);
 
             // No variant named: the working variant is the primary, and the equipment difference is refused
-            UpdateResult result = RdfDbNetworkLoader.update(network, db, SnapshotRef.of(S, "1.2"),
+            UpdateResult result = RdfDbNetworkLoader.update(network, db, ref(S, 3),
                     new RdfDbUpdateOptions(), params(), ReportNode.NO_OP);
 
             assertThat(result.route()).isEqualTo(UpdateResult.Route.VARIANT_REFUSED);
@@ -662,11 +706,11 @@ class RdfDbVariantFlowTest {
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void modelLevelEntryPointsAreRefusedInVariantMode(String backend) {
         try (RdfDbConnection db = threeVersions(backend)) {
-            Network network = load(db, S, "1.0", null);
-            bring(network, db, "1.1", null, "A");
+            Network network = load(db, S, 1, null);
+            bring(network, db, 2, null, "A");
 
             assertThatThrownBy(() -> RdfDbNetworkLoader.update(network, db, S,
-                    DiffTarget.models(Map.of(com.powsybl.cgmes.model.CgmesSubset.STEADY_STATE_HYPOTHESIS,
+                    DiffTarget.models(Map.of(Profiles.SSH,
                             "urn:uuid:whatever")), new RdfDbUpdateOptions(), params(), ReportNode.NO_OP))
                     .isInstanceOf(RdfDbException.class)
                     .hasMessageContaining("variant mode addresses snapshots");
@@ -686,19 +730,19 @@ class RdfDbVariantFlowTest {
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aUserCloneAloneDoesNotSwitchToVariantMode(String backend) {
         try (RdfDbConnection db = rootOnly(backend)) {
-            Network sender = load(db, S, "1.0", null);
+            Network sender = load(db, S, 1, null);
             String line = sender.getLineStream().map(l -> l.getId()).sorted().findFirst().orElseThrow();
-            Changes.export(sender, db, SnapshotRef.of(S, "1.1"),
+            Changes.export(sender, db, ref(S, 2),
                 n -> n.getLine(line).setR(n.getLine(line).getR() + 1.0));
 
-            Network network = load(db, S, "1.0", null);
+            Network network = load(db, S, 1, null);
             network.getVariantManager().cloneVariant(VariantManagerConstants.INITIAL_VARIANT_ID, "contingency-1");
             // The clone is tracked, so that a later opt-in knows it is there ...
             assertThat(network.getExtension(RdfDbProvenance.class).variantBindings())
                     .containsKey("contingency-1");
 
             // ... but the classic update still applies the equipment difference in place, as it always did
-            UpdateResult classic = RdfDbNetworkLoader.update(network, db, SnapshotRef.of(S, "1.1"),
+            UpdateResult classic = RdfDbNetworkLoader.update(network, db, ref(S, 2),
                     new RdfDbUpdateOptions(), params(), ReportNode.NO_OP);
             assertThat(classic.route()).isEqualTo(UpdateResult.Route.DIFF_APPLIED);
             assertThat(network.getLine(line).getR()).isEqualTo(sender.getLine(line).getR());
@@ -712,11 +756,11 @@ class RdfDbVariantFlowTest {
                     .doesNotContain("variant mode addresses snapshots");
 
             // Naming a variant is the opt-in, and it is sticky
-            Network second = load(db, S, "1.0", null);
+            Network second = load(db, S, 1, null);
             second.getVariantManager().cloneVariant(VariantManagerConstants.INITIAL_VARIANT_ID, "contingency-1");
-            assertThat(bring(second, db, "1.1", null, "A").route())
+            assertThat(bring(second, db, 2, null, "A").route())
                     .isEqualTo(UpdateResult.Route.VARIANT_REFUSED);
-            assertThat(RdfDbNetworkLoader.update(second, db, SnapshotRef.of(S, "1.1"),
+            assertThat(RdfDbNetworkLoader.update(second, db, ref(S, 2),
                     new RdfDbUpdateOptions(), params(), ReportNode.NO_OP).route())
                     .isEqualTo(UpdateResult.Route.VARIANT_REFUSED);
         }
@@ -727,18 +771,18 @@ class RdfDbVariantFlowTest {
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aUserCloneDoesNotChangeTheClassicExport(String backend) {
         try (RdfDbConnection db = rootOnly(backend)) {
-            Network sender = load(db, S, "1.0", null);
+            Network sender = load(db, S, 1, null);
             sender.getVariantManager().cloneVariant(VariantManagerConstants.INITIAL_VARIANT_ID, "contingency-1");
             String sshBefore = sender.getExtension(RdfDbProvenance.class).modelIds()
-                    .get(com.powsybl.cgmes.model.CgmesSubset.STEADY_STATE_HYPOTHESIS);
+                    .get(Profiles.SSH);
 
-            Changes.export(sender, db, SnapshotRef.of(S, "1.1"), n -> Changes.moveLoad(n, 9.0));
+            Changes.export(sender, db, ref(S, 2), n -> Changes.moveLoad(n, 9.0));
 
             // The primary advanced, exactly as it always did
             assertThat(sender.getExtension(RdfDbProvenance.class).modelIds()
-                    .get(com.powsybl.cgmes.model.CgmesSubset.STEADY_STATE_HYPOTHESIS))
+                    .get(Profiles.SSH))
                     .isNotEqualTo(sshBefore);
-            assertThat(db.snapshots(S).find(SnapshotRef.of(S, "1.1"))).isPresent();
+            assertThat(db.snapshots(S).find(ref(S, 2))).isPresent();
         }
     }
 
@@ -749,40 +793,81 @@ class RdfDbVariantFlowTest {
         try (RdfDbConnection db = threeVersions(backend)) {
             Network network = Network.read(microGridBe(), params());
 
-            UpdateResult result = RdfDbNetworkLoader.update(network, db, SnapshotRef.of(S, "1.1"),
+            UpdateResult result = RdfDbNetworkLoader.update(network, db, ref(S, 2),
                     new RdfDbUpdateOptions().setTargetVariant("A"), params(), ReportNode.NO_OP);
 
             assertThat(result.route()).isEqualTo(UpdateResult.Route.DIFF_APPLIED);
             RdfDbProvenance provenance = network.getExtension(RdfDbProvenance.class);
             assertThat(provenance.scenario()).isEqualTo(S);
-            assertThat(provenance.variantBinding("A").orElseThrow().version()).isEqualTo("1.1");
+            assertThat(provenance.variantBinding("A").orElseThrow().version()).isEqualTo("2");
             assertThat(provenance.variantBinding(VariantManagerConstants.INITIAL_VARIANT_ID).orElseThrow()
-                    .version()).isEqualTo("1.0");
+                    .version()).isEqualTo("1");
         }
     }
 
-    /** A timestep is an address like any other: a variant may stand for another moment of the day. */
+    /** A timestamp is an address like any other: a variant may stand for another moment of the day. */
     @ParameterizedTest(name = "{0}")
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
-    void aVariantMayStandForAnotherTimestep(String backend) {
+    void aVariantMayStandForAnotherTimestamp(String backend) {
         try (RdfDbConnection db = rootOnly(backend)) {
-            db.snapshots(S).putAsDiff(TimestepFixtures.ssh(2, "2014-06-01T11:00:00Z", "t11"), null,
-                    new SnapshotRef(S, "1.0", "2014-06-01T11:00:00Z"), params(), ReportNode.NO_OP);
+            db.snapshots(S).putAsDiff(TimestampFixtures.ssh(2, T11, "t11"), null,
+                    ref(S, 1, T11), null, params(), ReportNode.NO_OP);
 
-            Network network = load(db, S, "1.0", null);
+            Network network = load(db, S, 1, null);
             Map<String, String> before = xiidmPerVariant(network);
-            UpdateResult result = bring(network, db, "1.0", "2014-06-01T11:00:00Z", "T11");
+            UpdateResult result = bring(network, db, 1, T11, "T11");
 
             assertThat(result.route()).isEqualTo(UpdateResult.Route.DIFF_APPLIED);
             VariantBinding binding = network.getExtension(RdfDbProvenance.class)
                     .variantBinding("T11").orElseThrow();
-            assertThat(binding.timestep()).isEqualTo("2014-06-01T11:00:00Z");
+            assertThat(binding.timestamp()).isEqualTo(T11);
             assertThat(xiidmPerVariant(network).get(VariantManagerConstants.INITIAL_VARIANT_ID))
                     .isEqualTo(before.get(VariantManagerConstants.INITIAL_VARIANT_ID));
             Load load = network.getLoad(Changes.LOAD_ID);
             assertThat(load).isNotNull();
-            assertThat(BASE_TIMESTEP).isEqualTo(network.getExtension(RdfDbProvenance.class)
-                    .variantBinding(VariantManagerConstants.INITIAL_VARIANT_ID).orElseThrow().timestep());
+            assertThat(BASE_TIMESTAMP).isEqualTo(network.getExtension(RdfDbProvenance.class)
+                    .variantBinding(VariantManagerConstants.INITIAL_VARIANT_ID).orElseThrow().timestamp());
+        }
+    }
+
+    /**
+     * Two trees of one scenario share nothing but the boundary, so a variant of a BE network cannot stand for an NL
+     * snapshot: refused before any difference is fetched, with the reason naming both modelling authorities.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void aVariantNeverCrossesModellingAuthorities(String backend) {
+        try (RdfDbConnection db = rootOnly(backend)) {
+            db.snapshots(S).putFull(microGridNl(), null, SnapshotRef.latest(S, NL), null, params(),
+                    ReportNode.NO_OP);
+            Network network = load(db, S, 1, null);
+            Map<String, String> before = xiidmPerVariant(network);
+
+            UpdateResult result = RdfDbNetworkLoader.update(network, db, SnapshotRef.of(S, NL, BASE_TIMESTAMP, "1"),
+                    new RdfDbUpdateOptions().setTargetVariant("nl"), params(), ReportNode.NO_OP);
+
+            assertThat(result.route()).isEqualTo(UpdateResult.Route.VARIANT_REFUSED);
+            assertThat(result.reasons()).anyMatch(reason -> reason.contains("modelling authority '" + BE + "'")
+                    && reason.contains("'" + NL + "'"));
+            assertThat(network.getVariantManager().getVariantIds()).doesNotContain("nl");
+            assertThat(xiidmPerVariant(network)).isEqualTo(before);
+        }
+    }
+
+    /** Without a naming rule a bulk-loaded variant is named after the ISO instant of its timestamp. */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void aVariantIsNamedAfterItsInstantByDefault(String backend) {
+        try (RdfDbConnection db = rootOnly(backend)) {
+            db.snapshots(S).putAsDiff(TimestampFixtures.ssh(2, T11, "t11"), null, ref(S, 1, T11), null, params(),
+                    ReportNode.NO_OP);
+
+            VariantLoadResult loaded = RdfDbNetworkLoader.loadVariants(db, S,
+                    List.of(VariantRequest.of(ref(S, 1)), VariantRequest.of(ref(S, 1, T11))),
+                    new RdfDbVariantLoadOptions(), null, params(), ReportNode.NO_OP);
+
+            assertThat(loaded.bound()).extracting(VariantOutcome::variantId)
+                    .containsExactly("2014-06-01T10:30:00Z", "2014-06-01T11:00:00Z");
         }
     }
 }

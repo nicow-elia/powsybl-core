@@ -15,7 +15,7 @@
     <parent>
         <groupId>com.powsybl</groupId>
         <artifactId>powsybl-cgmes</artifactId>
-        <version>7.4.0-SNAPSHOT</version>
+        <version>7.5.0-SNAPSHOT</version>
     </parent>
 
     <artifactId>powsybl-cgmes-conversion</artifactId>
@@ -23,6 +23,22 @@
     <description>Conversion between CGMES and IIDM Network definitions</description>
 
     <build>
+        <resources>
+            <!-- The capability version names the core version: the one resource the build fills in -->
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+                <includes>
+                    <include>com/powsybl/cgmes/conversion/diff/capabilities.properties</include>
+                </includes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+                <excludes>
+                    <exclude>com/powsybl/cgmes/conversion/diff/capabilities.properties</exclude>
+                </excludes>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -33,6 +49,16 @@
                             <Automatic-Module-Name>com.powsybl.cgmes.conversion</Automatic-Module-Name>
                         </manifestEntries>
                     </archive>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <!-- Read by MappingCompletenessTest: the attributes the setters of iidm-impl notify -->
+                        <iidm.impl.sources>${project.basedir}/../../iidm/iidm-impl/src/main/java</iidm.impl.sources>
+                    </systemPropertyVariables>
                 </configuration>
             </plugin>
         </plugins>
@@ -103,6 +129,11 @@
         <dependency>
             <groupId>com.google.jimfs</groupId>
             <artifactId>jimfs</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>

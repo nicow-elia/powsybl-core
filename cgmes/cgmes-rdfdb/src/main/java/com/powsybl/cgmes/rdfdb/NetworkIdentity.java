@@ -15,7 +15,6 @@ import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.iidm.network.Network;
 
 import java.util.ArrayList;
-import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -55,7 +54,7 @@ final class NetworkIdentity {
      * @param network the network
      * @return the identifiers, profiles without a model absent
      */
-    static Map<CgmesSubset, String> modelIds(Network network) {
+    static Map<String, String> modelIds(Network network) {
         return modelIds(network, Set.of());
     }
 
@@ -67,17 +66,18 @@ final class NetworkIdentity {
      * @return the identifiers, profiles without a model absent
      * @throws RdfDbException if the network holds several models of one of those profiles
      */
-    static Map<CgmesSubset, String> modelIds(Network network, Set<CgmesSubset> subsets) {
-        Map<CgmesSubset, List<String>> all = new EnumMap<>(CgmesSubset.class);
+    static Map<String, String> modelIds(Network network, Set<String> subsets) {
+        Map<String, List<String>> all = Profiles.map();
         CgmesMetadataModels models = network.getExtension(CgmesMetadataModels.class);
         if (models != null) {
-            models.getModels().forEach(model -> all.computeIfAbsent(model.getSubset(), k -> new ArrayList<>())
-                    .add(model.getId()));
+            models.getModels().stream().filter(model -> model.getSubset() != CgmesSubset.UNKNOWN)
+                    .forEach(model -> all.computeIfAbsent(Profiles.of(model.getSubset()), k -> new ArrayList<>())
+                            .add(model.getId()));
         }
-        Map<CgmesSubset, String> ids = new EnumMap<>(CgmesSubset.class);
+        Map<String, String> ids = Profiles.map();
         all.forEach((subset, found) -> {
             if (found.size() > 1 && subsets.contains(subset)) {
-                throw new RdfDbException("The network holds " + found.size() + " " + subset.getIdentifier()
+                throw new RdfDbException("The network holds " + found.size() + " " + subset
                         + " models " + found.stream().sorted().toList() + ": a stored chain versions one model per"
                         + " profile, so a network describing several of them cannot be addressed by a difference."
                         + " Load the individual grid models into scenarios of their own");
@@ -92,9 +92,9 @@ final class NetworkIdentity {
      *
      * @param network the network to change
      * @param targets the stored model the network is at, per profile. Profiles that are not named keep the model
-     *                the network already holds
+     *                the network already holds; a custom profile is not one the extension can hold, and is skipped
      */
-    static void advance(Network network, Map<CgmesSubset, StoredModel> targets) {
+    static void advance(Network network, Map<String, StoredModel> targets) {
         if (targets.isEmpty()) {
             return;
         }
@@ -106,7 +106,8 @@ final class NetworkIdentity {
         // A difference header need not repeat what does not change. The profile list in particular is a property of
         // the model the difference applies on, and an extension model without one cannot even be built, so what the
         // network already said about that profile is kept where the stored node says nothing
-        targets.forEach((subset, model) -> entries.put(subset, Entry.of(model, entries.get(subset))));
+        targets.forEach((profile, model) -> Profiles.subset(profile)
+                .ifPresent(subset -> entries.put(subset, Entry.of(subset, model, entries.get(subset)))));
         install(network, List.copyOf(entries.values()));
     }
 
@@ -172,10 +173,11 @@ final class NetworkIdentity {
          * The entry a stored model becomes, falling back to what the network said about the same profile for the
          * values the stored node does not carry.
          *
+         * @param subset   the CGMES subset of the model's profile
          * @param previous the entry the network already held for that profile, or {@code null}
          */
-        static Entry of(StoredModel model, Entry previous) {
-            return new Entry(model.subset(), model.id(),
+        static Entry of(CgmesSubset subset, StoredModel model, Entry previous) {
+            return new Entry(subset, model.id(),
                     fallback(model.description(), previous == null ? null : previous.description),
                     model.version(),
                     fallback(model.modelingAuthoritySet(),

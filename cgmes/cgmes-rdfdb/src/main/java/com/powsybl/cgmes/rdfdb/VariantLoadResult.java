@@ -16,7 +16,7 @@ import java.util.List;
 /**
  * A whole day in one network, and where the time went.
  *
- * <p>The outcomes are the interesting half. A bulk load does not fail because one timestep of a day cannot be
+ * <p>The outcomes are the interesting half. A bulk load does not fail because one timestamp of a day cannot be
  * reached inside a variant &mdash; the other ninety-five are perfectly usable &mdash; so each request answers for
  * itself and the caller decides what to do with the refusals.</p>
  *

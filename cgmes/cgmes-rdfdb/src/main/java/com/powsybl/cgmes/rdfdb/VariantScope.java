@@ -83,7 +83,7 @@ final class VariantScope implements AutoCloseable {
                 throw new RdfDbException("variant '" + variantId + "' of network " + network.getId()
                         + " is not bound to a snapshot: it was created outside this package, or the variant it was"
                         + " cloned from was not bound either. Bind it with RdfDbNetworkLoader.update(network, db,"
-                        + " scenario, version, timestep, variant, ...) or RdfDbNetworkLoader.loadVariants");
+                        + " ref, options.setTargetVariant(variant), ...) or RdfDbNetworkLoader.loadVariants");
             }
             String previous = workingVariantOrNull(network);
             // A scope on the variant that is already swapped in changes nothing and restores nothing: the outer

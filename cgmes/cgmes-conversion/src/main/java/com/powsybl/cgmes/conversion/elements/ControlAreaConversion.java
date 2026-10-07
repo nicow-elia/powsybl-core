@@ -8,6 +8,7 @@
 package com.powsybl.cgmes.conversion.elements;
 
 import com.powsybl.cgmes.conversion.Context;
+import com.powsybl.cgmes.conversion.export.ControlAreaFamily;
 import com.powsybl.cgmes.model.CgmesNames;
 import com.powsybl.iidm.network.Area;
 import com.powsybl.triplestore.api.PropertyBag;
@@ -41,11 +42,8 @@ public class ControlAreaConversion extends AbstractIdentifiedObjectConversion {
     }
 
     public static void update(Area area, PropertyBag cgmesData, Context context) {
-        area.setInterchangeTarget(cgmesData.asDouble("netInterchange", getDefaultNetInterchange(area, context)));
-        if (cgmesData.containsKey(CgmesNames.P_TOLERANCE)) {
-            String pTolerance = cgmesData.get(CgmesNames.P_TOLERANCE);
-            area.setProperty(CgmesNames.P_TOLERANCE, pTolerance);
-        }
+        // The values are read through the family the export writes them from
+        ControlAreaFamily.apply(area, cgmesData, getDefaultNetInterchange(area, context));
     }
 
     private static double getDefaultNetInterchange(Area area, Context context) {

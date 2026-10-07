@@ -70,9 +70,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>Three network-level values are excluded from the comparison and documented as such: the case date, the
  * forecast distance and the {@code cgmesMetadataModels} extension. IIDM stores none of them per variant, and the
- * layer that binds a variant to a stored snapshot swaps them in and out around the update instead
- * ({@code VariantScope} in {@code cgmes-rdfdb}). Everything else &mdash; every setpoint, every switch, every tap
- * position, every limit, every impedance, every property of every identifiable &mdash; is compared exactly.</p>
+ * layer that binds a variant to a stored snapshot swaps them in and out around the update instead. Everything
+ * else &mdash; every setpoint, every switch, every tap position, every limit, every impedance, every property of
+ * every identifiable &mdash; is compared exactly.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
@@ -89,7 +89,8 @@ class VariantSafetyProbeTest {
      */
     private static final Set<String> REFUSED = Set.of(
             // Equipment values: impedances and the limits
-            "lineResistance", "lineAllImpedances", "seriesCompensatorReactance", "equivalentBranchImpedance",
+            "lineResistance", "lineAllImpedances", "seriesCompensatorReactance", "capacitiveSeriesCompensatorReactance",
+            "equivalentBranchImpedance",
             "boundaryLineImpedance", "voltageLevelLimitsWithoutVoltageLimitObjects", "cim16ThreeKindsOfLimits",
             "cim16EquipmentAttachedLimitBothSides", "cim16VoltageLimits", "mixedSshAndEq",
             // CGMES 3 limit values, which travel in the steady state hypothesis but still land on a shared field
@@ -98,12 +99,15 @@ class VariantSafetyProbeTest {
             "cim100VoltageLimitsMultiId", "cim100VoltageLimitSingleId", "wholeLimitsReplacedSameStructure",
             // The simplified DC model writes HvdcLine.maxP and the converter loss factor
             "hvdcActivePowerSetpoint", "hvdcActivePowerSetpointToZero", "hvdcConvertersMode", "lccPowerFactor",
-            "vscVoltageSetpoint", "vscReactivePowerSetpointAndRegulation",
+            "vscVoltageSetpoint", "vscReactivePowerSetpointAndRegulation", "vscLocalReactiveTargetInverter",
+            "vscLocalReactiveTargetRectifier",
             // A line commutated converter is refused whichever DC model is in use: the detailed one still writes
             // the power factor of the station, which is a plain field
             "detailedLccPowerFactor", "detailedConverterControlMode",
             // An extension the update would have to create
-            "generatorReferencePriority");
+            "generatorReferencePriority",
+            // The block of a control area carries its tolerance, which the update writes as an IIDM property
+            "controlAreaInterchangeTarget");
 
     /**
      * Refusals the table makes on family grounds although <em>this</em> change happens not to leak.
@@ -116,10 +120,13 @@ class VariantSafetyProbeTest {
      * right one; it is listed here so that it stays visible rather than being asserted away.</p>
      */
     private static final Set<String> CONSERVATIVELY_REFUSED = Set.of(
-            "vscVoltageSetpoint", "vscReactivePowerSetpointAndRegulation",
+            "vscVoltageSetpoint", "vscReactivePowerSetpointAndRegulation", "vscLocalReactiveTargetInverter",
+            "vscLocalReactiveTargetRectifier",
             // The same for a line commutated converter of the detailed model: only a difference that states the
             // power factor really writes the shared field, and the family is refused as a whole
-            "detailedConverterControlMode");
+            "detailedConverterControlMode",
+            // A change of the interchange target writes the whole ControlArea, its unchanged tolerance included
+            "controlAreaInterchangeTarget");
 
     static List<Scenario> scenarios() {
         return RecordedChangeScenarios.allChanges();
@@ -419,5 +426,47 @@ class VariantSafetyProbeTest {
         return new DifferenceModelSet(List.of(new DifferenceModel(
                 DifferenceModelHeader.builder("urn:uuid:control-area", CgmesSubset.STEADY_STATE_HYPOTHESIS,
                         CgmesNamespace.CIM_100_NAMESPACE).build(), forward, reverse, List.of())));
+    }
+
+    /**
+     * A variant that a refused variant-bound update leaves behind is removed, and the next clone takes its place in
+     * the variant arrays of IIDM. A voltage regulation changed in the removed variant must not reappear in that clone
+     * (review 21 M3, fixed in iidm-impl; round 2 r2-m6 asked for it on imported CGMES models, where the regulations of
+     * static var compensators and VSC converter stations come from the import).
+     */
+    @Test
+    void aRemovedVariantLeavesNoRegulationBehind() {
+        Network svcNetwork = ConversionUtil.readCgmesResources(new Properties(), "/update/static-var-compensator/",
+                new String[] {"staticVarCompensator_EQ.xml", "staticVarCompensator_SSH.xml"});
+        assertNothingLeaks(svcNetwork, network -> network.getStaticVarCompensator("StaticVarCompensator-V")
+                .getVoltageRegulation(), network -> network.getStaticVarCompensator("StaticVarCompensator-V")
+                .getVoltageRegulation().setRegulating(false).setTargetValue(Double.NaN));
+        Network hvdc = ConversionUtil.readCgmesResources(new Properties(), "/update/hvdc/",
+                new String[] {"hvdc_EQ.xml", "hvdc_SSH.xml"});
+        assertNothingLeaks(hvdc, network -> vscRegulation(network),
+            network -> vscRegulation(network).setRegulating(false));
+    }
+
+    private static com.powsybl.iidm.network.regulation.VoltageRegulation vscRegulation(Network network) {
+        return ((com.powsybl.iidm.network.VscConverterStation) network.getHvdcLine("DCLineSegment-Vsc")
+                .getConverterStation2()).getVoltageRegulation();
+    }
+
+    private static void assertNothingLeaks(Network network,
+                                           java.util.function.Function<Network, com.powsybl.iidm.network.regulation.VoltageRegulation> regulation,
+                                           java.util.function.Consumer<Network> change) {
+        var variants = network.getVariantManager();
+        boolean regulating = regulation.apply(network).isRegulating();
+        variants.cloneVariant(VariantManagerConstants.INITIAL_VARIANT_ID, "refused");
+        variants.setWorkingVariant("refused");
+        change.accept(network);
+        assertNotEquals(regulating, regulation.apply(network).isRegulating());
+        variants.setWorkingVariant(VariantManagerConstants.INITIAL_VARIANT_ID);
+        variants.removeVariant("refused");
+
+        variants.cloneVariant(VariantManagerConstants.INITIAL_VARIANT_ID, "next");
+        variants.setWorkingVariant("next");
+        assertEquals(regulating, regulation.apply(network).isRegulating());
+        variants.setWorkingVariant(VariantManagerConstants.INITIAL_VARIANT_ID);
     }
 }

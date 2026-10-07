@@ -9,6 +9,10 @@
         <md:Model.profile>http://iec.ch/TC57/ns/CIM/SteadyStateHypothesis-EU/3.0</md:Model.profile>
         <md:Model.modelingAuthoritySet>https://www.powsybl.org/</md:Model.modelingAuthoritySet>
         <dm:reverseDifferences rdf:parseType="Statements">
+            <rdf:Description rdf:about="#_StaticVarCompensator-V">
+                <cim:RegulatingCondEq.controlEnabled>true</cim:RegulatingCondEq.controlEnabled>
+                <cim:StaticVarCompensator.q>10</cim:StaticVarCompensator.q>
+            </rdf:Description>
             <rdf:Description rdf:about="#_StaticVarCompensator-V-RegulatingControl">
                 <cim:RegulatingControl.discrete>false</cim:RegulatingControl.discrete>
                 <cim:RegulatingControl.enabled>true</cim:RegulatingControl.enabled>
@@ -18,6 +22,10 @@
             </rdf:Description>
         </dm:reverseDifferences>
         <dm:forwardDifferences rdf:parseType="Statements">
+            <rdf:Description rdf:about="#_StaticVarCompensator-V">
+                <cim:RegulatingCondEq.controlEnabled>true</cim:RegulatingCondEq.controlEnabled>
+                <cim:StaticVarCompensator.q>50</cim:StaticVarCompensator.q>
+            </rdf:Description>
             <rdf:Description rdf:about="#_StaticVarCompensator-V-RegulatingControl">
                 <cim:RegulatingControl.discrete>false</cim:RegulatingControl.discrete>
                 <cim:RegulatingControl.enabled>true</cim:RegulatingControl.enabled>

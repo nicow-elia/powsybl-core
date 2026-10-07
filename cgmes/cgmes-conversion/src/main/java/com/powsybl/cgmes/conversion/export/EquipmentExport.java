@@ -20,8 +20,8 @@ import com.powsybl.commons.PowsyblException;
 import com.powsybl.commons.exceptions.UncheckedXmlStreamException;
 import com.powsybl.iidm.network.*;
 import com.powsybl.iidm.network.Identifiable;
-import com.powsybl.iidm.network.extensions.RemoteReactivePowerControl;
-import com.powsybl.iidm.network.extensions.VoltagePerReactivePowerControl;
+import com.powsybl.iidm.network.regulation.RegulationMode;
+import com.powsybl.iidm.network.regulation.VoltageRegulationHolder;
 import com.powsybl.math.graph.TraverseResult;
 import com.powsybl.triplestore.api.PropertyBags;
 import org.apache.commons.lang3.tuple.Pair;
@@ -174,9 +174,27 @@ public final class EquipmentExport {
                 String switchType = sw.getProperty(PROPERTY_CGMES_ORIGINAL_CLASS); // may be null
                 // To ensure we do not violate rule SwitchTN1 of ENTSO-E QoCDC,
                 // we only export as retained a switch if it will be exported with different TNs at both ends
-                boolean exportAsRetained = sw.isRetained() && hasDifferentTNsAtBothEnds(sw);
-                SwitchEq.write(context.getNamingStrategy().getCgmesId(sw), sw.getNameOrId(), switchType, sw.getKind(),
-                    context.getNamingStrategy().getCgmesId(vl), sw.isOpen(), exportAsRetained, cimNamespace, writer, context);
+                switch (switchType) {
+                    case "ACLineSegment" -> {
+                        String baseVoltageId = context.getBaseVoltageIdFromNominalV(vl.getNominalV());
+                        AcLineSegmentEq.write(context.getNamingStrategy().getCgmesId(sw), sw.getNameOrId(), baseVoltageId, 0.0, 0.0,
+                                0.0, 0.0, cimNamespace, writer, context);
+                    }
+                    case "EquivalentBranch" -> {
+                        String baseVoltageId = context.getBaseVoltageIdFromNominalV(vl.getNominalV());
+                        EquivalentBranchEq.write(context.getNamingStrategy().getCgmesId(sw), sw.getNameOrId(), baseVoltageId, 0.0, 0.0, cimNamespace, writer, context);
+                    }
+                    case "SeriesCompensator" -> {
+                        String baseVoltageId = context.getBaseVoltageIdFromNominalV(vl.getNominalV());
+                        SeriesCompensatorEq.write(context.getNamingStrategy().getCgmesId(sw), sw.getNameOrId(), baseVoltageId, 0.0, 0.0, false,
+                                0.0, 0.0, cimNamespace, writer, context);
+                    }
+                    case null, default -> {
+                        boolean exportAsRetained = sw.isRetained() && hasDifferentTNsAtBothEnds(sw);
+                        SwitchEq.write(context.getNamingStrategy().getCgmesId(sw), sw.getNameOrId(), switchType, sw.getKind(),
+                                context.getNamingStrategy().getCgmesId(vl), sw.isOpen(), exportAsRetained, cimNamespace, writer, context);
+                    }
+                }
             }
         }
     }
@@ -432,35 +450,26 @@ public final class EquipmentExport {
         Set<String> generatingUnitsWritten = new HashSet<>();
         for (Generator generator : network.getGenerators()) {
             String cgmesOriginalClass = generator.getProperty(PROPERTY_CGMES_ORIGINAL_CLASS, CgmesNames.SYNCHRONOUS_MACHINE);
-            RemoteReactivePowerControl rrpc = generator.getExtension(RemoteReactivePowerControl.class);
-            String mode = CgmesExportUtil.getGeneratorRegulatingControlMode(generator, rrpc);
-            Terminal regulatingTerminal;
-            if (mode.equals(RegulatingControlEq.REGULATING_CONTROL_REACTIVE_POWER)) {
-                regulatingTerminal = rrpc.getRegulatingTerminal();
-            } else if (context.isExportGeneratorsInLocalRegulationMode()) {
-                regulatingTerminal = generator.getTerminal();
-            } else {
-                regulatingTerminal = generator.getRegulatingTerminal();
-            }
             String regulatingControlId;
             switch (cgmesOriginalClass) {
                 case CgmesNames.EQUIVALENT_INJECTION:
                     String reactiveCapabilityCurveId = writeReactiveCapabilityCurve(generator, cimNamespace, writer, context);
                     String baseVoltageId = context.getBaseVoltageIdFromNominalV(generator.getTerminal().getVoltageLevel().getNominalV());
+                    boolean controlEnabled = generator.getVoltageRegulation() != null && generator.getVoltageRegulation().isRegulating();
                     EquivalentInjectionEq.write(context.getNamingStrategy().getCgmesId(generator), generator.getNameOrId(),
-                            generator.isVoltageRegulatorOn(), generator.getMinP(), generator.getMaxP(), getNullableMinQ(generator), getNullableMaxQ(generator),
+                        controlEnabled, generator.getMinP(), generator.getMaxP(), getNullableMinQ(generator), getNullableMaxQ(generator),
                             reactiveCapabilityCurveId, baseVoltageId,
                             cimNamespace, writer, context);
                     break;
                 case CgmesNames.EXTERNAL_NETWORK_INJECTION:
-                    regulatingControlId = writeRegulatingControlId(generator, getTerminalId(regulatingTerminal, context), regulatingControlsWritten, mode, cimNamespace, writer, context);
+                    regulatingControlId = writeRegulatingControl(generator, regulatingControlsWritten, cimNamespace, writer, context);
                     ExternalNetworkInjectionEq.write(context.getNamingStrategy().getCgmesId(generator), generator.getNameOrId(),
                             context.getNamingStrategy().getCgmesId(generator.getTerminal().getVoltageLevel()),
                             obtainGeneratorGovernorScd(generator), generator.getMaxP(), getMaxQ(generator), generator.getMinP(), getMinQ(generator),
                             regulatingControlId, cimNamespace, writer, context);
                     break;
                 case CgmesNames.SYNCHRONOUS_MACHINE:
-                    regulatingControlId = writeRegulatingControlId(generator, getTerminalId(regulatingTerminal, context), regulatingControlsWritten, mode, cimNamespace, writer, context);
+                    regulatingControlId = writeRegulatingControl(generator, regulatingControlsWritten, cimNamespace, writer, context);
                     writeSynchronousMachine(generator, cimNamespace,
                             generator.getMinP(), generator.getMaxP(), generator.getTargetP(), generator.getRatedS(), generator.getEnergySource(),
                             regulatingControlId, writer, context, generatingUnitsWritten);
@@ -471,13 +480,19 @@ public final class EquipmentExport {
         }
     }
 
-    private static String writeRegulatingControlId(Connectable<?> connectable, String terminalId, Set<String> regulatingControlsWritten, String mode,
-                                                   String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
+    private static String writeRegulatingControl(Connectable<?> connectable, Set<String> regulatingControlsWritten,
+                                                 String cimNamespace, XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
         String regulatingControlId = null;
-        if (hasRegulatingControlCapability(connectable)) {
+        if (connectable instanceof VoltageRegulationHolder<?> regulationHolder && regulationHolder.getVoltageRegulation() != null) {
             regulatingControlId = context.getNamingStrategy().getCgmesIdFromProperty(connectable, PROPERTY_REGULATING_CONTROL);
+            Terminal regulatingTerminal = regulationHolder.getRegulatingTerminal();
+            if (connectable instanceof Generator && context.isExportGeneratorsInLocalRegulationMode()) {
+                regulatingTerminal = regulationHolder.getTerminal();
+            }
+            String regulatingTerminalId = getTerminalId(regulatingTerminal, context);
+            String mode = getRegulatingControlMode(regulationHolder.getVoltageRegulation());
             if (!regulatingControlsWritten.contains(regulatingControlId)) {
-                RegulatingControlEq.writeRegulatingControlEq(connectable, terminalId, regulatingControlId, mode, cimNamespace, writer, context);
+                RegulatingControlEq.writeRegulatingControlEq(connectable, regulatingTerminalId, regulatingControlId, mode, cimNamespace, writer, context);
                 regulatingControlsWritten.add(regulatingControlId);
             }
         }
@@ -689,15 +704,13 @@ public final class EquipmentExport {
                         cimNamespace, writer, context);
             } else {
                 // Shunt can only regulate voltage
-                String mode = RegulatingControlEq.REGULATING_CONTROL_VOLTAGE;
                 double bPerSection = 0.0;
                 double gPerSection = Double.NaN;
                 if (s.getModelType().equals(ShuntCompensatorModelType.LINEAR)) {
                     bPerSection = ((ShuntCompensatorLinearModel) s.getModel()).getBPerSection();
                     gPerSection = ((ShuntCompensatorLinearModel) s.getModel()).getGPerSection();
                 }
-                String regulatingControlId = writeRegulatingControlId(s, getTerminalId(s.getRegulatingTerminal(), context),
-                    regulatingControlsWritten, mode, cimNamespace, writer, context);
+                String regulatingControlId = writeRegulatingControl(s, regulatingControlsWritten, cimNamespace, writer, context);
                 ShuntCompensatorEq.write(context.getNamingStrategy().getCgmesId(s), s.getNameOrId(), s.getSectionCount(),
                     s.getMaximumSectionCount(), s.getTerminal().getVoltageLevel().getNominalV(), s.getModelType(), bPerSection, gPerSection, regulatingControlId,
                         context.getNamingStrategy().getCgmesId(s.getTerminal().getVoltageLevel()), cimNamespace, writer, context);
@@ -718,15 +731,26 @@ public final class EquipmentExport {
     private static void writeStaticVarCompensators(Network network, Set<String> regulatingControlsWritten, String cimNamespace,
                                                    XMLStreamWriter writer, CgmesExportContext context) throws XMLStreamException {
         for (StaticVarCompensator svc : network.getStaticVarCompensators()) {
-            String mode = CgmesExportUtil.getSvcMode(svc);
-            String regulatingControlId = writeRegulatingControlId(svc, getTerminalId(svc.getRegulatingTerminal(), context),
-                regulatingControlsWritten, mode, cimNamespace, writer, context);
+            String regulatingControlId = writeRegulatingControl(svc, regulatingControlsWritten, cimNamespace, writer, context);
             double inductiveRating = svc.getBmin() != 0 ? 1 / svc.getBmin() : 0;
             double capacitiveRating = svc.getBmax() != 0 ? 1 / svc.getBmax() : 0;
-            StaticVarCompensatorEq.write(context.getNamingStrategy().getCgmesId(svc), svc.getNameOrId(),
-                context.getNamingStrategy().getCgmesId(svc.getTerminal().getVoltageLevel()), regulatingControlId, inductiveRating,
-                capacitiveRating, svc.getExtension(VoltagePerReactivePowerControl.class), svc.getRegulationMode(), svc.getVoltageSetpoint(),
-                cimNamespace, writer, context);
+            // Without a regulation the compensator holds its local reactive power target, which is what IIDM answers for
+            // it (isWithMode(REACTIVE_POWER) is true when there is no regulation)
+            RegulationMode regulationMode = svc.getVoltageRegulation() != null ? svc.getVoltageRegulation().getMode()
+                    : RegulationMode.REACTIVE_POWER;
+            double slope = svc.getVoltageRegulation() != null ? svc.getVoltageRegulation().getSlope() : Double.NaN;
+            StaticVarCompensatorEq.write(context.getNamingStrategy().getCgmesId(svc),
+                svc.getNameOrId(),
+                context.getNamingStrategy().getCgmesId(svc.getTerminal().getVoltageLevel()),
+                regulatingControlId,
+                inductiveRating,
+                capacitiveRating,
+                slope,
+                regulationMode,
+                svc.getRegulatingTargetV(),
+                cimNamespace,
+                writer,
+                context);
         }
     }
 
@@ -736,7 +760,9 @@ public final class EquipmentExport {
             double baseVoltage = Math.max(line.getTerminal1().getVoltageLevel().getNominalV(), line.getTerminal2().getVoltageLevel().getNominalV());
             String baseVoltageId = context.getBaseVoltageIdFromNominalV(baseVoltage);
             AcLineSegmentEq.write(context.getNamingStrategy().getCgmesId(line), line.getNameOrId(), baseVoltageId, line.getR(), line.getX(),
-                line.getG1() + line.getG2(), line.getB1() + line.getB2(), cimNamespace, writer, context);
+                // gch = g1 + g2 and bch = b1 + b2: the rule the change export describes a line with, stated once
+                LimitFamily.lineImpedance(line, CgmesChangeTranslator.G1, IidmStateView.LIVE), LimitFamily.lineImpedance(line, CgmesChangeTranslator.B1, IidmStateView.LIVE),
+                cimNamespace, writer, context);
             writeBranchLimits(line, getTerminalId(line.getTerminal1(), context), getTerminalId(line.getTerminal2(), context), cimNamespace,
                 euNamespace, exportedLimitTypes, writer, context);
         }
@@ -967,13 +993,17 @@ public final class EquipmentExport {
             int neutralStep = getClosestNeutralStep(ptc);
             int normalStep = getNormalStep(eq, cgmesTapChangerId).orElse(neutralStep);
             String tapChangerControlId = null;
-            if (CgmesExportUtil.tapChangerControlIsDefined(ptc)) {
+            if (CgmesExportUtil.hasTapChangerControlCapability(ptc)) {
                 tapChangerControlId = getTapChangerControlId(eq, PHASE_TAP_CHANGER, endNumber, cgmesTapChangerId, context);
                 if (!regulatingControlsWritten.contains(tapChangerControlId)) {
                     String mode = RegulatingControlEq.REGULATING_CONTROL_ACTIVE_POWER;
                     String controlName = twtName + "_PTC_RC";
-                    String terminalId = CgmesExportUtil.getTerminalId(ptc.getRegulationTerminal(), context);
-                    if (ptc.getRegulationMode() == PhaseTapChanger.RegulationMode.CURRENT_LIMITER) {
+                    Terminal regulationTerminal = ptc.getRegulationTerminal();
+                    if (regulationTerminal == null) {
+                        regulationTerminal = eq.getTerminals().get(endNumber - 1);
+                    }
+                    String terminalId = CgmesExportUtil.getTerminalId(regulationTerminal, context);
+                    if (ptc.getRegulationMode() == PhaseTapChanger.RegulationMode.CURRENT_LIMITER && !Double.isNaN(ptc.getRegulationValue())) {
                         // Log not supported regulation mode
                         CgmesReports.phaseTapChangerCurrentLimiterModeNotSupportedReport(context.getReportNode(), tapChangerId);
 
@@ -984,7 +1014,7 @@ public final class EquipmentExport {
 
                         String className = "CurrentLimit";
                         String operationalLimitId = context.getNamingStrategy().getCgmesId(ref(operationalLimitSetId), ref(className), PATL, OPERATIONAL_LIMIT_VALUE);
-                        String operationalLimitTypeId = context.getNamingStrategy().getCgmesId(PATL, OPERATIONAL_LIMIT_TYPE);
+                        String operationalLimitTypeId = context.getNamingStrategy().getCgmesId(PATL, OPERATIONAL_LIMIT_TYPE, ref(context.getNetwork()));
                         LoadingLimitEq.write(operationalLimitId, className, "PATL", ptc.getRegulationValue(), operationalLimitTypeId, operationalLimitSetId, cimNamespace, writer, context);
 
                         if (!exportedLimitTypes.contains(operationalLimitTypeId)) {
@@ -1050,12 +1080,14 @@ public final class EquipmentExport {
             String ratioTapChangerTableId = context.getNamingStrategy().getCgmesId(refTyped(eq), ref(endNumber), RATIO_TAP_CHANGER_TABLE);
             String controlMode = "volt";
             String tapChangerControlId = null;
-            if (CgmesExportUtil.tapChangerControlIsDefined(rtc)) {
+            if (rtc.getVoltageRegulation() != null) {
                 String controlName = twtName + "_RTC_RC";
-                String terminalId = CgmesExportUtil.getTerminalId(rtc.getRegulationTerminal(), context);
+                // A regulation without a terminal is controlled at the end of the tap changer, as for the phase tap changer
+                Terminal regulatingTerminal = Objects.requireNonNullElse(rtc.getRegulatingTerminal(), eq.getTerminals().get(endNumber - 1));
+                String terminalId = CgmesExportUtil.getTerminalId(regulatingTerminal, context);
                 tapChangerControlId = getTapChangerControlId(eq, RATIO_TAP_CHANGER, endNumber, cgmesTapChangerId, context);
                 if (!regulatingControlsWritten.contains(tapChangerControlId)) {
-                    String tccMode = CgmesExportUtil.getTcMode(rtc);
+                    String tccMode = getRegulatingControlMode(rtc.getVoltageRegulation());
                     if (tccMode.equals(RegulatingControlEq.REGULATING_CONTROL_REACTIVE_POWER)) {
                         controlMode = "reactive";
                     }
@@ -1366,7 +1398,7 @@ public final class EquipmentExport {
      * group: the identifier the import stored, or a deterministic one derived from the terminal and the group.
      *
      * <p>Package private because the difference model export needs the very same identifier for a network that was
-     * not imported from CGMES and therefore carries no stored one, see {@code CgmesLimitIndex}.</p>
+     * not imported from CGMES and therefore carries no stored one, see {@code LimitFamily#limitSlots}.</p>
      *
      * @param terminalId the CGMES identifier of the terminal the set is attached to
      */
@@ -1404,7 +1436,7 @@ public final class EquipmentExport {
         }
 
         // Write the permanent limit type (if not already written)
-        String operationalLimitTypeId = context.getNamingStrategy().getCgmesId(PATL, OPERATIONAL_LIMIT_TYPE);
+        String operationalLimitTypeId = context.getNamingStrategy().getCgmesId(PATL, OPERATIONAL_LIMIT_TYPE, ref(context.getNetwork()));
         if (!exportedLimitTypes.contains(operationalLimitTypeId)) {
             OperationalLimitTypeEq.writePatl(operationalLimitTypeId, cimNamespace, euNamespace, writer, context);
             exportedLimitTypes.add(operationalLimitTypeId);
@@ -1413,7 +1445,7 @@ public final class EquipmentExport {
         // Write the permanent limit
         String className = loadingLimitClassName(limits);
         String operationalLimitId = operationalLimitId(operationalLimitSetId, className, -1, context);
-        LoadingLimitEq.write(operationalLimitId, className, "PATL", limits.getPermanentLimit(), operationalLimitTypeId,
+        LoadingLimitEq.write(operationalLimitId, className, "PATL", LimitFamily.limitValue(limits, -1), operationalLimitTypeId,
             operationalLimitSetId, cimNamespace, writer, context);
 
         if (!limits.getTemporaryLimits().isEmpty()) {
@@ -1421,7 +1453,7 @@ public final class EquipmentExport {
                 int acceptableDuration = temporaryLimit.getAcceptableDuration();
 
                 // Write the temporary limit type (if not already written)
-                operationalLimitTypeId = context.getNamingStrategy().getCgmesId(TATL, ref(acceptableDuration), OPERATIONAL_LIMIT_TYPE);
+                operationalLimitTypeId = context.getNamingStrategy().getCgmesId(TATL, ref(acceptableDuration), OPERATIONAL_LIMIT_TYPE, ref(context.getNetwork()));
                 if (!exportedLimitTypes.contains(operationalLimitTypeId)) {
                     OperationalLimitTypeEq.writeTatl(operationalLimitTypeId, temporaryLimit.getAcceptableDuration(), cimNamespace, euNamespace, writer, context);
                     exportedLimitTypes.add(operationalLimitTypeId);
@@ -1432,7 +1464,8 @@ public final class EquipmentExport {
                 String temporaryLimitName = temporaryLimit.getName().isEmpty() ?
                     "TATL " + temporaryLimit.getAcceptableDuration() : // If the temporary limit name is empty, write TATL and the acceptable duration
                     temporaryLimit.getName();
-                LoadingLimitEq.write(operationalLimitId, className, temporaryLimitName, temporaryLimit.getValue(), operationalLimitTypeId, operationalLimitSetId, cimNamespace, writer, context);
+                LoadingLimitEq.write(operationalLimitId, className, temporaryLimitName, LimitFamily.limitValue(limits, acceptableDuration),
+                    operationalLimitTypeId, operationalLimitSetId, cimNamespace, writer, context);
             }
         }
     }
@@ -1545,8 +1578,8 @@ public final class EquipmentExport {
     }
 
     private static String getConverterStationPccTerminal(HvdcConverterStation<?> converterStation, CgmesExportContext context) {
-        if (converterStation.getHvdcType().equals(HvdcConverterStation.HvdcType.VSC)) {
-            return getTerminalId(((VscConverterStation) converterStation).getRegulatingTerminal(), context);
+        if (converterStation instanceof VscConverterStation vsc && vsc.getRegulatingTerminal() != vsc.getTerminal()) {
+            return getTerminalId(vsc.getRegulatingTerminal(), context);
         }
         return null;
     }
@@ -1695,7 +1728,10 @@ public final class EquipmentExport {
             String dcConverterUnitId = acDcConvertersUnit.get(converter).id();
             String converterId = context.getNamingStrategy().getCgmesId(converter);
             String className = converterClassName(converter);
-            String pccTerminalId = getTerminalId(converter.getPccTerminal(), context);
+            String pccTerminalId = null;
+            if (converter.getPccTerminal() != converter.getTerminal1()) {
+                pccTerminalId = getTerminalId(converter.getPccTerminal(), context);
+            }
             String capabilityCurveId = writeVsCapabilityCurve(converter, cimNamespace, writer, context);
             AcDcConverterEq.write(converterId, converter.getNameOrId(), className, converter.getDcTerminal1().getDcNode().getNominalV(),
                     converter.getIdleLoss(), converter.getSwitchingLoss(), converter.getResistiveLoss(), dcConverterUnitId,

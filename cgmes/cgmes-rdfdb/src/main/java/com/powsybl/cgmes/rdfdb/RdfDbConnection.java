@@ -9,6 +9,7 @@
 package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conversion.CgmesImport;
+import com.powsybl.cgmes.model.diff.StatementDiff;
 import com.powsybl.cgmes.model.triplestore.CgmesTripleStoreLoader;
 import com.powsybl.commons.config.PlatformConfig;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
@@ -76,19 +77,19 @@ public final class RdfDbConnection implements AutoCloseable {
     private final Map<String, VersionGraph> versionGraphs = new ConcurrentHashMap<>();
 
     /**
-     * The decoded parent states {@link SnapshotCatalog#putAsDiff} compares timesteps against, across all
+     * The decoded parent states {@link SnapshotCatalog#putAsDiff} compares timestamps against, across all
      * scenarios of this connection, most recently used last.
      *
-     * <p>Every timestep of a day is diffed against the same parent state, so its equipment and steady state graphs
-     * used to be materialised and decoded once per timestep &mdash; a hundred and seventy thousand statements
+     * <p>Every timestamp of a day is diffed against the same parent state, so its equipment and steady state graphs
+     * used to be materialised and decoded once per timestamp &mdash; a hundred and seventy thousand statements
      * copied into a fresh store and turned into statements again, ninety-five times, to answer the same question.
      * The decoded index is kept here instead.</p>
      *
      * <p><strong>Key.</strong> {@code scenario | stateModelId | tripleCount | subjectBase | cimNamespace}
      * ({@link #parentIndexKey}): the stored model whose state the index holds, the size the catalogue records for
      * it, and the two things the decoding depends on. A stored model is written once and never changed &mdash; a
-     * new state of a profile is a new identifier &mdash; so an entry does not go stale; a version written on the
-     * base chain between two timesteps is a new identifier, misses, and is materialised. The triple count is a
+     * new state of a profile is a new identifier &mdash; so an entry does not go stale; a rollover flagged between two
+     * timestamps is a new pin with a new state identifier, misses, and is materialised once. The triple count is a
      * cheap second guard for a scenario dropped and re-created with re-used identifiers by another client.</p>
      *
      * <p><strong>Bound.</strong> Four entries in access order <em>for the whole connection</em>, not per
@@ -103,13 +104,13 @@ public final class RdfDbConnection implements AutoCloseable {
      * {@link GraphCache} is invalidated for the graphs.</p>
      *
      * <p><strong>Thread safety.</strong> A {@code LinkedHashMap} in access order mutates on a read, so every access
-     * is inside {@code synchronized (parentIndexes)}. The values are immutable ({@link TripleDiffCalculator.Index}
+     * is inside {@code synchronized (parentIndexes)}. The values are immutable ({@link StatementDiff.Index}
      * is read-only), so they may be handed out of the lock.</p>
      */
-    private final Map<String, TripleDiffCalculator.Index> parentIndexes =
+    private final Map<String, StatementDiff.Index> parentIndexes =
             new LinkedHashMap<>(8, 0.75f, true) {
                 @Override
-                protected boolean removeEldestEntry(Map.Entry<String, TripleDiffCalculator.Index> eldest) {
+                protected boolean removeEldestEntry(Map.Entry<String, StatementDiff.Index> eldest) {
                     return size() > PARENT_INDEX_CACHE_SIZE;
                 }
             };
@@ -243,7 +244,7 @@ public final class RdfDbConnection implements AutoCloseable {
     }
 
     /**
-     * The snapshots of one scenario: what versions and timesteps it holds, and how a new one is written.
+     * The snapshots of one scenario: what versions and timestamps it holds, and how a new one is written.
      *
      * <p>One catalogue per scenario, like {@link #catalog(String)} and for the same reason: a version label means
      * nothing without the scenario it belongs to, and nothing in this layer resolves one across scenarios.</p>
@@ -346,7 +347,7 @@ public final class RdfDbConnection implements AutoCloseable {
      */
     public List<GraphInfo> graphs(String scenario) {
         return contextNames(scenario).stream()
-                .map(name -> new GraphInfo(scenario, name, GraphInfo.subsetOf(name),
+                .map(name -> new GraphInfo(scenario, name, Profiles.find(name).orElse(null),
                         ScenarioGraphNames.remoteGraph(scenario, name)))
                 .toList();
     }
@@ -375,7 +376,7 @@ public final class RdfDbConnection implements AutoCloseable {
         // upload would put a second, unversioned set next to them that no snapshot can ever reach
         if (snapshots(scenario).isVersioned()) {
             throw new RdfDbException("scenario '" + scenario + "' is versioned: use SnapshotCatalog.putFull to"
-                    + " write its root, or SnapshotCatalog.putAsDiff to add a timestep");
+                    + " write its root, or SnapshotCatalog.putAsDiff to add a timestamp");
         }
         CgmesImport importer = new CgmesImport(PlatformConfig.defaultConfig());
         TripleStore store = scenarioStore(scenario, importer.tripleStoreOptions(importParams));
@@ -444,14 +445,14 @@ public final class RdfDbConnection implements AutoCloseable {
     }
 
     /** @return the decoded parent profile kept under that key, or {@code null} */
-    TripleDiffCalculator.Index parentIndex(String key) {
+    StatementDiff.Index parentIndex(String key) {
         synchronized (parentIndexes) {
             return parentIndexes.get(key);
         }
     }
 
     /** Keep a decoded parent profile, evicting the least recently used one beyond the bound. */
-    void rememberParentIndex(String key, TripleDiffCalculator.Index index) {
+    void rememberParentIndex(String key, StatementDiff.Index index) {
         synchronized (parentIndexes) {
             parentIndexes.put(key, index);
         }
@@ -465,7 +466,8 @@ public final class RdfDbConnection implements AutoCloseable {
         }
     }
 
-    private void invalidateCache(String scenario) {
+    /** Forget every cached graph of one scenario, because graphs of it were dropped. */
+    void invalidateCache(String scenario) {
         GraphCache cache = database.cache();
         if (cache != null) {
             cache.invalidatePrefix(cacheKeyPrefix(scenario));
@@ -547,6 +549,26 @@ public final class RdfDbConnection implements AutoCloseable {
             TripleStoreRDF4JSparql store = remoteStore(scenario);
             store.writeGraph(graphIri, statements, true);
         }
+    }
+
+    /**
+     * The statements of one graph of a scenario: what a caller reads a custom profile with.
+     *
+     * <p>A network holds only what the CGMES conversion reads, so the graph of a custom profile ({@link Profiles})
+     * is named by {@link RdfDbNetworkLoader.LoadResult#extraProfiles()} or {@link SnapshotCatalog#graphsOf} and
+     * read here: one Graph Store Protocol request on a server, a copy on the in-process backend, and no request
+     * at all when the graph cache holds it.</p>
+     *
+     * @param scenario the scenario the graph belongs to
+     * @param graphIri the graph IRI, as the metadata graph records it
+     * @return the statements
+     * @throws RdfDbException if a server does not hold the graph
+     */
+    public List<Statement> fetchGraph(String scenario, String graphIri) {
+        checkOpen();
+        RdfDbNames.checkScenario(scenario);
+        Objects.requireNonNull(graphIri);
+        return new GraphFetcher(this, scenario).fetch(graphIri);
     }
 
     /**

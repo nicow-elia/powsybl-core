@@ -26,9 +26,9 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.EnumSet;
 import java.util.List;
 import java.util.Properties;
+import java.util.Set;
 
 import static com.powsybl.cgmes.rdfdb.Backends.params;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -87,10 +87,10 @@ class RdfDbErrorHandlingTest {
         try (RdfDbConnection db = RdfDbConnection.open(RdfDatabase.inMemory("empty-subsets"))) {
             db.loadCgmes("s", CgmesConformity1Catalog.miniBusBranch().dataSource(), null, p, ReportNode.NO_OP);
             RdfDbLoadOptions options = new RdfDbLoadOptions()
-                    .setSubsets(EnumSet.of(com.powsybl.cgmes.model.CgmesSubset.DYNAMIC));
+                    .setProfiles(Set.of(Profiles.DY));
             RdfDbException e = assertThrows(RdfDbException.class,
                     () -> RdfDbNetworkLoader.load(db, "s", options, NetworkFactory.findDefault(), p, ReportNode.NO_OP));
-            assertThat(e.getMessage()).contains("DYNAMIC");
+            assertThat(e.getMessage()).contains("[DY]");
         }
     }
 

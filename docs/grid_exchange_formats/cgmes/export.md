@@ -7,7 +7,9 @@ There are two main use-cases supported:
 In both cases, the metadata model information in the exported files is built from metadata information read from the input files and stored in IIDM or received through parameters.
 Information received through parameters takes precedence over information available from original metadata models.
 
-For a quick CGM export, the user may rely on the parameter **iidm.export.cgmes.cgm_export** to write in a single export multiple updated SSH files (one for each IGM) and a single SV for the whole common grid model. Specifics about this option are explained in the section [below](#cgm-common-grid-model-quick-export).
+For a quick CGM export, the user may rely on the parameter **iidm.export.cgmes.cgm_export** to write in a single export multiple updated SSH files (one for each IGM) and a single SV for the whole common grid model. 
+It is also possible to export a TP (Topology) profile file for each IGM or for the CGM during a quick export. This is controlled by the parameter **iidm.export.cgmes.cgm-export-with-tp**. 
+Specifics about these options are explained in the section [below](#cgm-common-grid-model-quick-export).
 If you need complete control over the exported files in a CGM scenario, you may prefer to iterate through the subnetworks and make multiple calls to the export function. This is described in detail in the section [below](#cgm-common-grid-model-manual-export).
 
 Please note that when exporting equipment, PowSyBl always uses the CGMES node/breaker level of detail, without considering the topology
@@ -29,8 +31,11 @@ The output filenames will follow the pattern `<baseName>_<profile>.xml`. The bas
 ## CGM (Common Grid Model) quick export
 
 When exporting a CGM, we need an IIDM network (CGM) that contains multiple subnetworks (one for each IGM).
-Only the CGMES instance files corresponding to SSH and SV profiles are exported:
+By default, only the CGMES instance files corresponding to SSH and SV profiles are exported:
 an updated SSH file for every subnetwork (for every IGM) and a single SV file for the main network that represents the CGM.
+Optionally, a TP file can also be exported, either for the whole CGM or for each IGM, by setting the parameter **iidm.export.cgmes.cgm-export-with-tp** to 
+"CGM" or "IGM". An empty string will be considered as no TP file will be exported. This can be useful when the voltage levels of the CGM 
+have a `NODE_BREAKER` topology as the CGM TP profile is an output of the topology processing.
 
 When exporting, it is verified that the main network and all subnetworks have the same scenario time (network case date). If they are different, an error is logged.
 
@@ -39,12 +44,15 @@ If a version number is given as a parameter, it is used for the exported files. 
 The quick CGM export will always write updated SSH files for IGMs and a single SV for the CGM. The parameter for selecting which profiles to export is ignored in this kind of export.
 
 If the dependencies have to be updated automatically (see parameter **iidm.export.cgmes.update-dependencies** below), the exported instance files will contain metadata models where:
-* Updated SSH for IGMs supersede the original ones, and depend on the original EQ from IGMs.
+* Updated SSH for IGMs supersedes the original ones and depends on the original EQ from IGMs.
+* If exported, updated TP(s) depends on the original EQ from IGMs and TP_BD. The updated TP for IGMs supersedes the original ones.
 * Updated SV for the CGM depends on the updated SSH from IGMs and on the original TP and TP_BD from IGMs.
 
 The filenames of the exported instance files will follow the pattern:
 * For the CGM SV: `<basename>_SV.xml`.
 * For the IGM SSHs: `<basename>_<IGM name>_SSH.xml`. The IGM name is built from the country code of the first substation or the IIDM name if no country is present.
+* For the IGM TPs: `<basename>_<IGM name>_TP.xml`. The IGM name is built from the country code of the first substation or the IIDM name if no country is present.
+* For the CGM TPs: `<basename>_TP.xml`.
 
 The basename is determined from the parameters, or the basename of the export data source or the main network name.
 
@@ -188,30 +196,42 @@ A partial file says what the network looks like now. When the previous state has
 
 ### Supported changes
 
-| Equipment | IIDM attribute or extension | CGMES object.property |
-| --- | --- | --- |
-| `Switch` | `open` | `Switch.open`, or the `ACDCTerminal.connected` of both terminals when the CGMES equipment is an `ACLineSegment`, `EquivalentBranch` or `SeriesCompensator` |
-| `DcSwitch` | `open` | `ACDCTerminal.connected` of both DC terminals |
-| `Load` | `p0`, `q0` | `EnergyConsumer.p/q`, `EnergySource.activePower/reactivePower`, or `RotatingMachine.p/q` + `RegulatingCondEq.controlEnabled` + `AsynchronousMachine.asynchronousMachineType` |
-| `BoundaryLine` | `p0`, `q0`, and of its `Generation` `targetP`, `targetQ`, `targetV`, `voltageRegulationOn` | `EquivalentInjection.p/q/regulationStatus/regulationTarget` of the boundary |
-| `Generator` (`SynchronousMachine`) | `targetP`, `targetQ`, `targetV`, `voltageRegulatorOn` | `RotatingMachine.p/q` + `RegulatingCondEq.controlEnabled` + `SynchronousMachine.referencePriority/operatingMode`, and `RegulatingControl` |
-| `Generator` (`ExternalNetworkInjection`) | `targetP`, `targetQ`, and `targetV`, `voltageRegulatorOn` when the injection has a `RegulatingControl` | `ExternalNetworkInjection.p/q/referencePriority` + `RegulatingCondEq.controlEnabled`, and `RegulatingControl` |
-| `Generator` (`EquivalentInjection`) | `targetP`, `targetQ`, `targetV`, `voltageRegulatorOn` | `EquivalentInjection.p/q/regulationStatus/regulationTarget` |
-| `Generator`, extension `referencePriorities` | `referencePriority` | `SynchronousMachine.referencePriority` or `ExternalNetworkInjection.referencePriority` |
-| `Generator`, extension `activePowerControl` | `participationFactor` | `GeneratingUnit.normalPF` |
-| `Generator`, extension `generatorRemoteReactivePowerControl` | `targetQ`, `enabled` | `RegulatingControl.targetValue/enabled` and the machine block |
-| `TwoWindingsTransformer`, `ThreeWindingsTransformer` | `ratioTapChanger[end].tapPosition`, `phaseTapChanger[end].tapPosition` | `TapChanger.step` + `TapChanger.controlEnabled` |
-| `TwoWindingsTransformer`, `ThreeWindingsTransformer` | `ratioTapChanger[end].regulating` / `.regulationValue` / `.targetDeadband`, and the same of `phaseTapChanger[end]` | the tap changer block and `TapChangerControl` |
-| `ShuntCompensator` | `sectionCount`, `targetV`, `voltageRegulatorOn`, `targetDeadband` | `ShuntCompensator.sections` + `RegulatingCondEq.controlEnabled`, and `RegulatingControl` for the three regulation attributes |
-| `StaticVarCompensator` | `voltageSetpoint`, `reactivePowerSetpoint`, `regulating` | `StaticVarCompensator.q` + `RegulatingCondEq.controlEnabled`, and `RegulatingControl` |
-| `HvdcLine` | `activePowerSetpoint`, `convertersMode` | `ACDCConverter.targetPpcc/targetUdc/p/q` of both converters, plus `CsConverter.operatingMode/pPccControl` or `VsConverter.pPccControl/qPccControl` |
-| `LccConverterStation` | `powerFactor` | the two converter blocks of its line, where the factor is carried by `ACDCConverter.p` and `q` |
-| `VscConverterStation` | `voltageSetpoint`, `reactivePowerSetpoint`, `voltageRegulatorOn` | `VsConverter.pPccControl/qPccControl/targetUpcc/targetQpcc` |
-| `LineCommutatedConverter`, `VoltageSourceConverter` (detailed DC model) | `targetP`, `targetVdc`, `controlMode`, `voltageRegulatorOn`, `voltageSetpoint`, `reactivePowerSetpoint`, `powerFactor` | `ACDCConverter.targetPpcc/targetUdc/p/q` plus `CsConverter.operatingMode/pPccControl` or `VsConverter.pPccControl/qPccControl/targetUpcc/targetQpcc` |
-| `Branch`, `ThreeWindingsTransformer` leg, `BoundaryLine`, **CGMES 3 only** | permanent and temporary limit values of its `OperationalLimitsGroup`s | `CurrentLimit.value`, `ActivePowerLimit.value`, `ApparentPowerLimit.value` of the stored mRID |
-| `VoltageLevel`, **CGMES 3 only** | `highVoltageLimit`, `lowVoltageLimit`, when the voltage level was built from `VoltageLimit` objects | `VoltageLimit.value` of every stored identifier |
+Supported are the changes of switches and DC switches (their open state), loads, generators and boundary lines (their
+setpoints, the regulation of a generator and its `referencePriorities` and `activePowerControl` extensions), shunt and
+static var compensators, the tap changers of two and three winding transformers, HVDC lines, their converter stations
+and the converters of the detailed DC model, control areas of type `ControlAreaTypeKind.Interchange`, and, in CGMES 3
+only, operational limit values and the voltage limits of a voltage level built from `VoltageLimit` objects. Which IIDM
+attribute is written to which CGMES property, with which unit and sign, is stated once, on the generated
+{ref}`mapping page <cgmes-mapping>`: the keys of a family are the attributes it describes, its blocks the properties it
+writes. The rules a family follows in code are described below.
 
-CGMES 3 operational limit values are steady state data and *are* exported, as `CurrentLimit.value`, `ActivePowerLimit.value`, `ApparentPowerLimit.value` and `VoltageLimit.value`; CGMES 2.4.15 limit values and all branch impedances belong to the equipment profile and need a [difference model](#cgmes-difference-model-export). Anything else, in particular the creation or the removal of equipment and changes of terminal connection status, has no representation in the SSH profile. Every export method takes an `UnsupportedChangeBehavior` saying what to do with such a change: `FAIL` rejects it, so that it is never silently lost, and `IGNORE` logs a warning and leaves it out of the file. Using the `write` endpoints return value, you can obtain a log of changes that made it to the file for tracking the effect of `IGNORE`.
+The regulation target of an `EquivalentInjection` (of a boundary line or of a generator) is always written, a target that is not a number as `0`, as the full export writes it. A receiver therefore reads `0` where it used to keep the target it held before; its CGMES update turns the regulation off for a target that is not a usable voltage.
+
+The attribute names are the ones IIDM reports since the voltage regulation refactoring of powsybl-core (#3699): the
+regulation of a generator, a shunt compensator, a static var compensator, a VSC converter or a ratio tap changer is its
+`VoltageRegulation` (target, deadband, flag, mode), plus local targets kept by the holder itself. The deprecated setters
+(`setVoltageRegulatorOn`, `setTargetV`, `setVoltageSetpoint`, `RatioTapChanger.setRegulationValue`, ...) still work: they
+write through the `VoltageRegulation`, which reports the change under its own name, and then report it once more under
+their historical name. The export treats that second event as an *echo*, with one rule:
+
+1. an echo that repeats a value an earlier event of the same equipment reported under its own name is dropped;
+2. an echo that sets the value it had is dropped;
+3. any other echo is the only report of a change the `VoltageRegulation` did not report. That happens when the deprecated
+   setter had to create the `VoltageRegulation` (IIDM reports no creation) or reported a wrong old value; the state
+   before the change set cannot be told, so both change exports refuse it. The refusal says so and gives the remedy:
+   give the equipment its `VoltageRegulation` before recording, and change it through its own setters. A deprecated setter called with
+   the value the equipment already has can therefore be refused, when its echo reports a wrong old value
+   (`ShuntCompensator.setTargetDeadband` reports `NaN`, `StaticVarCompensator.setReactivePowerSetpoint` the voltage
+   target, `setRegulatingTerminal` the equipment's own terminal, and the two-argument `Generator.setTargetV` on a
+   remote regulation reports a local target in any case): the log cannot tell such a no-op from the creation of the
+   regulation. The setters of the `VoltageRegulation` report nothing for an unchanged value.
+
+A change made through a deprecated setter on equipment that has its `VoltageRegulation` therefore exports the same file
+as the same change made through the `VoltageRegulation`. Creating or removing a `VoltageRegulation` is not reported by
+IIDM at all, whether through a deprecated setter, `newVoltageRegulation()...build()` or `removeVoltageRegulation()`: such a change is not exported, and a receiver keeps what it had. To record the creation of a regulation, create it **not regulating** before or during the recording and then switch it on (`getVoltageRegulation().setRegulating(true)`): the switch is reported and travels. A regulation that has to disappear is switched off instead of removed (see the limitations of the
+[difference model export](#difference-model-export-from-recorded-changes)).
+
+CGMES 3 operational limit values are steady state data and *are* exported, as `CurrentLimit.value`, `ActivePowerLimit.value`, `ApparentPowerLimit.value` and `VoltageLimit.value`; CGMES 2.4.15 limit values and all branch impedances belong to the equipment profile and need a [difference model](#cgmes-difference-model-export). Anything else, in particular the creation or the removal of equipment and changes of terminal connection status, has no representation in the SSH profile. Every export method takes an `UnsupportedChangeBehavior` saying what to do with such a change: `FAIL` rejects it, so that it is never silently lost (a refusal of a regulation change names the cause and, after `Remedy:`, what to do instead), and `IGNORE` logs a warning and leaves it out of the file. Using the `write` endpoints return value, you can obtain a log of changes that made it to the file for tracking the effect of `IGNORE`.
 
 ### Header options
 
@@ -231,19 +251,17 @@ CGMES 3 operational limit values are steady state data and *are* exported, as `C
 
 ### Regulating controls
 
-A CGMES `RegulatingControl` is shared: a generator, a shunt compensator and a tap changer can all point at the same one, and the profile then carries a single enabled flag, a single target and a single deadband for all of them. A partial export therefore never writes the view of the one piece of equipment that changed: it writes the combination of the views of every user of that control, as a full export does, so that a receiver reading a partial file and a receiver reading a full one end up in the same state. Which piece of equipment actually regulates is still distinguished by its own `RegulatingCondEq.controlEnabled`.
+A CGMES `RegulatingControl` is shared: a generator, a shunt compensator and a tap changer can all point at the same one, and the profile then carries a single enabled flag, a single target and a single deadband for all of them. A partial export therefore never writes the view of the one piece of equipment that changed: it writes the combination of the views of every user of that control, as a full export does, so that a receiver reading a partial file and a receiver reading a full one end up in the same state. Which piece of equipment actually regulates is still distinguished by its own `RegulatingCondEq.controlEnabled`, which is the regulating flag of its `VoltageRegulation` whatever the mode, exactly as the full export writes it.
 
-A partial export differs from a full one in exactly two places, both because a partial file is applied on top of a state the receiver already holds:
+The view of each user is the one of the full export (target by mode: a voltage in kV, or a reactive power in MVAr for the reactive power mode, negated for a generator; deadband only for shunts and ratio tap changers), read from the state being described. It differs in two places:
 
-* A phase tap changer in current limiter mode is described with the values it really has, where a full export writes zeros. Writing zeros would reset a regulation that never changed.
-* The `RegulatingCondEq.controlEnabled` of a generator whose CGMES control regulates reactive power reports the state of its `generatorRemoteReactivePowerControl`, where a full export always reports `isVoltageRegulatorOn()`. The import combines that flag with `RegulatingControl.enabled`, so reporting the voltage flag, which is `false` in reactive power mode, would make such a control impossible to switch on again.
+* A phase tap changer in current limiter mode is described with the values it really has (a current in Amperes, multiplier `none`). A partial file is applied on top of a state the receiver already holds, so writing zeros would reset a regulation that never changed. The full export writes the same values when the import recorded the `TapChangerControl` and the SSH is read against that equipment model; with an equipment model of its own it writes the limit as a `CurrentLimit` of the regulated terminal and keeps the zeros (multiplier `M`) on the control, as upstream does.
+* A generator whose `VoltageRegulation` mode no longer matches the CGMES mode its import recorded (`CGMES.mode`) is refused: the receiving side reads the target of its control in the recorded mode.
 
 Two consequences are worth knowing:
 
-* The target of a control regulating reactive power is written with the sign of the regulating terminal that the import recorded, because the import reads it back with that same sign. The same correction is now applied by the full export.
-* Tap changers are the exception: the CGMES update derives the state of a tap changer from `RegulatingControl.enabled` alone and ignores `TapChanger.controlEnabled`. Two tap changers sharing a `TapChangerControl` but disagreeing on whether they regulate therefore cannot be described, and such a change is reported as unsupported.
-
-A phase tap changer in current limiter mode is described with the values it really has, where a full export writes zeros. A partial file is applied on top of a state the receiver already holds, so writing zeros would reset a regulation that never changed.
+* The reactive power target of a generator, a static var compensator or a ratio tap changer, the `targetQpcc` of a VSC converter station and the active power target of a phase tap changer are written with the sign of the regulating terminal that the import recorded (`CGMES.terminalSign`, per end for a transformer), because an SSH read against the original equipment model is read back with that same sign. The partial and difference exports always apply it; the full export applies it only when it does not write the EQ profile too, since an exported EQ names the IIDM regulating terminal itself and its import records a sign of 1. Upstream powsybl-core applies it nowhere (see the fixed defects below). The change export refuses a ratio tap changer regulating reactive power altogether.
+* Tap changers are the exception to the per-equipment flag: the CGMES update derives the state of a tap changer from `RegulatingControl.enabled` alone and ignores `TapChanger.controlEnabled`. Two tap changers sharing a `TapChangerControl` but disagreeing on whether they regulate therefore cannot be described, and such a change is reported as unsupported.
 
 Equipment that has no `RegulatingControl` in the model both sides share cannot carry a regulation change: a generated identifier would resolve to nothing on the receiving side, so the change is reported as unsupported.
 
@@ -251,15 +269,17 @@ Equipment that has no `RegulatingControl` in the model both sides share cannot c
 
 Some changes are accepted but are not observable in the file, because CGMES holds a single value where IIDM holds two:
 
-* A `StaticVarCompensator` carries one target on its `RegulatingControl`, the one matching the mode it is in. A change of the setpoint of the other mode is exported as the currently active value.
-* A `VscConverterStation` carries `targetUpcc` and `targetQpcc`, but the import applies only the one matching `qPccControl` and resets the other to zero. The setpoint of the inactive mode is therefore not transportable. Functional equality is preserved because a later change of the regulation mode re-exports the then active value.
+* The local voltage target of a regulation holder (generator, shunt compensator, `StaticVarCompensator`, VSC converter): in a voltage mode without a regulating terminal elsewhere it is the regulating target and is exported. In another mode (a compensator or a converter regulating reactive power), or when the regulation names the holder's own terminal, it is not represented in the SSH and nothing reads it: a change of it alone is not a change of the SSH, writes nothing and is not listed among the exported changes; the receiver keeps its own value. In a voltage mode with a regulating terminal elsewhere it is the target a load flow falls back to when it switches to local control, and the SSH has no property for it: the change is refused (change the target of the regulation instead). A `StaticVarCompensator` carries one target on its `RegulatingControl`, the one matching the mode it is in; its local reactive power target is `StaticVarCompensator.q` and does travel.
+* A VSC converter holds a single regulation target and a mode. The export writes the target of the mode it is in and `0` for the other one, as the full export does; the import rebuilds the `VoltageRegulation` from `qPccControl` and that target. The local voltage target of a station regulating reactive power is therefore not represented in the SSH: the import keeps the value the receiver has, and a change of it alone gives an empty difference.
 
 Other changes are reported as unsupported, because the SSH profile cannot express them:
 
-* The regulation mode of a `StaticVarCompensator` or of a tap changer: it is `RegulatingControl.mode`, which belongs to the EQ profile.
-* A change of the `generatorRemoteReactivePowerControl` of a generator whose CGMES control regulates voltage: the single target of that control means a voltage, so there is nowhere to put a reactive power target.
-* The reverse: a regulation change of a generator whose CGMES control regulates reactive power while the generator regulates voltage (`voltageRegulatorOn`). The receiver would read the voltage target as a reactive power one.
-* A regulation change of a ratio tap changer that does not regulate voltage: the CGMES update only reads voltage regulation of ratio tap changers.
+* The regulation mode of a generator, a shunt compensator, a `StaticVarCompensator` or of a tap changer: it is `RegulatingControl.mode`, which belongs to the EQ profile. (The mode of a VSC converter is its `qPccControl` and is exported.)
+* The regulating terminal (`VoltageRegulation.Terminal`), which is equipment data and not stored per variant, and the slope of a `VoltageRegulation`, which a CGMES `RegulatingControl` does not have. A VSC converter station is the exception for its own terminal: regulating its own terminal, or none, is part of its `qPccControl`, which the import sets itself, so a station switches from voltage to reactive power regulation with an exportable change (`setTerminal(station terminal, target)`, then `setMode(REACTIVE_POWER)` and the target); any other regulating terminal of a converter is refused.
+* Any change of a generator (its machine, its `GeneratingUnit`, its regulation) whose `VoltageRegulation` mode disagrees with the CGMES mode recorded at import: the CGMES update re-reads the regulation in the recorded mode on every update of the machine, so a receiver would not keep the mode the sender has. A change of the regulation of a generator whose `VoltageRegulation` has no mode in the working variant.
+* A change of a VSC converter, of either DC model, whose `VoltageRegulation` does not regulate: a `VsConverter` has no control flag, and the import rebuilds the regulation from `qPccControl` and always makes it regulate. This includes a station after the deprecated `setVoltageRegulatorOn(false)`, which keeps the voltage mode and only stops regulating; to switch a station to reactive power regulation, change the mode of its `VoltageRegulation`. A change of the power of an HVDC line with such a station is refused for the same reason.
+* A regulation change of a ratio tap changer that does not regulate voltage: the change export only writes the voltage regulation of ratio tap changers.
+* A change of a generator, a shunt compensator, a `StaticVarCompensator` or a VSC converter that has no `VoltageRegulation` although its CGMES equipment gives it one on every import (from its `RegulatingControl`, or from `qPccControl` for a `VsConverter`): the receiver would gain a regulation the sender does not have. Give the equipment a `VoltageRegulation`, not regulating if it must not regulate, before recording.
 * The power factor of a line commutated converter whose line carries no power: the factor is carried by `ACDCConverter.p` and `q`, which are then zero.
 * The converters mode of an HVDC line of voltage source converters whose setpoint is zero: a `VsConverter` has no operating mode, the mode is only derived from a non zero `targetPpcc`.
 * Switching the regulation of a generator imported from an `EquivalentInjection` on when the equipment model gives it no regulation capability: the CGMES update keeps its regulation off whatever the file says.
@@ -285,12 +305,34 @@ The receiving side reads a partial file through the usual update workflow, with 
 
 ### Fixed import and export defects
 
-Four defects of the CGMES import and of the full SSH export were fixed along the way, because a partial file could not survive them:
+Five defects of the CGMES import and of the full SSH export had to be fixed for a partial file to survive. Upstream powsybl-core fixed four of them itself, and the branch uses upstream's fixes:
 
-* [#4027](https://github.com/powsybl/powsybl-core/issues/4027): the full SSH export wrote `VsConverter.targetQpcc` without the sign of the regulating terminal, which the import applies when reading it back.
-* [#4028](https://github.com/powsybl/powsybl-core/issues/4028): the CGMES update read an `ACDCConverter.targetPpcc` of zero on the rectifier side as no value at all, so a line brought down to no power kept the power it had.
-* [#4029](https://github.com/powsybl/powsybl-core/issues/4029): the steady state hypothesis of an `AsynchronousMachine` was written without its kind and its control flag, and the update query demanded both, so the setpoints of such a load could never be read back.
-* [#4034](https://github.com/powsybl/powsybl-core/issues/4034): the update query did not select `PhaseTapChangerSymmetrical`, so a position written for one was silently dropped on import.
+* [#4027](https://github.com/powsybl/powsybl-core/issues/4027) (fixed upstream by #4054): the full SSH export wrote `VsConverter.targetQpcc` without the sign convention the import applies when reading it back.
+* [#4028](https://github.com/powsybl/powsybl-core/issues/4028) (fixed upstream by #4057): the CGMES update read an `ACDCConverter.targetPpcc` of zero as no value at all, so a line brought down to no power kept the power it had.
+* [#4029](https://github.com/powsybl/powsybl-core/issues/4029) (fixed upstream by #4103): the steady state hypothesis of an `AsynchronousMachine` was written without its kind and its control flag, and the update query demands all four properties, so the setpoints of such a load could never be read back.
+* [#4034](https://github.com/powsybl/powsybl-core/issues/4034) (fixed upstream by #4107): the update query did not select `PhaseTapChangerSymmetrical`, so a position written for one was silently dropped on import.
+* Terminal sign of regulation targets (not fixed upstream): the import multiplies the target of a generator or compensator regulating reactive power, the `targetQpcc` of a VSC converter station and the active power target of a phase tap changer by the recorded `CGMES.terminalSign`; the export applies the same sign, and to the reactive power target of a ratio tap changer, when the SSH is exported without its equipment model (read against the original EQ); with its EQ the regulating terminal is the IIDM one and the sign is +1. A common grid model export never writes the EQ, so it applies the sign. The sender keeps its `CGMES.terminalSign` after an EQ and SSH export: a later SSH exported alone is signed for the original equipment model, so a receiver that loaded the exported EQ has to be sent the EQ and the SSH together again.
+
+The full SSH export also writes what the change export writes, where the two used to differ and the import reads the change export's value (not fixed upstream):
+
+* The `TapChangerControl` of a phase tap changer limiting current that the import recorded, in an SSH exported without its equipment model: the values of the tap changer (see Regulating controls above) instead of zeros, which the update read back as a limit of 0.
+* A `RegulatingControl` some of whose users have a `VoltageRegulation` without a mode in the working variant (created while another variant was the working one): it is written from its other users, and left out when it has none; the export used to fail. A change export refuses such a change.
+* The `EquivalentInjection` of a boundary line with a generation: the import puts the whole injection into the generation of the boundary line, so `EquivalentInjection.p` and `q` are `p0 - targetP` and `q0 - targetQ` (a value that is not a number counts as 0); the full export used to write `p0` and `q0` alone, and the generation was lost.
+
+### One mapping for every SSH export
+
+The partial SSH export, the difference model export, the database sink, the in-place import of a difference (which completes a group from the description of its subject) and the full SSH export describe an object through one mapping: one function per object family writes the steady state hypothesis of an object (a load, a machine, a tap changer, a shunt compensator, a static var compensator, a switch, a `VsConverter`, a regulating control, ...) to a sink, which is the XML document of the full export or the buffer a change export merges its descriptions in. The full SSH export keeps its own dispatch, as upstream wrote it (its loops over the network, which objects it names, the order of the regulating controls), and calls the describe function of every object it writes; a change export asks the same functions about the objects a change touches, after the refusals below, which a full model does not evaluate. Terminals, DC terminals and control areas are families of the mapping too; only the `CsConverter` of a converter of the detailed DC model keeps a writer of the full export, until the powers of a detailed line commutated converter are decided. So a property of an object is written by one line of code, whichever export asks for it, and the full export writes byte for byte what it wrote before. A test compares every value of the full export with the value derived from the IIDM object itself, and lists what only a full export writes, each with its reason (a battery, a fictitious injection, a hidden tap changer are written by the full export only, through the same describe functions, because no change names them); a snapshot pins the full export's output.
+
+The mapping reads the network for one of two receivers, which only decides *which objects it may name* and *which refusals it honours*, never a value:
+
+* A receiver of changes (partial SSH, difference model, database) holds a state already and applies the file on top of it. An object the import did not record, or a change the receiver would not end up with, is refused, with a remedy.
+* The reader of a full model reads the whole state against the equipment model. It names objects under the identifiers the export generates (a `RegulatingControl` the import did not record, the `EquivalentInjection` of a boundary line without one, a `GeneratingUnit`), and it does not honour the refusals that only protect a receiver of changes: it writes a `RegulatingControl` from the users it can describe and leaves out a control none of whose users can be described.
+
+The refusals, with the rule the tests name them by (`Refusal` in the code), their remedy and whether a full model
+honours them, are listed on the generated {ref}`mapping page <cgmes-mapping-refusals>`. The changes they refuse are the
+ones of the [limitations](#limitations) above.
+
+What the full SSH export writes differently from upstream powsybl-core, each a correction to what the import reads back (see [Fixed import and export defects](#fixed-import-and-export-defects)): the injection of a boundary line with a generation, the `TapChangerControl` of a phase tap changer limiting current in an SSH exported alone, a `RegulatingControl` some of whose users have no mode, the local reactive power target of a VSC station in voltage mode that does not regulate (`targetQpcc`), the terminal sign of regulation targets, and the control mode of a static var compensator without regulation in the EQ export. The change exports write an `EquivalentInjection.regulationTarget` that is not a usable voltage as `0`, as the full export always did; a receiver reads `0` where it used to keep its previous target (see [Supported changes](#supported-changes)).
 
 (cgmes-difference-model-export)=
 ## Difference model export from recorded changes
@@ -323,7 +365,7 @@ The export is three steps, and a caller can stop after any of them:
 
 1. the recorded `NetworkEvent`s are compacted to one change per attribute, keeping what the *first* change of each attribute replaced;
 2. `toDifferences` translates them into `CgmesStatement`s, in both directions, without writing anything;
-3. a `DifferenceSink` stores the result, as a document per profile through `DifferenceModelWriter`, in a triple store, or in an RDF database through `RdfDbDifferenceSink` &mdash; see [storing difference models](rdf_database.md#storing-difference-models), which also versions them and advances the sender. A database export may address the version and the timestep it writes, see [versioning](rdf_database.md#versioning-snapshots-versions-and-timesteps) and [timesteps](rdf_database.md#timesteps-the-outer-dimension).
+3. a `DifferenceSink` stores the result, as a document per profile through `DifferenceModelWriter`, in a triple store, or in any other store that implements the interface. The RDF database is one such store; what it does with the statements and the two verdicts it asks `FastRouteCapabilities` for is on the [integration page](rdf_database_integration.md#export-from-a-recorded-change-to-a-stored-snapshot).
 
 `CgmesStatement` is one RDF triple about an object that already exists in the model the difference applies to: a subject identifier, a CIM property, a value and how that value is written (a literal, a CIM enumeration literal or a reference). Statements of one profile are bundled in a `DifferenceModel`, and the models of one change set in a `DifferenceModelSet`. Two statements are equal when they say the same thing about the same object, whatever CIM class the producer believed the subject to have, so a generated statement and one parsed back from a document compare equal.
 
@@ -429,14 +471,14 @@ next.header(CgmesSubset.STEADY_STATE_HYPOTHESIS)
 
 ### Supported changes per profile
 
-Everything [the partial SSH export supports](#supported-changes) reaches the forward statements of a difference unchanged: both exports share the mapping. A difference model additionally carries the equipment values below, which a partial SSH file cannot express.
+Everything [the partial SSH export supports](#supported-changes) reaches the forward statements of a difference unchanged: both exports share the mapping. A difference model additionally carries the equipment values below, which a partial SSH file cannot express (their blocks are the ones of `LimitFamily` on the {ref}`mapping page <cgmes-mapping>`; this table adds the profile per CIM version and how exact the reverse statement is).
 
 | IIDM change | CGMES object / property | CGMES 2.4.15 | CGMES 3 | Reverse exactness |
 | --- | --- | --- | --- | --- |
 | Permanent and temporary limit values of current, active power and apparent power limits (branches, three windings transformer legs, boundary lines) | `CurrentLimit\|ActivePowerLimit\|ApparentPowerLimit.value` of the stored mRID | EQ | SSH, also carried by a partial SSH file | exact |
 | `VoltageLevel` high / low limit of a voltage level built from `VoltageLimit` objects | `VoltageLimit.value` of every stored identifier | EQ | SSH | exact for one identifier, aggregate for several |
 | `VoltageLevel` high / low limit of a voltage level with no `VoltageLimit` objects | `VoltageLevel.highVoltageLimit\|lowVoltageLimit` | EQ | EQ | exact |
-| `Line` `r`, `x` | `ACLineSegment\|SeriesCompensator\|EquivalentBranch.r\|.x` | EQ | EQ | exact (lossless formatting) |
+| `Line` `r`, `x` (a negative `x` for a capacitive `SeriesCompensator` only) | `ACLineSegment\|SeriesCompensator\|EquivalentBranch.r\|.x` | EQ | EQ | exact (lossless formatting) |
 | `Line` `g1` = `g2`, `b1` = `b2` | `ACLineSegment.gch` = `g1 + g2`, `.bch` = `b1 + b2` | EQ | EQ | exact while symmetric; the import splits the total equally |
 | `BoundaryLine` `r`, `x`, `g`, `b` | `ACLineSegment.r\|.x\|.gch\|.bch`, or `EquivalentBranch.r\|.x` | EQ | EQ | exact |
 
@@ -466,6 +508,7 @@ These equipment changes are reported as unsupported, for the same reason as ever
 * The impedance of a `TwoWindingsTransformer` or of a `ThreeWindingsTransformer`, see the cut below.
 * An impedance of a line whose CGMES class is not `ACLineSegment`, `SeriesCompensator` or `EquivalentBranch`, of a branch the import represented as a switch, or a zero impedance that would make the receiver create a switch (both ends in one voltage level).
 * An asymmetric shunt admittance of a line (`g1 != g2` or `b1 != b2`, relative tolerance 1e-9 &mdash; relative, because an absolute tolerance of 1e-9 S would accept a difference in the fifth significant digit of a susceptance of 4.6e-4 S): CGMES holds one total that the import splits equally.
+* A negative resistance, or a negative reactance of anything but a `SeriesCompensator` (a capacitive series compensator is one the import accepts).
 * A shunt admittance of a `SeriesCompensator` or of an `EquivalentBranch`, which have none in CGMES, and any impedance of an `EquivalentBranch` whose two ends have different nominal voltages, because the import folds the ratio between them into the IIDM value.
 
 #### Cut, with the reason
@@ -484,32 +527,28 @@ selection, and the export runs with that variant selected so the values written 
 variant of the calling thread is restored afterwards, including when the export throws.
 
 That selects the *values*. It does not change what the header says the difference **supersedes**, which is the
-model the network as a whole is at. A network whose variants stand for stored snapshots therefore wraps the call
-in `RdfDbProvenance.inVariant(network, id, …)` (see [the RDF database](rdf_database.md)), which installs that
-variant's identity for the duration of the export as well:
-
-```java
-RdfDbProvenance.inVariant(network, "08:30",
-        () -> CgmesDiffExport.toString(network, events, CgmesSubset.STEADY_STATE_HYPOTHESIS, FAIL));
-```
+model the network as a whole is at (its `CgmesMetadataModels`). A layer that binds variants to stored states has to
+install the variant's identity around the call as well; the RDF database does, see
+[variant mode](rdf_database_integration.md#variant-mode).
 
 `setRejectSharedChanges(true)` turns a change IIDM does not store per variant into an unsupported change. Such a
 change is recorded *without* a variant identifier, which is how it is recognised; with more than one variant in
 the network it describes the state of all of them, so writing it into the history of one would be a lie about the
 others. Both options are off by default, and the golden files of this exporter are what pins that.
 
-See [the RDF database](rdf_database.md) for `RdfDbExport.exportVariant` and `exportPerVariant`, which write one
-history per variant.
+Writing one history per variant into a database is the database's side, see
+[the RDF database](rdf_database.md#writing-one-history-per-variant).
 
 ### Limitations
 
 Everything the partial SSH export reports as unsupported is unsupported here too. A difference model adds these, all of them about the state *before* the change:
 
 * **A previous value that was not recorded.** An event carrying no old value, or an old value of an unexpected type, makes the change unsupported rather than wrong: an unset section count or tap position, or an `UpdateNetworkEvent` built by hand without an old value.
-* **The creation of an extension.** A partial SSH file describes the state that follows a creation and is happy with it, but the values the extension carried before it existed are not recorded anywhere. A recorded creation of an `activePowerControl` or of a `generatorRemoteReactivePowerControl` is therefore not exportable as a difference. Reference priorities are the exception: an absent one *is* a priority of zero, by definition of `ReferencePriority.get`, so their creation is exportable.
+* **The creation of an extension.** A partial SSH file describes the state that follows a creation and is happy with it, but the values the extension carried before it existed are not recorded anywhere. A recorded creation of an `activePowerControl` is therefore not exportable as a difference. Reference priorities are the exception: an absent one *is* a priority of zero, by definition of `ReferencePriority.get`, so their creation is exportable.
+* **The creation of a `VoltageRegulation`.** IIDM reports neither the creation nor the removal of a `VoltageRegulation` (nor does a deprecated setter that creates one on demand report more than its own attribute), so the export cannot tell that a regulation did not exist before the change set: the reverse statements then describe the regulation the network holds now, with the recorded previous values of what changed. A difference that has to undo the creation of a regulation cannot be produced; create the regulation before the recording starts.
 * **A change is exported only if both directions succeed.** The reported reason is the first failure, the forward one when both fail.
 
-Creations and removals of equipment are out of scope of this release, in both directions, and so is the content of `dm:preconditions`. A difference model produced here is read back by the [difference model update](import.md#cgmes-import-difference-model), which applies it to a loaded network in place and can undo it again.
+Creations and removals of equipment are out of scope of this release, in both directions, and so is the content of `dm:preconditions`. A difference model produced here is read back by the {ref}`difference model update <cgmes-import-difference-model>`, which applies it to a loaded network in place and can undo it again.
 
 ## Topology kind
 
@@ -751,6 +790,10 @@ In the SSH profile:
 - For `ConformLoad`, `NonConformLoad` and `EnergyConsumer`, the attributes `EnergyConsumer.p` and `EnergyConsumer.q` are written from the IIDM `P0` and `Q0`.
 - For `EnergySource`, the attributes `EnergySource.activePower` and `EnergySource.reactivePower` are written from the IIDM `P0` and `Q0`.
 - For `AsynchronousMachine`, the attributes `RotatingMachine.p` and `RotatingMachine.q` are written from the IIDM `P0` and `Q0`. 
+  Additionally, the mandatory attributes `controlEnabled` and `asynchronousMachineKind` are also exported.
+  `controlEnabled` is always set to `false`, while `asynchronousMachineKind` is determined by the active power.
+  If it is greater than or equal to 0.0, the machine is considered a `motor`, otherwise, it is considered a `generator`.
+
 NOTE: SSH attributes for active and reactive power of `EnergySource` and `AsynchronousMachine` in CGMES must be given with load sign convention, so no sign change has to be made from IIDM `P0, Q0` values.
 In the SV profile, a `SvPowerFlow` is written for the terminal of the load with the terminal `P` and `Q` values.
 
@@ -1008,6 +1051,13 @@ Its default value is `1D`.
 **iidm.export.cgmes.cgm_export**<br>
 Optional property to specify the export use-case: IGM (Individual Grid Model) or CGM (Common Grid Model).
 To export instance files of a CGM, set the value to `True`. The default value is `False` to export network as an IGM.
+
+**iidm.export.cgmes.cgm-export-with-tp**<br>
+Optional property that defines whether the TP (Topology) profile should be exported during a CGM quick export (see **iidm.export.cgmes.cgm_export**).
+This property is only taken into account during a CGM quick export. By default, no TP file is written during the CGM export.
+It can be set to `CGM` to export a single TP file for the CGM, or `IGM` to export a TP file for each IGM.
+An empty or invalid string will be considered as no TP file will be exported.
+
 
 **iidm.export.cgmes.update-dependencies**<br>
 Optional property to determine if dependencies in the exported instance files should be managed automatically. The default value is `True`.

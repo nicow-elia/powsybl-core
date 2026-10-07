@@ -15,8 +15,9 @@
         <cim:ACDCConverter.targetUdc>0</cim:ACDCConverter.targetUdc>
         <cim:ACDCConverter.p>0</cim:ACDCConverter.p>
         <cim:ACDCConverter.q>0</cim:ACDCConverter.q>
+        <cim:VsConverter.targetQpcc>40</cim:VsConverter.targetQpcc>
+        <cim:VsConverter.targetUpcc>0</cim:VsConverter.targetUpcc>
         <cim:VsConverter.pPccControl rdf:resource="http://iec.ch/TC57/2013/CIM-schema-cim16#VsPpccControlKind.pPcc"/>
         <cim:VsConverter.qPccControl rdf:resource="http://iec.ch/TC57/2013/CIM-schema-cim16#VsQpccControlKind.reactivePcc"/>
-        <cim:VsConverter.targetQpcc>40</cim:VsConverter.targetQpcc>
     </cim:VsConverter>
 </rdf:RDF>

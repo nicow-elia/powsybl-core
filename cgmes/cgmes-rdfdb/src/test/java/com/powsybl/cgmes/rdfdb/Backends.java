@@ -10,10 +10,14 @@ package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
 import com.powsybl.cgmes.conversion.CgmesImport;
+import com.powsybl.commons.datasource.DataSource;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import org.eclipse.rdf4j.model.Value;
 import org.junit.jupiter.params.provider.Arguments;
 
+import java.net.URISyntaxException;
+import java.nio.file.Path;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -101,8 +105,66 @@ final class Backends {
         return rows.isEmpty() ? 0 : Long.parseLong(rows.get(0).get("n").stringValue());
     }
 
+    /** The modelling authority set of the MicroGrid BE files. */
+    static final String BE = "http://elia.be/CGMES/2.4.15";
+
+    /** The modelling authority set of the MicroGrid NL files. */
+    static final String NL = "http://tennet.nl/CGMES/2.4.15";
+
+    /** The modelling authority set of the CGMES 3 Svedala files, and of every fixture derived from them. */
+    static final String SVK = "http://www.svk.se/ARISTO";
+
+    /** The scenario time of the MicroGrid base case, which is the base timestamp of a tree it is the root of. */
+    static final Instant BASE = Instant.parse("2014-06-01T10:30:00Z");
+
     /** The MicroGrid BE base case, the fixture most tests of this package store. */
     static ReadOnlyDataSource microGridBe() {
         return CgmesConformity1Catalog.microGridBaseCaseBE().dataSource();
+    }
+
+    /** The MicroGrid NL base case: another modelling authority of the same day, with the same boundary. */
+    static ReadOnlyDataSource microGridNl() {
+        return CgmesConformity1Catalog.microGridBaseCaseNL().dataSource();
+    }
+
+    /**
+     * {@code CGMES_Full.zip} of pypowsybl: a realistic IGM whose profiles name different modelling authorities
+     * (EQ and TP {@code powsybl.org}, SSH {@link #CGMES_FULL_SSH}, SV {@code http://tennet.nl/CGMES}, the merging
+     * agent's), with the ENTSO-E EQ boundary inside.
+     */
+    static ReadOnlyDataSource cgmesFull() {
+        try {
+            return DataSource.fromPath(Path.of(Backends.class.getResource("CGMES_Full.zip").toURI()));
+        } catch (URISyntaxException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** The modelling authority set the SSH file of {@link #cgmesFull()} states. */
+    static final String CGMES_FULL_SSH = "http://elia.be/CGMES";
+
+    /**
+     * A version of the MicroGrid BE tree of a scenario, at its base timestamp.
+     *
+     * <p>The number is the version's name, {@code "1"}, {@code "2"}, …: a scenario whose first root is written
+     * without a registry registers the names as they come, ranked in that order.</p>
+     */
+    static SnapshotRef ref(String scenario, int version) {
+        return SnapshotRef.of(scenario, BE, null, String.valueOf(version));
+    }
+
+    /** A version of the MicroGrid BE tree of a scenario, at a timestamp. */
+    static SnapshotRef ref(String scenario, int version, Instant timestamp) {
+        return SnapshotRef.of(scenario, BE, timestamp, String.valueOf(version));
+    }
+
+    /** A version of the Svedala tree of a scenario, at a timestamp, or at the base timestamp for {@code null}. */
+    static SnapshotRef svk(String scenario, int version, Instant timestamp) {
+        return SnapshotRef.of(scenario, SVK, timestamp, String.valueOf(version));
+    }
+
+    /** An instant written as ISO text, for the readability of a test. */
+    static Instant at(String iso) {
+        return Instant.parse(iso);
     }
 }

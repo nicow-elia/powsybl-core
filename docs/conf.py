@@ -70,6 +70,8 @@ extensions = ['sphinx.ext.autodoc',
               'sphinx.ext.intersphinx',
               'sphinx_tabs.tabs',
               'myst_parser',
+              # Diagrams written as ```{mermaid} blocks, rendered in the browser
+              'sphinxcontrib.mermaid',
               # Extension used to add a "copy" button on code blocks
               'sphinx_copybutton']
 myst_enable_extensions = [

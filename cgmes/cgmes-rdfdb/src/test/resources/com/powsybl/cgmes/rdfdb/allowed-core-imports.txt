@@ -1,0 +1,58 @@
+# The powsybl-core types the main code of powsybl-cgmes-rdfdb uses, pinned by MoveOutReadinessTest.
+# One fully qualified top-level type per line, sorted within each block in ASCII order (upper case before lower
+# case). A new entry is a new dependency on core.
+#
+# Block 1 - the frozen surface: types that say "Public API: a client outside this module builds on this signature"
+# in their javadoc (on the class, or on the members of CgmesImport), and the package
+# com.powsybl.triplestore.impl.rdf4j.sparql, which moves out together with the module.
+com.powsybl.cgmes.conversion.CgmesImport
+com.powsybl.cgmes.conversion.TripleStoreNetworkLoader
+com.powsybl.cgmes.conversion.diff.CgmesDiffImport
+com.powsybl.cgmes.conversion.diff.CgmesDiffNotApplicableException
+com.powsybl.cgmes.conversion.diff.FastRouteCapabilities
+com.powsybl.cgmes.conversion.export.CgmesDiffExport
+com.powsybl.cgmes.model.diff.DifferenceSink
+com.powsybl.cgmes.model.diff.StatementDiff
+com.powsybl.cgmes.model.triplestore.CgmesTripleStoreLoader
+com.powsybl.triplestore.impl.rdf4j.sparql.GraphStoreClient
+com.powsybl.triplestore.impl.rdf4j.sparql.ScenarioGraphNames
+com.powsybl.triplestore.impl.rdf4j.sparql.SparqlEndpoint
+com.powsybl.triplestore.impl.rdf4j.sparql.TripleStoreRDF4JSparql
+#
+# Block 2 - ordinary public API of powsybl-core, used as any other client uses it.
+com.powsybl.cgmes.conversion.Conversion
+com.powsybl.cgmes.conversion.export.PartialSshExport
+com.powsybl.cgmes.extensions.CgmesMetadataModels
+com.powsybl.cgmes.extensions.CgmesMetadataModelsAdder
+com.powsybl.cgmes.model.CgmesMetadataModel
+com.powsybl.cgmes.model.CgmesModelException
+com.powsybl.cgmes.model.CgmesModelReports
+com.powsybl.cgmes.model.CgmesNamespace
+com.powsybl.cgmes.model.CgmesOnDataSource
+com.powsybl.cgmes.model.CgmesSubset
+com.powsybl.cgmes.model.diff.CgmesStatement
+com.powsybl.cgmes.model.diff.DifferenceModel
+com.powsybl.cgmes.model.diff.DifferenceModelHeader
+com.powsybl.cgmes.model.diff.DifferenceModelSet
+com.powsybl.commons.PowsyblException
+com.powsybl.commons.config.PlatformConfig
+com.powsybl.commons.datasource.ReadOnlyDataSource
+com.powsybl.commons.extensions.AbstractExtension
+com.powsybl.commons.extensions.Extension
+com.powsybl.commons.report.ReportNode
+com.powsybl.commons.report.ReportResourceBundle
+com.powsybl.commons.report.TypedValue
+com.powsybl.computation.ComputationManager
+com.powsybl.computation.local.LocalComputationManager
+com.powsybl.iidm.network.ImportConfig
+com.powsybl.iidm.network.ImportPostProcessor
+com.powsybl.iidm.network.ImportersServiceLoader
+com.powsybl.iidm.network.Network
+com.powsybl.iidm.network.NetworkFactory
+com.powsybl.iidm.network.NetworkListener
+com.powsybl.iidm.network.VariantManager
+com.powsybl.iidm.network.VariantManagerConstants
+com.powsybl.iidm.network.events.NetworkEvent
+com.powsybl.triplestore.api.TripleStore
+com.powsybl.triplestore.api.TripleStoreOptions
+com.powsybl.triplestore.impl.rdf4j.TripleStoreRDF4J

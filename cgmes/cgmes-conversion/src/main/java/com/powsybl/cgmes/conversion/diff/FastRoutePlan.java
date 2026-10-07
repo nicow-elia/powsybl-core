@@ -8,11 +8,12 @@
 package com.powsybl.cgmes.conversion.diff;
 
 import com.powsybl.cgmes.conversion.Conversion;
+import com.powsybl.cgmes.conversion.RegulatingControlMapping;
 import com.powsybl.cgmes.conversion.UpdateScope;
-import com.powsybl.cgmes.conversion.diff.DiffSubjectResolver.ResolvedSubject;
+import com.powsybl.cgmes.conversion.diff.FastRouteCapabilities.Family;
 import com.powsybl.cgmes.conversion.diff.FastRouteCapabilities.PropertyGroup;
-import com.powsybl.cgmes.conversion.export.CgmesLimitIndex;
-import com.powsybl.cgmes.conversion.export.CgmesObjectDump;
+import com.powsybl.cgmes.conversion.elements.TerminalConversion;
+import com.powsybl.cgmes.conversion.export.Families;
 import com.powsybl.cgmes.extensions.CgmesMetadataModels;
 import com.powsybl.cgmes.model.CgmesMetadataModel;
 import com.powsybl.cgmes.model.CgmesNamespace;
@@ -22,22 +23,29 @@ import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
 import com.powsybl.cgmes.model.diff.DifferenceModelParser;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
+import com.powsybl.iidm.network.Connectable;
 import com.powsybl.iidm.network.Generator;
+import com.powsybl.iidm.network.HvdcLine;
 import com.powsybl.iidm.network.Identifiable;
 import com.powsybl.iidm.network.Network;
+import com.powsybl.iidm.network.Switch;
 import com.powsybl.iidm.network.TapChanger;
+import com.powsybl.iidm.network.Terminal;
 import com.powsybl.iidm.network.ThreeWindingsTransformer;
+import com.powsybl.iidm.network.TopologyKind;
 import com.powsybl.iidm.network.TwoWindingsTransformer;
 import com.powsybl.iidm.network.ValidationLevel;
 import com.powsybl.iidm.network.VoltageLevel;
 import com.powsybl.iidm.network.VoltageSourceConverter;
 import com.powsybl.iidm.network.extensions.ActivePowerControl;
 import com.powsybl.iidm.network.extensions.ReferencePriorities;
+import com.powsybl.iidm.network.regulation.VoltageRegulation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -59,7 +67,7 @@ import java.util.Set;
  * asking whether a difference applies and applying it are the same code.</p>
  *
  * <p>Cost: one pass over the statements, plus at most one pass over the equipment carrying CGMES objects that IIDM
- * does not model (built lazily by {@link DiffSubjectResolver}), plus one export context when a group has to be
+ * does not model (built lazily by {@link Families#resolve}), plus one export context when a group has to be
  * completed.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
@@ -81,7 +89,74 @@ final class FastRoutePlan {
     private static final String REFERENCE_PRIORITY_SUFFIX = ".referencePriority";
     private static final String NORMAL_PF = "GeneratingUnit.normalPF";
     private static final String TAP_CHANGER_CONTROL_ENABLED = "TapChanger.controlEnabled";
+    private static final String REGULATION_STATUS = "EquivalentInjection.regulationStatus";
+    private static final String Q_PCC_CONTROL = "VsConverter.qPccControl";
+    private static final String CONNECTED = "ACDCTerminal.connected";
     private static final String REGULATING_CONTROL_ENABLED = "RegulatingControl.enabled";
+    private static final String SERIES_COMPENSATOR_X = "SeriesCompensator.x";
+
+    /**
+     * What a difference model subject turned out to be: the subject index of the mapping ({@link Families#resolve})
+     * names the object and its class, the family is the one whose classes contain that class
+     * ({@link FastRouteCapabilities#familyOfClass}).
+     *
+     * @param family  the update query family the subject belongs to
+     * @param subject what the subject index of the mapping says about it
+     */
+    record ResolvedSubject(Family family, Families.Subject subject) {
+
+        /** The CIM class to write for the subject. */
+        String rdfType() {
+            return subject.cimClass();
+        }
+
+        /** The subject as an {@code rdf:about} value, in the form the receiving network's identifiers take. */
+        String about() {
+            return subject.about();
+        }
+
+        /** The IIDM object carrying the subject, which is the one a change of it is recorded on. */
+        Identifiable<?> owner() {
+            return subject.owner();
+        }
+
+        /** Every IIDM object the update of this subject touches, which is what a scoped update has to visit. */
+        Set<String> iidmIds() {
+            return subject.iidmIds();
+        }
+    }
+
+    /**
+     * Resolve one subject: it resolves only when the family found for it can carry every property the difference
+     * states about it.
+     *
+     * @param subjectId     the identifier as the difference model states it, already normalized
+     * @param properties    the properties the difference states about it
+     * @param classNameHint the class the producer gave the subject, or {@code null}
+     * @return the resolution, or empty when the subject is unknown or the family cannot carry the properties
+     */
+    static Optional<ResolvedSubject> resolve(Families families, String subjectId, Set<String> properties,
+                                             String classNameHint) {
+        return resolveSubject(families, subjectId, classNameHint)
+                .filter(resolved -> FastRouteCapabilities.spec(resolved.family()).properties().containsAll(properties));
+    }
+
+    /** Why a subject could not be resolved, see {@link #resolve}, as a sentence to append to "&lt;id&gt;: ". */
+    static String unresolvedReason(Families families, String subjectId, Set<String> properties, String classNameHint) {
+        Optional<ResolvedSubject> resolved = resolveSubject(families, subjectId, classNameHint);
+        if (resolved.isEmpty()) {
+            return families.unresolvedReason(subjectId);
+        }
+        Family family = resolved.get().family();
+        Set<String> familyProperties = FastRouteCapabilities.spec(family).properties();
+        String offending = properties.stream().filter(p -> !familyProperties.contains(p)).findFirst().orElse("?");
+        return "property " + offending + " is not updatable on a " + family;
+    }
+
+    private static Optional<ResolvedSubject> resolveSubject(Families families, String subjectId, String classNameHint) {
+        return families.resolve(subjectId, classNameHint)
+                .map(subject -> new ResolvedSubject(FastRouteCapabilities.familyOfClass(subject.cimClass()), subject));
+    }
 
     /**
      * One object of the synthetic update document.
@@ -91,6 +166,35 @@ final class FastRoutePlan {
      * @param statements the complete forward statements of that object, type statements left out
      */
     record TypedObject(String about, String rdfType, List<CgmesStatement> statements) {
+    }
+
+    /**
+     * Complete the setpoint block of the other converter of a line from the receiving network: merged into its own
+     * statements when the difference states it (they win), added as an object of its own otherwise.
+     *
+     * @param partner the partner resolved on the receiving network, empty when the difference states it already or
+     *                when it cannot be resolved
+     * @return whether the partner is complete now; {@code false} when it cannot be resolved (review 21 round 3, r3-m4)
+     */
+    static boolean completePartner(Map<String, TypedObject> objectsBySubject, String partnerId,
+                                   Map<String, CgmesStatement> fromNetwork, Optional<ResolvedSubject> partner,
+                                   Set<String> touched) {
+        TypedObject planned = objectsBySubject.get(partnerId);
+        if (planned != null) {
+            Map<String, CgmesStatement> byProperty = new LinkedHashMap<>();
+            planned.statements().forEach(statement -> byProperty.putIfAbsent(statement.property(), statement));
+            fromNetwork.values().forEach(statement -> byProperty.putIfAbsent(statement.property(), statement));
+            objectsBySubject.put(partnerId, new TypedObject(planned.about(), planned.rdfType(),
+                    List.copyOf(byProperty.values())));
+            return true;
+        }
+        if (partner.isEmpty()) {
+            return false;
+        }
+        touched.addAll(partner.get().iidmIds());
+        objectsBySubject.put(partnerId, new TypedObject(partner.get().about(), partner.get().rdfType(),
+                List.copyOf(fromNetwork.values())));
+        return true;
     }
 
     /**
@@ -132,16 +236,15 @@ final class FastRoutePlan {
     private final List<PlannedModel> models;
     private final List<DirectStatement> directStatements;
     private final Set<String> touchedIidmIds;
-    private final CgmesLimitIndex limitIndex;
+    private final Families families;
 
     private FastRoutePlan(CgmesDiffImport.Decision decision, List<PlannedModel> models,
-                          List<DirectStatement> directStatements, Set<String> touchedIidmIds,
-                          CgmesLimitIndex limitIndex) {
+                          List<DirectStatement> directStatements, Set<String> touchedIidmIds, Families families) {
         this.decision = decision;
         this.models = models;
         this.directStatements = directStatements;
         this.touchedIidmIds = touchedIidmIds;
-        this.limitIndex = limitIndex;
+        this.families = families;
     }
 
     /** A plan that writes nothing: the difference is refused or says nothing. */
@@ -150,11 +253,11 @@ final class FastRoutePlan {
     }
 
     /**
-     * The index of the CGMES limit identifiers the subject resolution built, or {@code null} when it never needed
-     * one. Handing it over saves the applier a second walk over the operational limits groups.
+     * The mapping the subjects were resolved with, {@code null} for a plan that writes nothing. Handing it over saves
+     * the applier a second walk over the operational limits groups.
      */
-    CgmesLimitIndex limitIndex() {
-        return limitIndex;
+    Families families() {
+        return families;
     }
 
     /** The statements applied with IIDM setters, after the update workflow. */
@@ -190,7 +293,19 @@ final class FastRoutePlan {
                 || config.getRemovePropertiesAndAliasesAfterImport()) {
             return UpdateScope.ALL;
         }
-        return UpdateScope.of(touchedIidmIds);
+        return UpdateScope.of(touchedIidmIds, disconnectsATerminal());
+    }
+
+    /**
+     * Whether a model to write states a disconnected terminal: only then can the update create a fictitious switch,
+     * so only then does the scoped update query the terminals of the whole model for it.
+     */
+    private boolean disconnectsATerminal() {
+        return models.stream()
+                .flatMap(model -> model.objects().stream())
+                .flatMap(object -> object.statements().stream())
+                .anyMatch(statement -> CONNECTED.equals(statement.property())
+                        && !Boolean.parseBoolean(statement.value().trim()));
     }
 
     /**
@@ -222,19 +337,21 @@ final class FastRoutePlan {
         private final DifferenceModelSet diffs;
         private final CgmesDiffImport.Options options;
         private final boolean inverted;
-        private final DiffSubjectResolver resolver;
-        private final CgmesObjectDump dump;
+        private final Families families;
+        /** What the network says about each subject asked for, by subject: the reverse check may ask several times. */
+        private final Map<String, Families.Description> descriptions = new HashMap<>();
         private final List<CgmesDiffImport.BlockingStatement> blocking = new ArrayList<>();
         private final List<DirectStatement> directs = new ArrayList<>();
         private final Set<String> touched = new LinkedHashSet<>();
+        /** The converters of an HVDC line whose setpoint block the model being planned states, by subject. */
+        private final Map<String, ResolvedSubject> linkedConverters = new LinkedHashMap<>();
 
         private Planner(Network network, DifferenceModelSet diffs, CgmesDiffImport.Options options, boolean inverted) {
             this.network = network;
             this.diffs = diffs;
             this.options = options;
             this.inverted = inverted;
-            this.resolver = new DiffSubjectResolver(network);
-            this.dump = new CgmesObjectDump(network);
+            this.families = new Families(network);
         }
 
         private FastRoutePlan plan() {
@@ -257,7 +374,7 @@ final class FastRoutePlan {
                 return refused(new CgmesDiffImport.Decision(CgmesDiffImport.Route.NOOP, List.of()));
             }
             return new FastRoutePlan(new CgmesDiffImport.Decision(CgmesDiffImport.Route.FAST, List.of()),
-                    List.copyOf(models), List.copyOf(directs), Set.copyOf(touched), resolver.limitIndex());
+                    List.copyOf(models), List.copyOf(directs), Set.copyOf(touched), families);
         }
 
         private void checkOneCimNamespace() {
@@ -296,13 +413,16 @@ final class FastRoutePlan {
             }
 
             int directsBefore = directs.size();
-            List<TypedObject> objects = new ArrayList<>(bySubject.size());
+            linkedConverters.clear();
+            Map<String, TypedObject> objectsBySubject = new LinkedHashMap<>();
             for (Map.Entry<String, List<CgmesStatement>> entry : bySubject.entrySet()) {
                 TypedObject object = planSubject(subset, entry.getKey(), entry.getValue(), hints.get(entry.getKey()));
                 if (object != null && !object.statements().isEmpty()) {
-                    objects.add(object);
+                    objectsBySubject.put(entry.getKey(), object);
                 }
             }
+            completeLinkedConverters(subset, objectsBySubject);
+            List<TypedObject> objects = new ArrayList<>(objectsBySubject.values());
             checkReverse(subset, reverse, model.preconditions());
             if (objects.isEmpty() && directs.size() == directsBefore) {
                 return null;
@@ -316,13 +436,13 @@ final class FastRoutePlan {
                                         String classNameHint) {
             Set<String> properties = new LinkedHashSet<>();
             statements.forEach(statement -> properties.add(statement.property()));
-            Optional<ResolvedSubject> resolved = resolver.resolve(subjectId, properties, classNameHint);
+            Optional<ResolvedSubject> resolved = resolve(families, subjectId, properties, classNameHint);
             if (resolved.isEmpty()) {
                 CgmesStatement first = statements.isEmpty() ? null : statements.get(0);
                 blocking.add(new CgmesDiffImport.BlockingStatement(subset, first,
                         statements.isEmpty()
                                 ? "object creation cannot be applied in place: " + subjectId + " is unknown"
-                                : subjectId + ": " + resolver.reasonFor(subjectId, properties, classNameHint)));
+                                : subjectId + ": " + unresolvedReason(families, subjectId, properties, classNameHint)));
                 return null;
             }
             ResolvedSubject subject = resolved.get();
@@ -343,14 +463,53 @@ final class FastRoutePlan {
                 return null;
             }
             List<CgmesStatement> complete = complete(subset, subject, subjectId, statements);
+            if (complete != null && subject.owner() instanceof HvdcLine && complete.stream()
+                    .anyMatch(statement -> FastRouteCapabilities.AC_DC_CONVERTER_SETPOINTS.properties().contains(statement.property()))) {
+                linkedConverters.put(subjectId, subject);
+            }
             return complete == null ? null : new TypedObject(subject.about(), subject.rdfType(), complete);
+        }
+
+        /**
+         * Add the setpoint block of the other converter of every HVDC line one of whose converters states its own.
+         *
+         * <p>The CGMES update of the simplified DC model takes the power of the link from the {@code targetPpcc} of
+         * whichever converter states one ({@code DCLinkUpdate}, powsybl-core #4057), and the inverter states zero: its
+         * block alone brings the link down. The setpoint blocks of both converters of a line are therefore one
+         * consistency group, completed from the receiving network like any other (review 21 round 2, R2-B1). The HVDC
+         * family describes the line as the blocks of both converters ({@link Families#linkStatements}).</p>
+         */
+        private void completeLinkedConverters(CgmesSubset subset, Map<String, TypedObject> objectsBySubject) {
+            for (Map.Entry<String, ResolvedSubject> linked : linkedConverters.entrySet()) {
+                ResolvedSubject subject = linked.getValue();
+                Set<String> setpoints = FastRouteCapabilities.AC_DC_CONVERTER_SETPOINTS.properties();
+                Map<String, Map<String, CgmesStatement>> partners = new LinkedHashMap<>();
+                // The family describes a change of the line as the blocks of both converters: the partner's is the other
+                for (CgmesStatement statement : families.linkStatements((HvdcLine) subject.owner())) {
+                    if (!statement.subjectId().equals(linked.getKey()) && !statement.isType()
+                            && setpoints.contains(statement.property())) {
+                        partners.computeIfAbsent(statement.subjectId(), id -> new LinkedHashMap<>())
+                                .putIfAbsent(statement.property(), statement);
+                    }
+                }
+                partners.forEach((partnerId, fromNetwork) -> {
+                    Optional<ResolvedSubject> partner = objectsBySubject.containsKey(partnerId) ? Optional.empty()
+                            : resolve(families, partnerId, fromNetwork.keySet(), subject.rdfType());
+                    if (!completePartner(objectsBySubject, partnerId, fromNetwork, partner, touched)) {
+                        // A converter block alone takes the power of the link to zero: leave it to the slow route
+                        blocking.add(new CgmesDiffImport.BlockingStatement(subset, fromNetwork.values().iterator().next(),
+                                "the other converter " + partnerId + " of the HVDC line cannot be resolved, and the"
+                                        + " block of one converter alone would take the power of the link to zero"));
+                    }
+                });
+            }
         }
 
         /**
          * Whether every statement of one subject writes state the receiving network stores per variant.
          *
          * <p>Only run when the caller asked for it, that is when a <em>variant</em> of the network is bound to a
-         * stored state. The family table answers most of it from the document alone; the rest &mdash; the four
+         * stored state. The family table answers most of it from the document alone; the rest &mdash; the
          * {@link FastRouteCapabilities.VariantSafety#NETWORK_DEPENDENT} cases &mdash; depends on what the receiving
          * network looks like and is decided here, against the resolved subject, while nothing is modified yet.</p>
          *
@@ -372,17 +531,24 @@ final class FastRoutePlan {
             }
         }
 
-        /** The four rules a {@link FastRouteCapabilities.VariantSafety#NETWORK_DEPENDENT} family is judged by. */
+        /** The rules a {@link FastRouteCapabilities.VariantSafety#NETWORK_DEPENDENT} family is judged by. */
         private void checkNetworkDependent(CgmesSubset subset, ResolvedSubject subject, CgmesStatement statement) {
             String property = statement.property();
             boolean unsafe = switch (subject.family()) {
                 case SYNCHRONOUS_MACHINE, EXTERNAL_NETWORK_INJECTION -> property.endsWith(REFERENCE_PRIORITY_SUFFIX)
-                        && referencePriorityWouldCreateTheExtension(subject, statement.value());
+                        && referencePriorityWouldCreateTheExtension(subject, statement.value())
+                        || aVoltageRegulatingGeneratorHasNoVoltageRegulation(subject);
+                case EQUIVALENT_INJECTION -> REGULATION_STATUS.equals(property)
+                        && Boolean.parseBoolean(statement.value().trim()) && aGeneratorHasNoVoltageRegulation(subject);
                 case GENERATING_UNIT -> NORMAL_PF.equals(property) && aGeneratorHasNoActivePowerControl(subject);
-                case RATIO_TAP_CHANGER, PHASE_TAP_CHANGER, REGULATING_CONTROL ->
-                    isRegulationSwitchedOn(property, statement.value())
+                case RATIO_TAP_CHANGER, PHASE_TAP_CHANGER -> isRegulationSwitchedOn(property, statement.value())
                             && aTapChangerHasNoLoadTapChangingCapabilities(subject);
-                case VS_CONVERTER -> !isDetailedConverter(subject);
+                case REGULATING_CONTROL -> isRegulationSwitchedOn(property, statement.value())
+                            && aTapChangerHasNoLoadTapChangingCapabilities(subject)
+                        || aVoltageRegulatingGeneratorHasNoVoltageRegulation(subject);
+                case VS_CONVERTER -> !isDetailedConverter(subject) || rebuildsSharedRegulation(subject, statement);
+                case TERMINAL -> CONNECTED.equals(property) && !Boolean.parseBoolean(statement.value().trim())
+                        && createsFictitiousSwitch(subject);
                 default -> false;
             };
             if (unsafe) {
@@ -420,6 +586,67 @@ final class FastRoutePlan {
             return objectsOf(subject).stream()
                     .filter(Generator.class::isInstance)
                     .anyMatch(object -> object.getExtension(ActivePowerControl.class) == null);
+        }
+
+        /**
+         * The update of a generator regulating voltage creates its {@code VoltageRegulation} when it has none
+         * ({@code AbstractReactiveLimitsOwnerConversion#setVoltageRegulation}, {@code EquivalentInjectionConversion}),
+         * and a VoltageRegulation exists in every variant or in none (powsybl-core #3699).
+         */
+        private boolean aGeneratorHasNoVoltageRegulation(ResolvedSubject subject) {
+            return objectsOf(subject).stream()
+                    .anyMatch(object -> object instanceof Generator generator && generator.getVoltageRegulation() == null);
+        }
+
+        /** As {@link #aGeneratorHasNoVoltageRegulation}, for the generators whose CGMES control regulates voltage. */
+        private boolean aVoltageRegulatingGeneratorHasNoVoltageRegulation(ResolvedSubject subject) {
+            return objectsOf(subject).stream()
+                    .anyMatch(object -> object instanceof Generator generator && generator.getVoltageRegulation() == null
+                            && RegulatingControlMapping.isControlModeVoltage(generator.getProperty(Conversion.PROPERTY_MODE)));
+        }
+
+        /**
+         * The update of a converter of the detailed DC model rebuilds its {@code VoltageRegulation}
+         * ({@code AcDcConverterConversion#updateReactivePowerControl}): it creates the object when it is absent, and
+         * sets its regulating terminal to the point of common coupling for a reactive power or remote voltage
+         * control and to none for a local voltage control. Neither the object nor its terminal is per variant.
+         */
+        private boolean rebuildsSharedRegulation(ResolvedSubject subject, CgmesStatement statement) {
+            for (Identifiable<?> object : objectsOf(subject)) {
+                if (object instanceof VoltageSourceConverter converter) {
+                    VoltageRegulation regulation = converter.getVoltageRegulation();
+                    if (regulation == null) {
+                        return true;
+                    }
+                    if (Q_PCC_CONTROL.equals(statement.property())) {
+                        boolean voltage = statement.value().trim().endsWith("voltagePcc");
+                        boolean remote = converter.getPccTerminal() != converter.getTerminal1();
+                        Terminal rebuilt = voltage && !remote ? null : converter.getPccTerminal();
+                        if (rebuilt != regulation.getTerminal()) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        /**
+         * Disconnecting a terminal of a node/breaker voltage level makes the update create the fictitious switch of
+         * that terminal when it does not exist yet (powsybl-core #4085), and a switch belongs to every variant. The
+         * subject lists that switch among its objects when it exists; the equipment is checked for a node/breaker
+         * terminal as a whole, which may call a terminal of a bus/breaker end unsafe but never the other way round.
+         */
+        private boolean createsFictitiousSwitch(ResolvedSubject subject) {
+            if (subject.iidmIds().stream().map(network::getSwitch).anyMatch(TerminalConversion::isFictitiousSwitchOfATerminal)) {
+                return false;
+            }
+            return objectsOf(subject).stream().anyMatch(object -> switch (object) {
+                case Switch sw -> sw.getVoltageLevel().getTopologyKind() == TopologyKind.NODE_BREAKER;
+                case Connectable<?> connectable -> connectable.getTerminals().stream()
+                        .anyMatch(t -> t.getVoltageLevel().getTopologyKind() == TopologyKind.NODE_BREAKER);
+                default -> false;
+            });
         }
 
         private static boolean isRegulationSwitchedOn(String property, String value) {
@@ -465,7 +692,8 @@ final class FastRoutePlan {
          *
          * <p>In the simplified model &mdash; the default &mdash; a voltage source converter update also writes
          * {@code HvdcLine.maxP} and {@code VscConverterStation.lossFactor}, neither of which is per variant. The
-         * detailed model writes only per-variant setpoints.</p>
+         * detailed model writes per-variant setpoints, and its VoltageRegulation, see
+         * {@link #rebuildsSharedRegulation}.</p>
          */
         private boolean isDetailedConverter(ResolvedSubject subject) {
             return objectsOf(subject).stream().anyMatch(VoltageSourceConverter.class::isInstance);
@@ -492,9 +720,10 @@ final class FastRoutePlan {
                         "impedance and limit values must be finite"));
                 return;
             }
-            if (isSeriesImpedance(statement.property()) && value < 0) {
+            // A capacitive series compensator has a negative reactance (owner decision O3)
+            if (isSeriesImpedance(statement.property()) && value < 0 && !SERIES_COMPENSATOR_X.equals(statement.property())) {
                 blocking.add(new CgmesDiffImport.BlockingStatement(subset, statement,
-                        "impedance values must be finite (r, x >= 0)"));
+                        "impedance values must be finite (r, x >= 0; x < 0 for a SeriesCompensator only)"));
                 return;
             }
             if (isVoltageLevelLimit(statement.property()) && value < 0) {
@@ -559,7 +788,7 @@ final class FastRoutePlan {
          * ones: a SPARQL optional block says the query still matches without them, but a conversion may still need
          * one &mdash; a voltage source converter that regulates its voltage has no target without
          * {@code VsConverter.targetUpcc}, and the importer then switches the regulation off. Completing them costs
-         * one probe of the export mapping and removes a whole class of silent half-applications.</p>
+         * nothing beyond the description of the subject and removes a whole class of silent half-applications.</p>
          *
          * <p>A required property the receiver cannot produce blocks the in-place route; an optional one it cannot
          * produce is simply left out, which is what a CGMES file describing that state does.</p>
@@ -583,7 +812,7 @@ final class FastRoutePlan {
             if (missingRequired.isEmpty() && missingOptional.isEmpty()) {
                 return List.copyOf(byProperty.values());
             }
-            Map<String, CgmesStatement> fromNetwork = dumpOf(subject, subjectId);
+            Map<String, CgmesStatement> fromNetwork = networkValues(subject, subjectId);
             List<String> stillMissing = new ArrayList<>();
             for (String property : missingRequired) {
                 CgmesStatement statement = fromNetwork.get(property);
@@ -598,7 +827,8 @@ final class FastRoutePlan {
             if (!stillMissing.isEmpty()) {
                 blocking.add(new CgmesDiffImport.BlockingStatement(subset, statements.get(0),
                         "the properties " + stillMissing + " are read together with the ones stated here and the"
-                                + " receiver cannot derive them: " + dumpFailureReason(subject, subjectId)));
+                                + " receiver cannot derive them: " + describe(subject, subjectId).refusal()
+                                .orElse("no CGMES mapping produces them for " + subjectId)));
                 return null;
             }
             return List.copyOf(byProperty.values());
@@ -607,48 +837,27 @@ final class FastRoutePlan {
         /**
          * What the network currently says about the subject, by property.
          *
-         * <p>Every IIDM object the subject resolved to is probed, because a CGMES object may be described by more
-         * than one of them, and the result is filtered back to this subject: probing a transformer answers for all
-         * of its tap changers, probing an HVDC line for both of its converters.</p>
+         * <p>Every IIDM object the subject resolved to is described, because a CGMES object may be described by more
+         * than one of them, and the description is filtered back to this subject: a transformer describes all of its
+         * tap changers, an HVDC line both of its converters.</p>
          */
-        private Map<String, CgmesStatement> dumpOf(ResolvedSubject subject, String subjectId) {
+        private Map<String, CgmesStatement> networkValues(ResolvedSubject subject, String subjectId) {
             Map<String, CgmesStatement> byProperty = new LinkedHashMap<>();
-            for (Identifiable<?> object : objectsOf(subject)) {
-                for (String attributeKey : DiffProbes.probesFor(subject, object)) {
-                    for (CgmesStatement statement : dump.statementsFor(object.getId(), attributeKey)) {
-                        if (statement.subjectId().equals(subjectId) && !statement.isType()) {
-                            byProperty.putIfAbsent(statement.property(), statement);
-                        }
-                    }
+            for (CgmesStatement statement : describe(subject, subjectId).statements()) {
+                if (statement.subjectId().equals(subjectId) && !statement.isType()) {
+                    byProperty.putIfAbsent(statement.property(), statement);
                 }
             }
             return byProperty;
         }
 
-        private String dumpFailureReason(ResolvedSubject subject, String subjectId) {
-            for (Identifiable<?> object : objectsOf(subject)) {
-                for (String attributeKey : DiffProbes.probesFor(subject, object)) {
-                    String reason = dump.dump(object.getId(), attributeKey)
-                            .fold(statements -> null, failure -> failure);
-                    if (reason != null) {
-                        return reason;
-                    }
-                }
-            }
-            return "no CGMES mapping produces them for " + subjectId;
+        private Families.Description describe(ResolvedSubject subject, String subjectId) {
+            return descriptions.computeIfAbsent(subjectId, id -> families.describe(subject.subject()));
         }
 
-        /** The objects describing the subject, its owner first so that its tap changer probes come first. */
+        /** The objects describing the subject, its owner first. */
         private List<Identifiable<?>> objectsOf(ResolvedSubject subject) {
-            List<Identifiable<?>> objects = new ArrayList<>();
-            objects.add(subject.owner());
-            for (String id : subject.iidmIds()) {
-                Identifiable<?> object = network.getIdentifiable(id);
-                if (object != null && !object.equals(subject.owner())) {
-                    objects.add(object);
-                }
-            }
-            return objects;
+            return families.objectsOf(subject.subject());
         }
 
         private Optional<CgmesMetadataModel> currentModel(CgmesSubset subset) {
@@ -715,11 +924,11 @@ final class FastRoutePlan {
                     continue;
                 }
                 Optional<ResolvedSubject> resolved =
-                        resolver.resolve(statement.subjectId(), Set.of(statement.property()), statement.className());
+                        resolve(families, statement.subjectId(), Set.of(statement.property()), statement.className());
                 if (resolved.isEmpty()) {
                     continue;
                 }
-                CgmesStatement actual = dumpOf(resolved.get(), statement.subjectId()).get(statement.property());
+                CgmesStatement actual = networkValues(resolved.get(), statement.subjectId()).get(statement.property());
                 if (actual == null) {
                     LOGGER.info("The value of {} of {} is not verifiable: the receiver has no mapping producing it",
                             statement.property(), statement.subjectId());

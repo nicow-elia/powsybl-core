@@ -10,7 +10,6 @@ package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
 import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Line;
 import com.powsybl.iidm.network.Network;
@@ -19,9 +18,11 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Instant;
 import java.util.List;
 
 import static com.powsybl.cgmes.rdfdb.Backends.params;
+import static com.powsybl.cgmes.rdfdb.Backends.ref;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -101,9 +102,9 @@ class RdfDbRequestCountTest {
             // Reading the catalogue is one request, whatever is asked of it afterwards
             mark = BenchMeters.FusekiMeter.mark();
             CatalogSnapshot snapshot = db.catalog(S).snapshot();
-            List<StoredModel> chain = snapshot.chainDown(snapshot.head(CgmesSubset.STEADY_STATE_HYPOTHESIS)
+            List<StoredModel> chain = snapshot.chainDown(snapshot.head(Profiles.SSH)
                     .orElseThrow().id());
-            snapshot.full(CgmesSubset.EQUIPMENT).orElseThrow();
+            snapshot.full(Profiles.EQ).orElseThrow();
             snapshot.heads();
             assertAtMost("reading the catalogue and asking it " + chain.size() + " questions", since(mark), 1);
 
@@ -127,33 +128,51 @@ class RdfDbRequestCountTest {
 
         BenchMeters.FusekiMeter.Reading mark = BenchMeters.FusekiMeter.mark();
         catalog.putFull(CgmesConformity1Catalog.microGridBaseCaseBE().dataSource(), null,
-                SnapshotRef.of(scenario, "1.0"), params(), ReportNode.NO_OP);
+                ref(scenario, 1), null, params(), ReportNode.NO_OP);
         // The uploads, plus the checks before them and the guarded write and read-back after them
         assertAtMost("writing a root snapshot of " + graphs + " instance files", since(mark), graphs + 5);
 
         BenchMeters.FusekiMeter.Reading load = BenchMeters.FusekiMeter.mark();
-        Network sender = RdfDbNetworkLoader.load(db, SnapshotRef.of(scenario, "1.0"), null, params(),
+        Network sender = RdfDbNetworkLoader.load(db, ref(scenario, 1), null, params(),
                 ReportNode.NO_OP);
         assertAtMost("loading a root snapshot (" + graphs + " graphs)", since(load), graphs + 5);
 
         mark = BenchMeters.FusekiMeter.mark();
         RdfDbExport.export(sender, Changes.record(sender, n -> Changes.moveLoad(n, 4.0)), db,
-                SnapshotRef.of(scenario, "1.1"), new CgmesDiffExport.ExportOptions());
-        // The three of the sink, plus resolving the head, refusing a duplicate version and reading the node back
+                ref(scenario, 2), new CgmesDiffExport.ExportOptions());
+        // A name the permissive registry does not hold yet is appended first: one guarded request, no read-back,
+        // because the snapshot write itself is guarded on the name at its rank
+        assertAtMost("writing a version under a name the registry does not hold yet", since(mark), 8);
+
+        mark = BenchMeters.FusekiMeter.mark();
+        catalog.registry().rev();
+        // The append dropped the cached registry rather than assume it won: the next question reads it, once
+        assertAtMost("the first registry read after an append", since(mark), 1);
+
+        mark = BenchMeters.FusekiMeter.mark();
+        catalog.registry().add("3");
+        // The guarded edit and the read-back
+        assertAtMost("an edit of the version registry", since(mark), 2);
+
+        mark = BenchMeters.FusekiMeter.mark();
+        RdfDbExport.export(sender, Changes.record(sender, n -> Changes.moveLoad(n, 5.0)), db,
+                ref(scenario, 3), new CgmesDiffExport.ExportOptions());
+        // The three of the sink, plus resolving the head, refusing a duplicate version and reading the node back;
+        // the rank check is local and the revision guard is inside the write
         assertAtMost("writing a version as a snapshot", since(mark), 7);
 
-        Network receiver = RdfDbNetworkLoader.load(db, SnapshotRef.of(scenario, "1.0"), null, params(),
+        Network receiver = RdfDbNetworkLoader.load(db, ref(scenario, 1), null, params(),
                 ReportNode.NO_OP);
         mark = BenchMeters.FusekiMeter.mark();
-        UpdateResult result = RdfDbNetworkLoader.update(receiver, db, SnapshotRef.of(scenario, "1.1"),
+        UpdateResult result = RdfDbNetworkLoader.update(receiver, db, ref(scenario, 2),
                 new RdfDbUpdateOptions(), params(), ReportNode.NO_OP);
         assertTrue(result.route() == UpdateResult.Route.DIFF_APPLIED, result.reasons().toString());
         // The plan, the models of the path and the statements of the differences: three, whatever the chain length
         assertAtMost("an update to a snapshot over " + result.diffCount() + " difference(s)", since(mark), 3);
 
-        String from = catalog.find(SnapshotRef.of(scenario, "1.0")).orElseThrow().iri();
+        String from = catalog.find(ref(scenario, 1)).orElseThrow().iri();
         mark = BenchMeters.FusekiMeter.mark();
-        db.versionGraph(scenario).plan(from, SnapshotRef.of(scenario, "1.1"), new RdfDbUpdateOptions());
+        db.versionGraph(scenario).plan(from, ref(scenario, 2), new RdfDbUpdateOptions());
         // One request: the rows that say which differences lie on the path also say what they are
         assertAtMost("planning a path", since(mark), 1);
 
@@ -170,10 +189,10 @@ class RdfDbRequestCountTest {
         assertAtMost("verifying the snapshot tree", since(mark), 1);
 
         // Backwards: the models the path ends at are ancestors, not steps, so their headers are read as well
-        Network backward = RdfDbNetworkLoader.load(db, SnapshotRef.of(scenario, "1.1"), null, params(),
+        Network backward = RdfDbNetworkLoader.load(db, ref(scenario, 2), null, params(),
                 ReportNode.NO_OP);
         mark = BenchMeters.FusekiMeter.mark();
-        UpdateResult undone = RdfDbNetworkLoader.update(backward, db, SnapshotRef.of(scenario, "1.0"),
+        UpdateResult undone = RdfDbNetworkLoader.update(backward, db, ref(scenario, 1),
                 new RdfDbUpdateOptions(), params(), ReportNode.NO_OP);
         assertTrue(undone.route() == UpdateResult.Route.DIFF_APPLIED, undone.reasons().toString());
         assertAtMost("an update backwards over " + undone.diffCount() + " difference(s)", since(mark), 3);
@@ -181,7 +200,7 @@ class RdfDbRequestCountTest {
         // A network read from files carries no provenance, so the planner has to find it by its model identifiers
         Network fromFiles = Network.read(CgmesConformity1Catalog.microGridBaseCaseBE().dataSource(), params());
         mark = BenchMeters.FusekiMeter.mark();
-        UpdatePlan identified = db.versionGraph(scenario).plan(fromFiles, SnapshotRef.of(scenario, "1.1"),
+        UpdatePlan identified = db.versionGraph(scenario).plan(fromFiles, ref(scenario, 2),
                 new RdfDbUpdateOptions());
         assertTrue(identified.kind() == UpdatePlan.Kind.DIFF, identified.reasons().toString());
         // The identity match, the snapshot it found, and the plan itself
@@ -192,9 +211,9 @@ class RdfDbRequestCountTest {
 
     /**
      * The same discipline for the variant flows, whose whole point is that a day costs a constant number of
-     * requests rather than one set per timestep.
+     * requests rather than one set per timestamp.
      *
-     * <p>The bound that matters is the last one: loading two timesteps and loading eight of them send the
+     * <p>The bound that matters is the last one: loading two timestamps and loading eight of them send the
      * <em>same</em> number of requests. Everything else in this method is there so that the day exists.</p>
      */
     private static void variantFlows(RdfDbConnection db) {
@@ -202,66 +221,95 @@ class RdfDbRequestCountTest {
         db.clear(scenario);
         SnapshotCatalog catalog = db.snapshots(scenario);
         catalog.putFull(CgmesConformity1Catalog.microGridBaseCaseBE().dataSource(), null,
-                SnapshotRef.of(scenario, "1.0"), params(), ReportNode.NO_OP);
+                ref(scenario, 1), null, params(), ReportNode.NO_OP);
         // The instance files of the fixture; a versioned scenario keeps them under IRIs of the versioning layer
         // rather than among the contexts, so the number is the fixture's, as in versionedFlows above
         int graphs = 9;
 
-        List<String> timesteps = new java.util.ArrayList<>();
-        timesteps.add("2014-06-01T10:30:00Z");
+        List<VariantRequest> timestamps = new java.util.ArrayList<>();
+        timestamps.add(VariantRequest.of(ref(scenario, 1)));
+        int newTimestamp = 0;
         for (int i = 1; i < 8; i++) {
-            String instant = String.format("2014-06-01T%02d:00:00Z", 11 + i);
-            catalog.putAsDiff(TimestepFixtures.ssh(1 + i % 3, instant, "rq" + i), null,
-                    new SnapshotRef(scenario, "1.0", instant), params(), ReportNode.NO_OP);
-            timesteps.add(instant);
+            Instant instant = Instant.parse(String.format("2014-06-01T%02d:00:00Z", 11 + i));
+            BenchMeters.FusekiMeter.Reading ingest = BenchMeters.FusekiMeter.mark();
+            catalog.putAsDiff(TimestampFixtures.ssh(1 + i % 3, instant, "rq" + i), null,
+                    ref(scenario, 1, instant), null, params(), ReportNode.NO_OP);
+            newTimestamp = since(ingest);
+            timestamps.add(VariantRequest.of(ref(scenario, 1, instant)));
         }
-        Network sender = RdfDbNetworkLoader.load(db, SnapshotRef.of(scenario, "1.0"), null, params(),
+        // The head lookup, the default pin (the latest rollover), the parent's plan and models, the head lookup and
+        // the three of the sink inside putDiff, the read-back; the parent state itself comes out of the cache
+        assertAtMost("ingesting a new timestamp from files", newTimestamp, 9);
+
+        // A rollover is the checkpoint (here of one profile: the snapshot, its plan, copy and apply, the metadata,
+        // the read-back) plus the flag and its read-back
+        BenchMeters.FusekiMeter.Reading rollover = BenchMeters.FusekiMeter.mark();
+        catalog.rollover(ref(scenario, 1, Instant.parse("2014-06-01T18:00:00Z")));
+        assertAtMost("flagging a rollover of one profile", since(rollover), 8);
+
+        // The changes between two timestamps, across their common pin: the plan, the differences, the end models
+        BenchMeters.FusekiMeter.Reading between = BenchMeters.FusekiMeter.mark();
+        RdfDbNetworkLoader.changesBetween(db, ref(scenario, 1, Instant.parse("2014-06-01T12:00:00Z")),
+                ref(scenario, 1, Instant.parse("2014-06-01T17:00:00Z")));
+        assertAtMost("the changes between two timestamps", since(between), 3);
+
+        // An archive cutoff is one guarded request and its read-back, and it costs a read nothing: it rides in the
+        // schema check, and the refusal is a filter inside the query that resolves the address
+        BenchMeters.FusekiMeter.Reading cutoff = BenchMeters.FusekiMeter.mark();
+        catalog.setArchiveCutoff(Instant.parse("2014-06-01T12:00:00Z"), "archive");
+        assertAtMost("setting an archive cutoff", since(cutoff), 2);
+        BenchMeters.FusekiMeter.Reading behindTheCutoff = BenchMeters.FusekiMeter.mark();
+        RdfDbNetworkLoader.changesBetween(db, ref(scenario, 1, Instant.parse("2014-06-01T12:00:00Z")),
+                ref(scenario, 1, Instant.parse("2014-06-01T17:00:00Z")));
+        assertAtMost("the changes between two timestamps with an archive cutoff", since(behindTheCutoff), 3);
+        catalog.setArchiveCutoff(null, null);
+        Network sender = RdfDbNetworkLoader.load(db, ref(scenario, 1), null, params(),
                 ReportNode.NO_OP);
         RdfDbExport.export(sender, Changes.record(sender, n -> Changes.moveLoad(n, 4.0)), db,
-                SnapshotRef.of(scenario, "1.1"), new CgmesDiffExport.ExportOptions());
+                ref(scenario, 2), new CgmesDiffExport.ExportOptions());
 
         // Creating a variant: one chain query for the target and the candidates, one model fetch, one statement
         // fetch
-        Network network = RdfDbNetworkLoader.load(db, SnapshotRef.of(scenario, "1.0"), null, params(),
+        Network network = RdfDbNetworkLoader.load(db, ref(scenario, 1), null, params(),
                 ReportNode.NO_OP);
         BenchMeters.FusekiMeter.Reading mark = BenchMeters.FusekiMeter.mark();
-        UpdateResult created = RdfDbNetworkLoader.update(network, db, scenario, "1.1", null, "A", params(),
-                ReportNode.NO_OP);
+        UpdateResult created = RdfDbNetworkLoader.update(network, db, ref(scenario, 2),
+                new RdfDbUpdateOptions().setTargetVariant("A"), params(), ReportNode.NO_OP);
         assertTrue(created.route() == UpdateResult.Route.DIFF_APPLIED, created.reasons().toString());
         assertAtMost("creating a variant at a snapshot", since(mark), 3);
 
         // Updating an existing bound variant: the same three, with only its own chain as a candidate
         mark = BenchMeters.FusekiMeter.mark();
-        UpdateResult moved = RdfDbNetworkLoader.update(network, db, scenario, "1.0", null, "A", params(),
-                ReportNode.NO_OP);
+        UpdateResult moved = RdfDbNetworkLoader.update(network, db, ref(scenario, 1),
+                new RdfDbUpdateOptions().setTargetVariant("A"), params(), ReportNode.NO_OP);
         assertTrue(moved.route() == UpdateResult.Route.DIFF_APPLIED, moved.reasons().toString());
         assertAtMost("updating an existing bound variant", since(mark), 3);
 
-        // The bound that carries the design: two timesteps and eight of them cost the same
+        // The bound that carries the design: two timestamps and eight of them cost the same
         mark = BenchMeters.FusekiMeter.mark();
-        RdfDbNetworkLoader.loadVariants(db, scenario, "1.0", timesteps.subList(0, 2),
+        RdfDbNetworkLoader.loadVariants(db, scenario, timestamps.subList(0, 2),
                 new RdfDbVariantLoadOptions(), null, params(), ReportNode.NO_OP);
-        int twoTimesteps = since(mark);
+        int twoTimestamps = since(mark);
         mark = BenchMeters.FusekiMeter.mark();
-        VariantLoadResult wholeDay = RdfDbNetworkLoader.loadVariants(db, scenario, "1.0", timesteps,
+        VariantLoadResult wholeDay = RdfDbNetworkLoader.loadVariants(db, scenario, timestamps,
                 new RdfDbVariantLoadOptions(), null, params(), ReportNode.NO_OP);
-        int eightTimesteps = since(mark);
+        int eightTimestamps = since(mark);
         // A load that refused six of the eight would send the same number of requests, so the equality below
         // only means something together with this
-        assertTrue(wholeDay.refused().isEmpty() && wholeDay.bound().size() == timesteps.size(),
+        assertTrue(wholeDay.refused().isEmpty() && wholeDay.bound().size() == timestamps.size(),
                 () -> "the day has to load completely, got " + wholeDay.summary());
-        LOGGER.info("loadVariants of 2 timesteps: {} request(s); of {}: {} request(s)", twoTimesteps,
-                timesteps.size(), eightTimesteps);
-        assertTrue(eightTimesteps == twoTimesteps,
-                () -> "REGRESSION: loadVariants sent " + eightTimesteps + " requests for " + timesteps.size()
-                        + " timesteps but " + twoTimesteps + " for 2: the cost has to be independent of the"
-                        + " number of timesteps");
-        assertAtMost("loading a day of " + timesteps.size() + " timesteps as variants", eightTimesteps,
+        LOGGER.info("loadVariants of 2 timestamps: {} request(s); of {}: {} request(s)", twoTimestamps,
+                timestamps.size(), eightTimestamps);
+        assertTrue(eightTimestamps == twoTimestamps,
+                () -> "REGRESSION: loadVariants sent " + eightTimestamps + " requests for " + timestamps.size()
+                        + " timestamps but " + twoTimestamps + " for 2: the cost has to be independent of the"
+                        + " number of timestamps");
+        assertAtMost("loading a day of " + timestamps.size() + " timestamps as variants", eightTimestamps,
                 graphs + 6);
 
         // Writing one difference per variant: the seven of a versioned write, per group
-        VariantLoadResult loaded = RdfDbNetworkLoader.loadVariants(db, scenario, "1.0",
-                timesteps.subList(1, 4), new RdfDbVariantLoadOptions(), null, params(), ReportNode.NO_OP);
+        VariantLoadResult loaded = RdfDbNetworkLoader.loadVariants(db, scenario, timestamps.subList(1, 4),
+                new RdfDbVariantLoadOptions(), null, params(), ReportNode.NO_OP);
         Network day = loaded.network();
         List<com.powsybl.iidm.network.events.NetworkEvent> events = new java.util.ArrayList<>();
         for (String variant : loaded.bound().stream().map(VariantOutcome::variantId).toList()) {
@@ -276,7 +324,7 @@ class RdfDbRequestCountTest {
         // first phase: nine per variant, and nothing that grows with the number of differences
         assertAtMost("writing one difference per variant for 3 variants", since(mark), 9 * 3);
 
-        // With an explicit version label no label has to be resolved at all, so one request per group goes away
+        // With an explicit version no version has to be looked up at all, so one request per group goes away
         List<com.powsybl.iidm.network.events.NetworkEvent> more = new java.util.ArrayList<>();
         for (String variant : loaded.bound().stream().map(VariantOutcome::variantId).toList()) {
             day.getVariantManager().setWorkingVariant(variant);
@@ -284,10 +332,53 @@ class RdfDbRequestCountTest {
         }
         day.getVariantManager().setWorkingVariant(RdfDbProvenance.PRIMARY_VARIANT);
         mark = BenchMeters.FusekiMeter.mark();
-        RdfDbExport.exportPerVariant(day, more, db, "study-a", new CgmesDiffExport.ExportOptions(),
+        RdfDbExport.exportPerVariant(day, more, db, "50", new CgmesDiffExport.ExportOptions(),
                 ReportNode.NO_OP);
         assertAtMost("writing one difference per variant for 3 variants, version label given", since(mark),
                 8 * 3);
+
+        // Dropping a timestamp nothing depends on: the listing, the members and copies, the guarded drop of the
+        // nodes and its read-back, the graphs
+        mark = BenchMeters.FusekiMeter.mark();
+        catalog.dropTimestamp(Backends.BE, Instant.parse("2014-06-01T18:00:00Z"));
+        assertAtMost("dropping a timestamp", since(mark), 5);
+    }
+
+    /**
+     * A composition of two authorities against the two loads it replaces, each on a fresh connection so that each
+     * pays its schema check: one chain query for both, one model read, the boundary once.
+     */
+    @Test
+    void aCompositionCostsFewerRequestsThanTheLoadsItReplaces() {
+        BenchMeters.FusekiMeter.install();
+        try (EmbeddedFuseki fuseki = EmbeddedFuseki.inMemory()) {
+            String scenario = "composed";
+            try (RdfDbConnection db = RdfDbConnection.open(fuseki.database())) {
+                db.clear(scenario);
+                db.snapshots(scenario).putFull(CgmesConformity1Catalog.microGridBaseCaseBE().dataSource(), null,
+                        SnapshotRef.of(scenario, Backends.BE, null, "1"), null, params(), ReportNode.NO_OP);
+                db.snapshots(scenario).putFull(CgmesConformity1Catalog.microGridBaseCaseNL().dataSource(), null,
+                        SnapshotRef.of(scenario, Backends.NL, null, "1"), null, params(), ReportNode.NO_OP);
+            }
+            int singles = 0;
+            for (String authority : List.of(Backends.BE, Backends.NL)) {
+                try (RdfDbConnection db = RdfDbConnection.open(fuseki.database())) {
+                    BenchMeters.FusekiMeter.Reading mark = BenchMeters.FusekiMeter.mark();
+                    RdfDbNetworkLoader.load(db, SnapshotRef.latest(scenario, authority), null, params(),
+                            ReportNode.NO_OP);
+                    singles += since(mark);
+                }
+            }
+            try (RdfDbConnection db = RdfDbConnection.open(fuseki.database())) {
+                BenchMeters.FusekiMeter.Reading mark = BenchMeters.FusekiMeter.mark();
+                RdfDbNetworkLoader.loadComposed(db, SnapshotRef.of(scenario, null, null, null),
+                        List.of(Backends.BE, Backends.NL), null, params(), ReportNode.NO_OP);
+                int composed = since(mark);
+                // 2 + graphs(n) - 2 (n - 1) + 2 n for n = 2 and nine graphs per tree
+                assertAtMost("composing two authorities (" + singles + " for the two loads)", composed, 22);
+                assertAtMost("composing two authorities, against the two loads", composed, singles - 1);
+            }
+        }
     }
 
     private static void assertAtMost(String what, int requests, int bound) {

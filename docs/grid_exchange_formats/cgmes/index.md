@@ -5,9 +5,11 @@
 format_specification.md
 triple_store.md
 rdf_database.md
+rdf_database_integration.md
 import.md
 post_processor.md
 export.md
+mapping.md
 examples.md
 ```
 

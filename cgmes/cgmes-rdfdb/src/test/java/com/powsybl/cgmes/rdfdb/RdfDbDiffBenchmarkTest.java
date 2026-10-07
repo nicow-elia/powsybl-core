@@ -11,19 +11,18 @@ package com.powsybl.cgmes.rdfdb;
 import com.powsybl.cgmes.conformity.Cgmes3Catalog;
 import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
 import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Generator;
 import com.powsybl.iidm.network.Load;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.events.NetworkEvent;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
-import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -94,6 +93,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
+@Tag("benchmark")
 class RdfDbDiffBenchmarkTest {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(RdfDbDiffBenchmarkTest.class);
@@ -117,7 +117,7 @@ class RdfDbDiffBenchmarkTest {
     /** How long the chain an update walks is. */
     private static final int CHAIN = 10;
 
-    private static final CgmesSubset SSH = CgmesSubset.STEADY_STATE_HYPOTHESIS;
+    private static final String SSH = Profiles.SSH;
 
     private record Fixture(String name, Supplier<ReadOnlyDataSource> dataSource, boolean gated) {
 
@@ -284,7 +284,7 @@ class RdfDbDiffBenchmarkTest {
             sink.accept(exported.differences());
             long t2 = System.nanoTime();
             // The sender has to know it is at the difference it just wrote, or the next export forks the chain
-            Map<CgmesSubset, StoredModel> stored = new EnumMap<>(CgmesSubset.class);
+            Map<String, StoredModel> stored = Profiles.map();
             sink.stored().forEach(model -> stored.put(model.subset(), model));
             NetworkIdentity.advance(sender, stored);
             if (i >= WARMUPS) {

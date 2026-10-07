@@ -8,12 +8,13 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
 
 import java.time.ZonedDateTime;
 import java.util.List;
 import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * One node of the metadata graph: a CGMES model the database holds, full or difference.
@@ -29,7 +30,8 @@ import java.util.Objects;
  *
  * @param scenario             the raw name of the scenario the model belongs to
  * @param id                   the CGMES model identifier, typically a {@code urn:uuid:} URI
- * @param subset               the CGMES profile the model describes
+ * @param subset               the profile the model describes ({@link Profiles}); a custom one is always a
+ *                             {@link Kind#FULL} model
  * @param kind                 whether it is an uploaded instance file or a recorded difference
  * @param graph                the named graph of a {@link Kind#FULL} model, {@code null} for a difference
  * @param forwardGraph         the named graph holding the forward statements of a difference, {@code null} for a
@@ -57,15 +59,21 @@ import java.util.Objects;
  *                             difference was written. {@code null} means <em>unknown</em>: a store written before
  *                             this flag existed says nothing, and a planner then proceeds optimistically and lets
  *                             the network aware check at apply time decide. Correctness never depends on it
+ * @param capabilities         the capability version of the writer of a difference,
+ *                             {@code FastRouteCapabilities.version()} when it was written: the table that reached
+ *                             {@code fastPredicatesOnly} and {@code variantSafe}. {@code null} for a full model
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
-public record StoredModel(String scenario, String id, CgmesSubset subset, StoredModel.Kind kind, String graph,
+public record StoredModel(String scenario, String id, String subset, StoredModel.Kind kind, String graph,
                           String forwardGraph, String reverseGraph, int version, String description,
                           ZonedDateTime scenarioTime, ZonedDateTime created, String modelingAuthoritySet,
                           List<String> profiles, List<String> dependentOn, List<String> supersedes,
                           boolean fastPredicatesOnly, long tripleCount, String subjectBase, String cimNamespace,
-                          int chainDepth, Boolean variantSafe) {
+                          int chainDepth, Boolean variantSafe, String capabilities) {
+
+    /** A core version: {@code major.minor.patch}, optionally with a qualifier such as {@code -SNAPSHOT}. */
+    private static final Pattern CORE_VERSION = Pattern.compile("(\\d+)\\.(\\d+)\\.(\\d+)(-.+)?");
 
     /** What a stored model is. */
     public enum Kind {
@@ -106,7 +114,9 @@ public record StoredModel(String scenario, String id, CgmesSubset subset, Stored
      * @return the header
      */
     public DifferenceModelHeader toHeader() {
-        return DifferenceModelHeader.builder(id, subset, cimNamespace == null ? "" : cimNamespace)
+        return DifferenceModelHeader.builder(id, Profiles.subset(subset).orElseThrow(() -> new RdfDbException(
+                "model " + id + " of the custom profile " + subset + " is stored whole and has no difference header")),
+                cimNamespace == null ? "" : cimNamespace)
                 .version(version)
                 .description(description)
                 .scenarioTime(scenarioTime)
@@ -116,6 +126,60 @@ public record StoredModel(String scenario, String id, CgmesSubset subset, Stored
                 .dependentOn(dependentOn)
                 .supersedes(supersedes)
                 .build();
+    }
+
+    /**
+     * Whether this is a model of the boundary every modelling authority of a scenario shares.
+     *
+     * <p>Derived from the profile: the boundary of a scenario is its full models of the two boundary profiles, so
+     * the metadata graph needs no term of its own to say so.</p>
+     *
+     * @return whether the model is a full model of {@code EQ_BD} or {@code TP_BD}
+     */
+    public boolean isBoundary() {
+        return kind == Kind.FULL && Profiles.isBoundary(subset);
+    }
+
+    /**
+     * Whether a reader of the given capability version takes {@code fastPredicatesOnly} and {@code variantSafe} of
+     * this difference as they are.
+     *
+     * <p>It does when the writer's capability version is its own, or when the writer's core version is strictly
+     * older: a table only grows what it can apply, so an older writer's verdicts hold for a newer reader. Anything
+     * else &mdash; a newer writer, the same core version with another table (two development builds), a node
+     * without a version, a version this reader cannot parse &mdash; is re-checked against the reader's table on
+     * the statements, which are fetched anyway.</p>
+     *
+     * @param readerVersion {@code FastRouteCapabilities.version()} of the reader
+     * @return whether the stored verdicts are trusted
+     */
+    boolean isTrustedBy(String readerVersion) {
+        return capabilities != null && (capabilities.equals(readerVersion)
+                || isOlder(coreVersionOf(capabilities), coreVersionOf(readerVersion)));
+    }
+
+    private static String coreVersionOf(String capabilityVersion) {
+        return capabilityVersion.substring(capabilityVersion.indexOf('/') + 1);
+    }
+
+    /**
+     * Whether core version {@code a} is strictly older than {@code b}: numerically by major, minor and patch, and a
+     * qualified version ({@code 7.5.0-SNAPSHOT}) below the release of the same number. Two qualified versions of one
+     * number, or a version that does not parse, are not ordered: neither is older.
+     */
+    static boolean isOlder(String a, String b) {
+        Matcher ma = CORE_VERSION.matcher(a);
+        Matcher mb = CORE_VERSION.matcher(b);
+        if (!ma.matches() || !mb.matches()) {
+            return false;
+        }
+        for (int group = 1; group <= 3; group++) {
+            int compared = Long.compare(Long.parseLong(ma.group(group)), Long.parseLong(mb.group(group)));
+            if (compared != 0) {
+                return compared < 0;
+            }
+        }
+        return ma.group(4) != null && mb.group(4) == null;
     }
 
     /**

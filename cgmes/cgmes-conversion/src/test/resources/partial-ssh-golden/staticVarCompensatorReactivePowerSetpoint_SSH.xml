@@ -11,7 +11,7 @@
     </md:FullModel>
     <cim:StaticVarCompensator rdf:about="#_StaticVarCompensator-Q">
         <cim:RegulatingCondEq.controlEnabled>true</cim:RegulatingCondEq.controlEnabled>
-        <cim:StaticVarCompensator.q>0</cim:StaticVarCompensator.q>
+        <cim:StaticVarCompensator.q>-200.5</cim:StaticVarCompensator.q>
     </cim:StaticVarCompensator>
     <cim:RegulatingControl rdf:about="#_StaticVarCompensator-Q-RegulatingControl">
         <cim:RegulatingControl.discrete>false</cim:RegulatingControl.discrete>

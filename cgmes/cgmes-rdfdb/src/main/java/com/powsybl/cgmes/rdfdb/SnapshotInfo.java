@@ -8,19 +8,20 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
-
+import java.time.Instant;
 import java.time.ZonedDateTime;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * One {@code pdb:Snapshot} node: a consistent grid state of one scenario, and everything a reader decides on.
  *
  * <p>A snapshot is the unit of consistency across profiles. The chain of a single profile lives in
  * {@code md:Model.Supersedes} and is what a difference applies along; a snapshot says which model of
- * <em>every</em> profile belongs together, which is what makes "load version 1.1" a well-defined request even when
+ * <em>every</em> profile belongs together, which is what makes "load version 2" a well-defined request even when
  * the last three changes only touched the steady state.</p>
  *
  * <p>Three model lists, and they answer three different questions:</p>
@@ -34,31 +35,33 @@ import java.util.Objects;
  *       copies the checkpoint folded, plus the untouched profiles it inherited.</li>
  * </ul>
  *
- * @param scenario    the scenario the snapshot belongs to
- * @param iri         the IRI of the snapshot node
- * @param version     the version label, for instance {@code "1.1"}
- * @param timestep    the canonical ISO instant the snapshot describes
- * @param timestepLabel the {@code HH:MM} rendering of {@link #timestep()} in the scenario's base offset, for
- *                     display only; see {@link #timestepLabel()}
- * @param kind        whether the snapshot is a root of full models or a difference on its parent
- * @param parent      the IRI of the snapshot this one derives from, {@code null} for the root
- * @param edge        which kind of link {@link #parent()} is
- * @param depth       how many snapshots lie between this one and the root of the scenario
- * @param fast        whether every difference member is fast-route capable; see {@link #fast()}
- * @param state       the effective model identifier per profile
- * @param members     the models this snapshot adds
- * @param fullModels  the model identifier with a full graph per profile
- * @param timestepRoot the IRI of the root snapshot of this snapshot's timestep
- * @param created     when the node was written
- * @param description the free text the writer attached, or {@code null}
+ * @param scenario           the scenario the snapshot belongs to
+ * @param iri                the IRI of the snapshot node
+ * @param modellingAuthority the modelling authority set whose tree the snapshot is in
+ * @param timestamp          the moment the snapshot describes
+ * @param version            the registered version name
+ * @param rank               the rank of that name in the scenario's registry when the snapshot was listed: the order
+ *                           of the versions, read in the same request, never stored on the snapshot
+ * @param kind               whether the snapshot is a root of full models or a difference on its parent
+ * @param parent             the IRI of the snapshot this one derives from, {@code null} for a root
+ * @param edge               which kind of link {@link #parent()} is
+ * @param depth              how many snapshots lie between this one and the root of its tree
+ * @param fast               whether every difference member is fast-route capable; see {@link #fast()}
+ * @param rollover           whether the snapshot is a rollover: a snapshot later timestamps of its tree are
+ *                           ingested against by default, checkpointed when it was flagged. Every root is one
+ * @param state              the effective model identifier per profile
+ * @param members            the models this snapshot adds
+ * @param fullModels         the model identifier with a full graph per profile
+ * @param timestampRoot      the IRI of the root snapshot of this snapshot's timestamp
+ * @param created            when the node was written
+ * @param description        the free text the writer attached, or {@code null}
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
-public record SnapshotInfo(String scenario, String iri, String version, String timestep, String timestepLabel,
-                           Kind kind,
-                           String parent, EdgeKind edge, int depth, boolean fast,
-                           Map<CgmesSubset, String> state, List<String> members,
-                           Map<CgmesSubset, String> fullModels, String timestepRoot, ZonedDateTime created,
+public record SnapshotInfo(String scenario, String iri, String modellingAuthority, Instant timestamp, String version,
+                           int rank, Kind kind, String parent, EdgeKind edge, int depth, boolean fast,
+                           boolean rollover, Map<String, String> state, List<String> members,
+                           Map<String, String> fullModels, String timestampRoot, ZonedDateTime created,
                            String description) {
 
     /** What a snapshot holds. */
@@ -71,57 +74,50 @@ public record SnapshotInfo(String scenario, String iri, String version, String t
 
     /** What the link to the parent means. */
     public enum EdgeKind {
-        /** No parent: the root of the scenario. */
+        /** No parent: the root of a modelling authority's tree. */
         NONE,
-        /** The previous version of the same timestep. */
+        /** The previous version of the same timestamp. */
         VERSION,
-        /** The base-chain snapshot a timestep root was derived from. */
-        TIMESTEP
+        /** The snapshot a timestamp root is pinned to: any snapshot of another timestamp of the same tree. */
+        TIMESTAMP
     }
 
     public SnapshotInfo {
         Objects.requireNonNull(scenario);
         Objects.requireNonNull(iri);
+        Objects.requireNonNull(modellingAuthority);
+        Objects.requireNonNull(timestamp);
         Objects.requireNonNull(version);
-        Objects.requireNonNull(timestep);
         state = Map.copyOf(state);
         members = List.copyOf(members);
         fullModels = Map.copyOf(fullModels);
     }
 
     /**
-     * The {@code HH:MM} rendering of {@link #timestep()} in the scenario's base offset, for display only.
+     * The CGMES profiles the state of this snapshot covers.
      *
-     * <p>The address of a snapshot is {@code (scenario, timestep, version)} and {@link #timestep()} is the key: a
-     * canonical ISO instant in UTC, which is what every lookup matches on. This is its local-time rendering,
-     * computed once when the snapshot is written and never compared against anything &mdash; a label a caller
-     * passes is resolved into an instant before a query is sent. Two scenarios describing two days can therefore
-     * show the same rendering for two different moments.</p>
+     * <p>Not part of the address: it is what the snapshot <em>holds</em>, derived from its {@code pdb:state}. A
+     * caller that wants fewer passes a projection to the operation instead.</p>
      *
-     * <p>It is empty when the stored node carries no rendering at all, which nothing this release writes
-     * produces; a caller with nothing to show falls back to the timestep. A node written before the term was
-     * renamed from {@code pdb:label} is read unchanged.</p>
-     *
-     * @return the rendering, or an empty string
+     * @return the profiles, in {@link Profiles#ORDER}
      */
-    @Override
-    public String timestepLabel() {
-        return timestepLabel;
+    public Set<String> profiles() {
+        return state.isEmpty() ? Set.of() : Collections.unmodifiableSet(Profiles.set(state.keySet()));
     }
 
     /**
      * Whether a materialisation can start at this snapshot instead of walking further up the chain.
      *
-     * <p><strong>Derived, never stored.</strong> It is exactly {@code !fullModels().isEmpty()}: a snapshot can
-     * start a materialisation when it names a full model, and naming one is what {@code pdb:full} does. A root
-     * names its instance files, a difference snapshot names nothing until a {@link Checkpoint} folds its chain
-     * into copies and adds the links. Databases written by an earlier release carry a {@code pdb:hasFull} boolean
-     * beside the links: it is ignored, and a stale one cannot make this answer wrong.</p>
+     * <p><strong>Derived, never stored.</strong> A snapshot can start a materialisation when it names a full model
+     * of a standard profile, and naming one is what {@code pdb:full} does. A root names its instance files, a
+     * difference snapshot names nothing until a {@link Checkpoint} folds its chain into copies and adds the links.
+     * The whole graph of a custom profile ({@link Profiles}) that an ingestion stores on a difference snapshot does
+     * not count: it is the custom profile's state, not a starting point for the network.</p>
      *
-     * @return whether this snapshot names at least one full model
+     * @return whether this snapshot names at least one full model of a standard profile
      */
     public boolean hasFull() {
-        return !fullModels.isEmpty();
+        return fullModels.keySet().stream().anyMatch(Profiles::isStandard);
     }
 
     /**
@@ -131,8 +127,7 @@ public record SnapshotInfo(String scenario, String iri, String version, String t
      * ({@code pdb:fastPredicatesOnly}, {@link StoredModel#fastPredicatesOnly()}) and is written once, there. This
      * value is the conjunction over the difference members of the snapshot, read in the same request that returned
      * the snapshot; a snapshot with no difference member &mdash; a root, or a snapshot of full models &mdash; is
-     * {@code true}. Databases written by an earlier release carry a {@code pdb:fast} triple on the snapshot node:
-     * it is ignored, and a stale one cannot make this answer wrong.</p>
+     * {@code true}.</p>
      *
      * <p>It answers for the <em>one</em> step this snapshot adds, not for a path: whether an update from A to B can
      * be applied in place is {@code UpdatePlan.kind()}, which weighs every difference between the two.</p>
@@ -148,11 +143,11 @@ public record SnapshotInfo(String scenario, String iri, String version, String t
      * @return the address this snapshot answers to
      */
     public SnapshotRef ref() {
-        return new SnapshotRef(scenario, version, timestep);
+        return SnapshotRef.of(scenario, modellingAuthority, timestamp, version);
     }
 
     /**
-     * @return whether this snapshot is the root of its scenario
+     * @return whether this snapshot is the root of its modelling authority's tree
      */
     public boolean isRoot() {
         return parent == null;
@@ -160,6 +155,6 @@ public record SnapshotInfo(String scenario, String iri, String version, String t
 
     @Override
     public String toString() {
-        return "(" + scenario + ", " + timestep + ", " + version + ")";
+        return "(" + scenario + ", " + modellingAuthority + ", " + timestamp + ", " + version + ")";
     }
 }

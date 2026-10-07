@@ -170,7 +170,7 @@ public final class GraphStoreClient implements AutoCloseable {
     }
 
     /**
-     * An N-Triples parser configured the way the RDF database path needs it.
+     * An N-Triples parser configured the way reading a stored graph back needs it.
      *
      * <p>IRI syntax verification is off: the statements come out of a store that was filled by the RDF4J RDF/XML
      * parser with the CGMES non-fatal settings, so identifiers that a strict parser would reject are expected and

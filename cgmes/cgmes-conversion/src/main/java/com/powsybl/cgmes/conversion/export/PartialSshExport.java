@@ -295,7 +295,7 @@ public final class PartialSshExport {
     /**
      * Export the given changes as a partial .ssh file and write it to an output stream.
      *
-     * <p>The events are first compacted as described in {@link #compactEvents(Collection)} before they are
+     * <p>The events are first compacted as described in {@link #compactEvents(Collection, Network)} before they are
      * written.</p>
      *
      * @param network       the network the changes were recorded on. It has to be an individual grid model, a
@@ -306,7 +306,7 @@ public final class PartialSshExport {
      *                      method
      * @param exportOptions the header values and the unsupported change behavior of the export
      * @return the changes that reached the file, in the order in which they were written. With
-     *         {@link UnsupportedChangeBehavior#FAIL} the result is exactly {@link #compactEvents(Collection)}.
+     *         {@link UnsupportedChangeBehavior#FAIL} the result is exactly {@link #compactEvents(Collection, Network)}.
      *         With {@link UnsupportedChangeBehavior#IGNORE} it is a subset of that.
      * @throws PowsyblException            if the network is a merged model, or something could not be exported.
      * @throws UncheckedXmlStreamException if the XML document cannot be written
@@ -330,7 +330,7 @@ public final class PartialSshExport {
                     new CgmesChangeTranslator(network, context, exportOptions.unsupportedChangeBehavior)
                             .setRejectSharedChanges(exportOptions.isRejectSharedChanges());
             CgmesChangeTranslator.Translation translation = CgmesChangeTranslator.translateAll(
-                    compactEvents(EventCompactor.ofVariant(events, exportOptions.getVariant())), translator, null);
+                    compactEvents(EventCompactor.ofVariant(events, exportOptions.getVariant()), network), translator, null);
 
             try {
                 // Buffered UTF-8 under the StAX writer: over a bare OutputStream the JDK writer emits one byte per
@@ -358,8 +358,19 @@ public final class PartialSshExport {
      * for a temporary limit, per acceptable duration, because IIDM reports all of them under a single attribute name
      * and two changes of two groups do not describe the same value.</p>
      */
+    public static List<NetworkEvent> compactEvents(Collection<NetworkEvent> events, Network network) {
+        return EventCompactor.compact(events, null, Objects.requireNonNull(network)).events();
+    }
+
+    /**
+     * As {@link #compactEvents(Collection, Network)}, without the network the changes were recorded on.
+     *
+     * <p>The names the deprecated voltage regulation setters of IIDM report are still mapped onto the names of the
+     * voltage regulation, but a repeated voltage or reactive power target cannot be told from the target of a
+     * boundary line without the network, so those echoes are kept.</p>
+     */
     public static List<NetworkEvent> compactEvents(Collection<NetworkEvent> events) {
-        return EventCompactor.compact(events, null).events();
+        return EventCompactor.compact(events, null, null).events();
     }
 
     private static void write(CgmesPropertyBuffer updates, XMLStreamWriter writer, CgmesExportContext context,

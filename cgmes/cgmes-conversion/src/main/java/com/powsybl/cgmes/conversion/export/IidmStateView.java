@@ -35,8 +35,9 @@ import java.util.function.Supplier;
  * from event payloads afterwards.</p>
  *
  * <p>Only the values the change log can speak about go through a view. Structure &mdash; identifiers, aliases, CGMES
- * properties, regulating terminals, nominal voltages, limits &mdash; is read live in both passes, because a change
- * set of steady state hypothesis values does not touch it.</p>
+ * properties, nominal voltages, the existence of a VoltageRegulation and its regulating terminal (neither is stored
+ * per variant; a change set that changed the terminal is refused, {@code RegulationRef}) &mdash; is read live in both
+ * passes. Limit values and their durations are values and are read through the view.</p>
  *
  * <p>Every getter takes the live read as a supplier. {@link #LIVE} is the view over an empty change set: a read
  * through it finds the change set empty before any lookup key is built and then makes the live call. The full steady
@@ -68,6 +69,11 @@ final class IidmStateView {
         this.changes = changes;
     }
 
+    /** Whether the change set touched the given attribute; always {@code false} for {@link #LIVE}. */
+    boolean hasChange(Identifiable<?> identifiable, String attribute) {
+        return changes.hasChange(identifiable.getId(), attribute);
+    }
+
     double getDouble(Identifiable<?> identifiable, String attribute, DoubleSupplier live) {
         Object old = previous(identifiable, attribute);
         return old == NOT_CHANGED ? live.getAsDouble() : asDouble(identifiable, attribute, old);
@@ -83,10 +89,20 @@ final class IidmStateView {
         return old == NOT_CHANGED ? live.getAsBoolean() : asBoolean(identifiable, attribute, old);
     }
 
+    /** Any value, such as a regulating terminal, as it was before the change set (possibly {@code null}). */
+    Object getObject(Identifiable<?> identifiable, String attribute, Supplier<?> live) {
+        Object old = previous(identifiable, attribute);
+        return old == NOT_CHANGED ? live.get() : old;
+    }
+
     <E extends Enum<E>> E getEnum(Identifiable<?> identifiable, String attribute, Class<E> type, Supplier<E> live) {
         Object old = previous(identifiable, attribute);
         if (old == NOT_CHANGED) {
             return live.get();
+        }
+        if (old == null) {
+            // A recorded null is a value: the regulation mode of a VoltageRegulation in a variant it was not created in
+            return null;
         }
         if (type.isInstance(old)) {
             return type.cast(old);
@@ -303,5 +319,20 @@ final class IidmStateView {
     private static UnreconstructibleStateException notRecordedAs(Identifiable<?> identifiable, String attributeKey, String type) {
         return new UnreconstructibleStateException("the previous value of " + identifiable.getId() + "."
                 + attributeKey + " was not recorded as a " + type);
+    }
+
+    /**
+     * Thrown when the state a network was in before a change set cannot be derived from the recorded changes.
+     *
+     * <p>It is a control flow signal inside the change translation, not an error reported to the caller: the translator
+     * catches it and turns it into an unsupported change, which the export then fails on or skips as its
+     * {@code UnsupportedChangeBehavior} says. A previous value that was not recorded is never guessed, because a
+     * difference model whose reverse statements are wrong is worse than one that refuses to describe the change.</p>
+     */
+    static class UnreconstructibleStateException extends RuntimeException {
+
+        UnreconstructibleStateException(String reason) {
+            super(reason);
+        }
     }
 }

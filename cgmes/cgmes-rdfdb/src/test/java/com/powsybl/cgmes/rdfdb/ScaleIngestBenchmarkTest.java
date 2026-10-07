@@ -7,13 +7,13 @@
  */
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
-import com.powsybl.cgmes.rdfdb.SvedalaTimestepFixtures.Shape;
+import com.powsybl.cgmes.rdfdb.SvedalaTimestampFixtures.Shape;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
 import org.assertj.core.api.SoftAssertions;
 import org.eclipse.rdf4j.model.Value;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -22,7 +22,6 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -33,24 +32,24 @@ import java.util.stream.Stream;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Part A of the scale campaign: ingesting timesteps with {@link SnapshotCatalog#putAsDiff} on Svedala replicated
+ * Part A of the scale campaign: ingesting timestamps with {@link SnapshotCatalog#putAsDiff} on Svedala replicated
  * up to IGM size.
  *
  * <p>Per grid ({@code sv<N>} of {@code -Dpowsybl.bench.grids}) and backend: the anchor {@code putFull} (wall
- * clock and peak heap), then {@code T} timesteps ({@code -Dpowsybl.bench.ingest.timesteps}, 8 in a campaign run, 3
- * in the ordinary build) of two shapes of {@link SvedalaTimestepFixtures}, replicated with
+ * clock and peak heap), then {@code T} timestamps ({@code -Dpowsybl.bench.ingest.timestamps}, 8 in a campaign run, 3
+ * in the ordinary build) of two shapes of {@link SvedalaTimestampFixtures}, replicated with
  * {@link ReplicatedSvedala} outside every timer: <b>rich</b> (every set point scaled, 311&nbsp;&times;&nbsp;N
  * statements each way, the production shape) and <b>structural</b> (18&nbsp;&times;&nbsp;N equipment objects
- * omitted, N lines added every eighth timestep). Phases come from {@link SnapshotCatalog.IngestStatistics}; the
+ * omitted, N lines added every eighth timestamp). Phases come from {@link SnapshotCatalog.IngestStatistics}; the
  * store is counted after the day; heap after GC is read with the catalogue and its graph cache still held (the
- * parent index lives there) and the peak over the day; Fuseki requests and server milliseconds per timestep.</p>
+ * parent index lives there) and the peak over the day; Fuseki requests and server milliseconds per timestamp.</p>
  *
  * <p>Gates, relative only: median {@code putAsDiff} {@code <= 5 x} the anchor's {@code putFull}; median
- * {@code sv20/sv6 <= 5} per shape (linear is 3.3); every difference carries statements; structural timesteps take
+ * {@code sv20/sv6 <= 5} per shape (linear is 3.3); every difference carries statements; structural timestamps take
  * the slow route and rich ones the fast one. Every scenario is cleared after its day.</p>
  *
  * <h2>Measured numbers</h2>
- * <p>8 cores, Java 21, {@code -Xmx24g}, 2026-09-22, 8 timesteps per shape, milliseconds, medians (full table in
+ * <p>8 cores, Java 21, {@code -Xmx24g}, 2026-09-22, 8 timestamps per shape, milliseconds, medians (full table in
  * the campaign report {@code 16-benchmark-campaign.md}):</p>
  * <pre>
  * grid  backend shape       anchor  median  first  parse  diff  write   fwd   rev
@@ -61,7 +60,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * sv6   memory  rich          3928     389   1371    237    45    101  1866  1866
  * sv20  memory  rich         11738    1626   4219    770   153    700  6220  6220
  * sv20  memory  structural   12727    3846   7463   3181   491    165   100  3500
- * after T6 #3 (two-phase write above 1 000 statements, IRI syntax not verified; 4 timesteps,
+ * after T6 #3 (two-phase write above 1 000 statements, IRI syntax not verified; 4 timestamps,
  * logs/bench16-t6-3-after.log):
  * sv20  fuseki  rich         31047    1136   5718    576   232    287  6220  6220
  * sv20  fuseki  structural   32951    3234   8913   2392   735     86   100  3500
@@ -71,11 +70,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
+@Tag("benchmark")
 class ScaleIngestBenchmarkTest {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ScaleIngestBenchmarkTest.class);
 
-    private static final String ANCHOR = "2020-12-02T00:00:00Z";
+    private static final Instant ANCHOR = Instant.parse("2020-12-02T00:00:00Z");
     private static final double MEDIAN_OVER_ANCHOR = 5.0;
     private static final double SCALING = 5.0;
 
@@ -90,8 +90,8 @@ class ScaleIngestBenchmarkTest {
         return BenchMeters.backends();
     }
 
-    private static int timesteps() {
-        return Integer.getInteger("powsybl.bench.ingest.timesteps", BenchMeters.explicitGrids() ? 8 : 3);
+    private static int timestamps() {
+        return Integer.getInteger("powsybl.bench.ingest.timestamps", BenchMeters.explicitGrids() ? 8 : 3);
     }
 
     @ParameterizedTest(name = "{0}")
@@ -133,7 +133,7 @@ class ScaleIngestBenchmarkTest {
             ReadOnlyDataSource[] anchorFiles = {ReplicatedSvedala.anchor(n, ANCHOR)};
             BenchMeters.resetPeak();
             long anchor = BenchMeters.millis(() -> catalog.putFull(anchorFiles[0], null,
-                    SnapshotRef.of(scenario, "1.0"), Backends.params(), ReportNode.NO_OP));
+                    SnapshotRef.latest(scenario, null), null, Backends.params(), ReportNode.NO_OP));
             long anchorPeak = BenchMeters.peakHeap();
             anchorFiles[0] = null;
 
@@ -150,19 +150,18 @@ class ScaleIngestBenchmarkTest {
             int omitted = 0;
             int added = 0;
             BenchMeters.resetPeak();
-            for (int i = 1; i <= timesteps(); i++) {
-                String instant = Timesteps.canonical(Instant.parse(ANCHOR)
-                        .plus(Duration.ofMinutes(15L * i)).atZone(ZoneOffset.UTC));
+            for (int i = 1; i <= timestamps(); i++) {
+                Instant instant = ANCHOR.plus(Duration.ofMinutes(15L * i));
                 String label = String.format(Locale.ROOT, "%02d:%02d", i * 15 / 60, i * 15 % 60);
-                SvedalaTimestepFixtures.TimestepFiles files = SvedalaTimestepFixtures.timestep(shape, i, instant);
+                SvedalaTimestampFixtures.TimestampFiles files = SvedalaTimestampFixtures.timestamp(shape, i, instant);
                 ReadOnlyDataSource replica = ReplicatedSvedala.replicate(files.dataSource(), n);
                 omitted = Math.max(omitted, files.omittedObjects() * n);
                 added += files.addedObjects() * n;
-                SnapshotRef target = SnapshotRef.of("1.0", label, catalog);
+                SnapshotRef target = SnapshotRef.latestAt(scenario, null, instant);
 
                 BenchMeters.FusekiMeter.Reading mark = BenchMeters.FusekiMeter.mark();
                 long start = System.nanoTime();
-                SnapshotInfo written = catalog.putAsDiff(replica, null, target, Backends.params(),
+                SnapshotInfo written = catalog.putAsDiff(replica, null, target, null, Backends.params(),
                         ReportNode.NO_OP);
                 long wall = (System.nanoTime() - start) / 1_000_000;
                 BenchMeters.FusekiMeter.Reading reading = BenchMeters.FusekiMeter.since(mark);
@@ -191,7 +190,7 @@ class ScaleIngestBenchmarkTest {
             db.clear(scenario);
             cache.clear();
             long held = Math.max(0, withDay - BenchMeters.heapAfterGc());
-            LOGGER.info("{} / {} / {}: {} timestep(s), walls {}; omitted up to {} object(s), added {} object(s);"
+            LOGGER.info("{} / {} / {}: {} timestamp(s), walls {}; omitted up to {} object(s), added {} object(s);"
                             + " graph cache {} hit(s) {} miss(es); {} graph(s) in the store; catalogue {} held",
                     grid, backend, shape, walls.size(), walls, omitted, added, cache.hits(), cache.misses(),
                     store[2], catalog.getClass().getSimpleName());
@@ -210,9 +209,9 @@ class ScaleIngestBenchmarkTest {
             softly.assertThat((double) median).as("median " + shape + " ingestion of " + grid + " on " + backend
                     + " against the anchor putFull (" + anchor + " ms)").isLessThanOrEqualTo(MEDIAN_OVER_ANCHOR * anchor);
             if (shape == Shape.STRUCTURAL) {
-                softly.assertThat(slow).as("every structural timestep takes the slow route").isEqualTo(walls.size());
+                softly.assertThat(slow).as("every structural timestamp takes the slow route").isEqualTo(walls.size());
             } else {
-                softly.assertThat(slow).as("every rich timestep takes the fast route").isZero();
+                softly.assertThat(slow).as("every rich timestamp takes the fast route").isZero();
             }
             return median;
         }
@@ -235,7 +234,7 @@ class ScaleIngestBenchmarkTest {
         return rows.isEmpty() ? 0L : Long.parseLong(rows.get(0).get("n").stringValue());
     }
 
-    private static int statements(Map<CgmesSubset, Integer> perProfile) {
+    private static int statements(Map<String, Integer> perProfile) {
         return perProfile.values().stream().mapToInt(Integer::intValue).sum();
     }
 }

@@ -7,6 +7,7 @@
  */
 package com.powsybl.cgmes.conversion;
 
+import com.google.common.base.Suppliers;
 import com.powsybl.cgmes.conversion.elements.*;
 import com.powsybl.cgmes.conversion.elements.dc.*;
 import com.powsybl.cgmes.conversion.elements.transformers.ThreeWindingsTransformerConversion;
@@ -18,6 +19,7 @@ import com.powsybl.triplestore.api.PropertyBag;
 import com.powsybl.triplestore.api.PropertyBags;
 
 import java.util.*;
+import java.util.function.Supplier;
 
 /**
  * @author Luma Zamarreño {@literal <zamarrenolm at aia.es>}
@@ -234,7 +236,9 @@ public final class Update {
     static void createFictitiousSwitchesForDisconnectedTerminalsDuringUpdate(Network network, CgmesModel cgmes, Context context) {
         if (createFictitiousSwitches(context)) {
             context.pushReportNode(CgmesReports.convertingDuringUpdateElementTypeReport(context.getReportNode(), CgmesNames.TERMINAL));
-            cgmes.terminals().forEach(cgmesTerminal -> TerminalConversion.create(network, cgmesTerminal, context));
+            // At most one scan of the switches for the whole pass: at the first disconnected terminal
+            Supplier<Set<String>> terminalsWithFictitiousSwitch = Suppliers.memoize(() -> TerminalConversion.terminalsWithFictitiousSwitch(network));
+            cgmes.terminals().forEach(cgmesTerminal -> TerminalConversion.create(network, cgmesTerminal, context, terminalsWithFictitiousSwitch));
             context.popReportNode();
         }
     }

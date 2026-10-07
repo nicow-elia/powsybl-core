@@ -8,6 +8,7 @@
 package com.powsybl.cgmes.conversion.export;
 
 import com.powsybl.iidm.network.Identifiable;
+import com.powsybl.iidm.network.RatioTapChanger;
 import com.powsybl.iidm.network.TapChanger;
 
 import java.util.function.BooleanSupplier;
@@ -19,7 +20,8 @@ import java.util.function.Supplier;
  * A tap changer together with what a recorded change calls it.
  *
  * <p>IIDM reports a tap changer change on the transformer that owns it, under an attribute named after the kind and
- * the end of the tap changer, such as {@code phaseTapChanger.tapPosition} or {@code ratioTapChanger2.regulating}. A
+ * the end of the tap changer, such as {@code phaseTapChanger.tapPosition} or
+ * {@code ratioTapChanger2.VoltageRegulation.isRegulating}. A
  * tap changer alone therefore cannot be looked up in a change log, which is why every read of one goes through this
  * reference.</p>
  *
@@ -32,6 +34,22 @@ import java.util.function.Supplier;
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 record TapChangerRef(Identifiable<?> transformer, String attributePrefix, TapChanger<?, ?, ?, ?> tapChanger) {
+
+    /**
+     * The reference of a tap changer by the end it sits on: {@code ""} for a two windings transformer, the number of the
+     * leg for a three windings transformer. The kind of the tap changer gives the rest of the name.
+     */
+    static TapChangerRef of(Identifiable<?> transformer, String end, TapChanger<?, ?, ?, ?> tapChanger) {
+        return new TapChangerRef(transformer, (tapChanger instanceof RatioTapChanger
+                ? CgmesChangeTranslator.RATIO_TAP_CHANGER_PREFIX : CgmesChangeTranslator.PHASE_TAP_CHANGER_PREFIX) + end, tapChanger);
+    }
+
+    /** The end the tap changer sits on, {@code ""} for a two windings transformer, taken from its attribute prefix. */
+    String end() {
+        int length = attributePrefix.length();
+        return length > 0 && Character.isDigit(attributePrefix.charAt(length - 1))
+                ? attributePrefix.substring(length - 1) : "";
+    }
 
     /** The name a change of the given property of this tap changer is recorded under. */
     String attribute(String suffix) {
@@ -52,5 +70,13 @@ record TapChangerRef(Identifiable<?> transformer, String attributePrefix, TapCha
 
     <E extends Enum<E>> E getEnum(IidmStateView state, String suffix, Class<E> type, Supplier<E> live) {
         return state.getEnum(transformer, attribute(suffix), type, live);
+    }
+
+    /**
+     * The voltage regulation of this tap changer, which must be a ratio tap changer: since powsybl-core #3699 it
+     * regulates through a VoltageRegulation whose changes are recorded as {@code <attributePrefix>.VoltageRegulation.*}.
+     */
+    RegulationRef regulation() {
+        return new RegulationRef(transformer, attributePrefix, (RatioTapChanger) tapChanger);
     }
 }

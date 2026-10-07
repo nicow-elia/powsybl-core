@@ -14,7 +14,7 @@ import java.util.List;
 /**
  * What became of one requested variant.
  *
- * <p>A bulk load asks for many snapshots at once and some of them may be unreachable in place &mdash; a timestep
+ * <p>A bulk load asks for many snapshots at once and some of them may be unreachable in place &mdash; a timestamp
  * whose equipment drifted, a difference that writes values IIDM does not store per variant. Such a request is
  * <em>refused</em>, and the network keeps exactly the variants that worked. That is only usable if the caller can
  * tell which ones those are and why the others failed, which is what this record is for; it is also what the

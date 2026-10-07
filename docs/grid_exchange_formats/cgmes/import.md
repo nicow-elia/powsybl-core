@@ -54,13 +54,10 @@ At the end, PowSyBl will contain the operational data for all 24 hours, with eac
 
 A difference model is an IEC 61970-552 `dm:DifferenceModel` document: it says what a CGMES model said *before* a
 change and what it says *after* it, as two lists of statements. PowSyBl writes such documents from a recorded change
-log (see [difference model export](export.md#cgmes-difference-model-export)) and reads them back here. Difference
-models can also come from an [RDF database](rdf_database.md#difference-models-in-the-database) &mdash; where a
-state is addressed by `(scenario, timestep, version)`, see
-[versioning](rdf_database.md#versioning-snapshots-versions-and-timesteps) and
-[timesteps](rdf_database.md#timesteps-the-outer-dimension) &mdash; rather than from
-documents: the stored differences between the version a network holds and the version it is to reach are fetched and
-applied by the very same code.
+log (see {ref}`difference model export <cgmes-difference-model-export>`) and reads them back here. The entry points
+take a `DifferenceModelSet`, wherever it comes from: a document, or a store that composed it, such as the
+[RDF database](rdf_database.md); how a stored path of differences reaches this importer, and how a refusal travels
+back, is on the [integration page](rdf_database_integration.md#import-the-diff-route-the-full-route-and-how-a-refusal-travels-back).
 
 Applying one *in place* means feeding its forward statements through the ordinary network update workflow: no file is
 re-read, no network is rebuilt, and the result is exactly what the partial SSH file of the same change would have
@@ -116,7 +113,8 @@ network is never modified in that case: every check runs before the first mutati
    the properties the importer left on the equipment (regulating controls, generating units, equivalent injections)
    &mdash; which also decides the CIM class to write;
 4. properties an update query only reads *together* with others are completed from the receiving network, through the
-   very mapping the change exporter uses (`CgmesObjectDump`), so that a minimal difference of a third party applies;
+   very mapping the change exporter uses (the description of the subject, `Families.describe`), so that a minimal
+   difference of a third party applies;
 5. the result is written as one synthetic partial SSH document per profile into a fresh in-memory triple store and
    handed to the ordinary update workflow;
 6. a difference of the equipment profile alone carries no dated steady state model, so `caseDate` and
@@ -135,47 +133,22 @@ the same SPARQL queries and the same conversion code, so the two cannot drift ap
 
 ### Updatable properties
 
-| CIM classes | properties read together |
-| --- | --- |
-| `Switch`, `Breaker`, `Disconnector`, `LoadBreakSwitch`, `ProtectedSwitch`, `GroundDisconnector`, `Jumper` | `Switch.open` |
-| `Terminal` | `ACDCTerminal.connected` |
-| `DCTerminal`, `ACDCConverterDCTerminal` | `ACDCTerminal.connected` |
-| `EnergyConsumer`, `ConformLoad`, `NonConformLoad`, `StationSupply` | `EnergyConsumer.p`, `EnergyConsumer.q` |
-| `EnergySource` | `EnergySource.activePower`, `EnergySource.reactivePower` |
-| `AsynchronousMachine` | `RotatingMachine.p`, `RotatingMachine.q` (+ optional `AsynchronousMachine.asynchronousMachineType`, `RegulatingCondEq.controlEnabled`) |
-| `SynchronousMachine` | `RotatingMachine.p`; `RotatingMachine.q`, `SynchronousMachine.referencePriority`, `SynchronousMachine.operatingMode`, `RegulatingCondEq.controlEnabled` |
-| `ExternalNetworkInjection` | `ExternalNetworkInjection.p`, `.q`, `.referencePriority`, `RegulatingCondEq.controlEnabled` |
-| `EquivalentInjection` | `EquivalentInjection.p`, `.q` (+ optional `.regulationStatus`, `.regulationTarget`) |
-| `GeneratingUnit` and its subclasses | `GeneratingUnit.normalPF` |
-| `StaticVarCompensator` | `StaticVarCompensator.q`, `RegulatingCondEq.controlEnabled` |
-| `LinearShuntCompensator`, `NonlinearShuntCompensator` | `ShuntCompensator.sections`, `RegulatingCondEq.controlEnabled` |
-| `RatioTapChanger` | `TapChanger.step`, `TapChanger.controlEnabled` |
-| `PhaseTapChanger*` (five flavours) | `TapChanger.step`, `TapChanger.controlEnabled` |
-| `RegulatingControl`, `TapChangerControl` | `RegulatingControl.enabled`, `.targetValue`, `.targetValueUnitMultiplier`, `.discrete` (+ optional `.targetDeadband`) |
-| `CsConverter` | `ACDCConverter.targetPpcc`, `.targetUdc`, `.p`, `.q`; `CsConverter.operatingMode`, `CsConverter.pPccControl` |
-| `VsConverter` | `ACDCConverter.*` as above; `VsConverter.pPccControl`, `.qPccControl` (+ optional `.targetQpcc`, `.targetUpcc`) |
-| `ControlArea` | `ControlArea.netInterchange` (+ optional `ControlArea.pTolerance`) |
-| `CurrentLimit`, `ActivePowerLimit`, `ApparentPowerLimit`, `VoltageLimit` | `<Class>.value` |
+The properties a difference can update in place are the blocks of the mapping, listed with their CIM classes, their
+update query and their variant safety on the generated {ref}`mapping page <cgmes-mapping>` (section "In-place import
+of a difference").
 
-Properties inside one cell are read by one SPARQL block, so stating one of them without the others would silently do
-nothing. The importer completes the missing ones from the receiving network instead, which is what makes a minimal
-difference applicable. The state variable properties of the update catalogue (`SvPowerFlow.*`, `SvVoltage.*`,
+The required properties of one block are read by one SPARQL block, so stating one of them without the others would
+silently do nothing. The importer completes the missing ones from the receiving network instead, which is what makes a
+minimal difference applicable. The state variable properties of the update catalogue (`SvPowerFlow.*`, `SvVoltage.*`,
 `SvInjection.*`, `SvTapStep.*`, `SvShuntCompensatorSections.*`, `Terminal.TopologicalNode`,
 `ACDCConverter.poleLossP`) are explicitly outside the in-place route.
 
-The limit values above belong to the equipment profile in CGMES 2.4.15 and to the steady state hypothesis in
-CGMES 3; a document that puts them in the other profile of its CIM version is refused, because the receiver would
-never read them.
+The operational limit values (`CurrentLimit`, `ActivePowerLimit`, `ApparentPowerLimit`, `VoltageLimit`) belong to the
+equipment profile in CGMES 2.4.15 and to the steady state hypothesis in CGMES 3; a document that puts them in the
+other profile of its CIM version is refused, because the receiver would never read them.
 
-These equipment properties have no update query at all and are applied with IIDM setters after the update workflow,
-which is why they are listed separately:
-
-| CIM classes | properties applied with a setter |
-| --- | --- |
-| `ACLineSegment` | `ACLineSegment.r`, `.x`, `.gch`, `.bch` |
-| `SeriesCompensator` | `SeriesCompensator.r`, `.x` |
-| `EquivalentBranch` | `EquivalentBranch.r`, `.x`, `.r21`, `.x21` |
-| `VoltageLevel` | `VoltageLevel.highVoltageLimit`, `.lowVoltageLimit` |
+The equipment blocks without update query (the impedances of `ACLineSegment`, `SeriesCompensator` and
+`EquivalentBranch`, and the limits of a `VoltageLevel`) are applied with IIDM setters after the update workflow.
 
 `gch` and `bch` are split equally over the two ends of a line and taken as they stand on a boundary line, which is
 exactly what the conversion of a full equipment model does. An `EquivalentBranch` states the impedance of both
@@ -235,7 +208,7 @@ as not verifiable and never fails the check.
 - **Transformer impedances are cut.** CGMES holds them per `PowerTransformerEnd` plus the tap step corrections, and
   the import folds both ends into one IIDM value depending on import options the network does not remember, so
   neither direction can be produced faithfully. See the
-  [export limitations](export.md#cgmes-difference-model-export) for the full reasoning.
+  {ref}`export limitations <cgmes-difference-model-export>` for the full reasoning.
 - **A `TieLine` has no impedance of its own**; its two `BoundaryLine`s do, and those are supported.
 - **Adding, removing or renaming a limit, and selecting another operational limits group**, are structural changes
   CGMES models with objects, so they are refused.
@@ -273,16 +246,27 @@ as not verifiable and never fails the check.
 network variant**. Every statement whose IIDM target is a single field of the network — an operational limit value,
 a voltage limit, a branch impedance, the rating of an HVDC line in the default simplified DC model, an IIDM
 property — then blocks the update with a reason naming that field, instead of leaking into the other variants of
-the same network. Four cases depend on the receiving network and are decided against it before anything is
+the same network. Some cases depend on the receiving network and are decided against it before anything is
 written: a reference priority that would create the `ReferencePriorities` extension, a participation factor on a
 generator without `ActivePowerControl`, switching the regulation of a tap changer that has no
-`loadTapChangingCapabilities` on, and a voltage source converter of the simplified DC model. The flag also
+`loadTapChangingCapabilities` on, a voltage source converter of the simplified DC model, an update that would create
+the `VoltageRegulation` of a generator (a generator whose CGMES control regulates voltage and that has none, or an
+`EquivalentInjection` whose regulation is switched on) or rebuild the one of a detailed voltage source converter with
+another regulating terminal (a `VoltageRegulation` and its terminal exist in every variant), and disconnecting a
+terminal of a node/breaker voltage level that has no fictitious switch yet (the update creates it, powsybl-core
+#4085). The flag also
 requires the scoped update, because the full update writes properties and validation levels that belong to the
 whole network.
 
-There is no import parameter for it: it is set by the layer that binds a variant to a stored state, see
-[the RDF database](rdf_database.md), and `Network.update(dataSource)` has no variant to name. The authoritative
-table of what is and is not per variant is in that document.
+There is no import parameter for it: it is set by the layer that binds a variant to a stored state (the RDF
+database, see [variant mode](rdf_database_integration.md#variant-mode)), and `Network.update(dataSource)` has no
+variant to name. The authoritative table of what is and is not per variant is
+[in the RDF database page](rdf_database.md#which-changes-stay-inside-a-variant).
+
+Reverting a difference that closed a branch CGMES models as a switch states `connected = false` for its terminals,
+and since powsybl-core #4085 the update then creates the fictitious switch of each node/breaker terminal that has none:
+the reverted network holds one more, open, fictitious switch than it held before, exactly as after a partial SSH update
+of the undo.
 
 ### Performance
 
@@ -338,10 +322,10 @@ files around, will not grow a second RDF engine, and will never apply structural
 that callers and databases can route a difference without trying, (3) a small statement applier for *its own* triple
 store, `CgmesDiffImport.applyToTripleStore(store, difference, contextName, baseName)`, which replaces property values
 inside one named graph through SPARQL UPDATE and therefore works on an in-memory store as well as on a remote
-repository, and (4) with the RDF database integration, a database-side merge fallback: when a path of differences is
-not fast, the base graphs are already at hand in the store, the differences are merged there and the conversion is
-re-run &mdash; a slow route without files. OpenCGMES is also the reference the difference-model file structure is
-validated against.
+repository; `applyToGraph` is the same operation on a local store, which is what a caller holding base graphs uses as
+a slow route without files &mdash; the RDF database does, see its
+[full route](rdf_database_integration.md#import-the-diff-route-the-full-route-and-how-a-refusal-travels-back).
+OpenCGMES is also the reference the difference-model file structure is validated against.
 
 (cgmes-import-level-of-detail)=
 ## Levels of detail: node/breaker and bus/branch
@@ -377,6 +361,29 @@ The CGMES model does not guarantee these hierarchical constraints, so the first 
 ## Conversion from CGMES to PowSyBl grid model
 
 The following sections describe in detail how each supported CGMES network object is converted to PowSyBl network model objects.
+
+(cgmes-subnetwork-import)=
+
+### Subnetwork
+
+When importing a Common Grid Model (CGM) made of several Individual Grid Models (IGMs) merged together, by default each
+IGM is imported into its own PowSyBl [`Subnetwork`](../../grid_model/network_subnetwork.md), and all the subnetworks are
+then merged into a single PowSyBl `Network`. This behavior is controlled by the `iidm.import.cgmes.cgm-with-subnetworks`
+import option, which defaults to `true`. Setting it to `false` disables this separation, so the CGM is imported directly
+as a single flat `Network`. The [RDF database](rdf_database.md#a-cgm-is-a-query-and-a-load) composes the IGMs it stores
+into one flat network through the same conversion.
+
+When subnetwork separation is enabled, the `iidm.import.cgmes.cgm-with-subnetworks-defined-by` import option controls
+how the importer groups CGMES files by IGM, and therefore how it builds each subnetwork:
+
+- `MODELING_AUTHORITY` (the default): files are grouped by the modeling authority declared in the `FullModel` header of
+  each CGMES instance file.
+- `FILENAME`: files are grouped by the `sourcingActor` segment of the CGMES file naming convention (
+  `<effectiveDateTime>_<businessProcess>_<sourcingActor>_<modelPart>_<fileVersion>`).
+
+Subnetworks are imported in a deterministic order, sorted by their grouping key (modeling authority name or sourcing
+actor name). As a result, the subnetworks of the imported `Network`, and the corresponding entries in the import report,
+are always listed in the same, reproducible order.
 
 (cgmes-substation-import)=
 ### Substation
@@ -1169,6 +1176,12 @@ Optional property to define if subnetworks must be added to the network when imp
 **iidm.import.cgmes.cgm-with-subnetworks-defined-by**<br>
 If `iidm.import.cgmes.cgm-with-subnetworks` is set to `true`, use this property to specify how the set of input files should be split by IGM: based on their filenames (use the value `FILENAME`) or by its modeling authority, read from the header (use the value `MODELING_AUTHORITY`).
 Its default value is `MODELING_AUTHORITY`.
+
+**iidm.import.cgmes.cgm-with-subnetworks-thread-count**<br>
+If `iidm.import.cgmes.cgm-with-subnetworks` is set to `true`, use this property to define the number of threads used to import the IGMs of a CGM concurrently.
+Its default value is `1`, meaning IGMs are imported sequentially.
+If there are less IGMs than the number of configured threads, the importer will only use as many threads as there are IGMs.
+The number of threads is also limited to the number of available logical processors minus one.
 
 **iidm.import.cgmes.create-fictitious-voltage-level-for-every-node**<br>
 Optional property that defines the fictitious voltage levels created by line container. If it is set to `true`, a fictitious voltage level is created for each connectivity node inside the line container.

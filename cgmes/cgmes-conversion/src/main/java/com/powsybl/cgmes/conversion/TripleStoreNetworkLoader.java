@@ -42,6 +42,8 @@ import java.util.Properties;
  * exists. This loader therefore always produces <em>one</em> network. To get subnetworks out of a database, load
  * each IGM into its own model set and merge the networks.</p>
  *
+ * <p>Public API: a client outside this module builds on this signature.</p>
+ *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 public final class TripleStoreNetworkLoader {

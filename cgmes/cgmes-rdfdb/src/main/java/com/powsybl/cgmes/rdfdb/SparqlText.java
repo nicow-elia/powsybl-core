@@ -8,6 +8,7 @@
 
 package com.powsybl.cgmes.rdfdb;
 
+import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Collection;
@@ -106,6 +107,11 @@ final class SparqlText {
     /** An {@code xsd:dateTime} literal. */
     static String dateTime(ZonedDateTime value) {
         return "\"" + value.format(DateTimeFormatter.ISO_INSTANT) + "\"^^<" + RdfDbVocabulary.XSD_NS + "dateTime>";
+    }
+
+    /** An {@code xsd:dateTime} literal of an instant, in the one lexical form every write of a key uses. */
+    static String dateTime(Instant value) {
+        return "\"" + value + "\"^^<" + RdfDbVocabulary.XSD_NS + "dateTime>";
     }
 
     /** An {@code xsd:integer} literal. */

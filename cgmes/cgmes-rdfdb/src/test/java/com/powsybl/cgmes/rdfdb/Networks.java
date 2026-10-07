@@ -484,6 +484,12 @@ final class Networks {
         sortInternalConnections(element);
         sortSetLikeSiblings(element, "areaBoundary");
         sortSetLikeSiblings(element, "bus");
+        // A conversion creates the limit groups of a branch in the order it meets them in the data, which a store
+        // does not fix; IIDM writes them in creation order
+        for (String group : List.of("operationalLimitsGroup", "operationalLimitsGroup1", "operationalLimitsGroup2",
+                "operationalLimitsGroup3")) {
+            sortSetLikeSiblings(element, group);
+        }
         NodeList children = element.getChildNodes();
         for (int i = 0; i < children.getLength(); i++) {
             if (children.item(i) instanceof Element child) {

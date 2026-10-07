@@ -38,8 +38,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class CgmesDiffImportApplyToGraphTest {
 
-    private static final String GRAPH = "http://powsybl.org/rdfdb/2016-01-01/graph/urn:uuid:d1/forward";
-    private static final String OTHER_GRAPH = "http://powsybl.org/rdfdb/2016-01-01/graph/urn:uuid:d2/forward";
+    private static final String GRAPH = "http://example.org/graph/d1/forward";
+    private static final String OTHER_GRAPH = "http://example.org/graph/d2/forward";
     private static final String BASE = "http://microgrid/#";
     private static final String CIM = CgmesNamespace.CIM_16_NAMESPACE;
     private static final String LOAD = "1c6beed6";

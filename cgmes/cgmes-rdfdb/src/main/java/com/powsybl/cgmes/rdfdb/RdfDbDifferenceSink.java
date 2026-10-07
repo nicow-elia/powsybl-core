@@ -10,7 +10,6 @@ package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conversion.diff.CgmesDiffImport;
 import com.powsybl.cgmes.conversion.diff.FastRouteCapabilities;
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
@@ -22,6 +21,7 @@ import org.eclipse.rdf4j.model.ValueFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -92,53 +92,61 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
      * node, its difference members and their data graphs then go into the <em>same</em> guarded request: a reader
      * never sees a snapshot whose members are missing, and a losing writer leaves nothing behind.</p>
      *
-     * @param iri          the IRI of the snapshot node
-     * @param version      the version label
-     * @param timestep     the canonical timestep
-     * @param timestepLabel the {@code HH:MM} rendering of the timestep, for display only
-     * @param parent       the IRI of the parent snapshot
-     * @param edge         {@code pdb:VersionEdge} or {@code pdb:TimestepEdge}
-     * @param depth        the depth of the new snapshot
-     * @param state        the effective model per profile at the new snapshot
-     * @param timestepRoot the root snapshot of the new snapshot's timestep
-     * @param parentStates the parent states the write is guarded against, per profile
+     * @param iri                the IRI of the snapshot node
+     * @param modellingAuthority the modelling authority set of the snapshot's tree
+     * @param version            the version name, its rank and the registry revision both were checked against
+     * @param timestamp          the moment
+     * @param parent             the IRI of the parent snapshot
+     * @param edge               {@code pdb:VersionEdge} or {@code pdb:TimestampEdge}
+     * @param depth              the depth of the new snapshot
+     * @param state              the effective model per profile at the new snapshot
+     * @param timestampRoot      the root snapshot of the new snapshot's timestamp
+     * @param parentStates       the parent states the write is guarded against, per profile
+     * @param wholes             the custom profiles a difference snapshot stores whole, by profile: the model
+     *                           identifier of each becomes a member, a state and a {@code pdb:full} link of the
+     *                           snapshot ({@link Profiles}). Empty for a root, whose members are all whole anyway
+     * @param wholeNodes         the {@code md:FullModel} nodes of those models, as triples of an {@code INSERT}
+     *                           template; their graphs were uploaded before the write
      */
-    record SnapshotWrite(String iri, String version, String timestep, String timestepLabel, String parent,
-                         String edge, int depth, Map<CgmesSubset, String> state, String timestepRoot,
-                         Map<CgmesSubset, String> parentStates) {
+    record SnapshotWrite(String iri, String modellingAuthority, VersionRegistry.Resolved version, Instant timestamp,
+                         String parent,
+                         String edge, int depth, Map<String, String> state, String timestampRoot,
+                         Map<String, String> parentStates, Map<String, String> wholes, String wholeNodes) {
 
         /**
          * A root snapshot: no parent, and full models of every profile.
          *
-         * @param iri           the IRI of the snapshot node
-         * @param version       the version label
-         * @param timestep      the canonical timestep
-         * @param timestepLabel the {@code HH:MM} rendering of the timestep
-         * @param state         the full model per profile
+         * @param iri                the IRI of the snapshot node
+         * @param modellingAuthority the modelling authority set of the tree
+         * @param version            the version the root took from the registry
+         * @param timestamp          the moment
+         * @param state              the full model per profile
          * @return the write
          */
-        static SnapshotWrite root(String iri, String version, String timestep, String timestepLabel,
-                                  Map<CgmesSubset, String> state) {
-            return new SnapshotWrite(iri, version, timestep, timestepLabel, null, null, 0, state, iri, Map.of());
+        static SnapshotWrite root(String iri, String modellingAuthority, VersionRegistry.Resolved version,
+                                  Instant timestamp, Map<String, String> state) {
+            return new SnapshotWrite(iri, modellingAuthority, version, timestamp, null, null, 0, state, iri,
+                    Map.of(), Map.of(), "");
         }
 
-        /** A new timestep root, whose write must fail if the timestep already exists. */
-        boolean isNewTimestep() {
-            return RdfDbVocabulary.TIMESTEP_EDGE.equals(edge);
+        /** A new timestamp root, whose write must fail if the timestamp already exists in its tree. */
+        boolean isNewTimestamp() {
+            return RdfDbVocabulary.TIMESTAMP_EDGE.equals(edge);
         }
 
         /**
          * The {@code pdb:Snapshot} node, as triples of an {@code INSERT} template.
          *
          * <p>A snapshot without a parent is a root of full models: its members and its full models are its state.
-         * A difference snapshot carries neither of the two booleans earlier releases wrote beside its links:
+         * A difference snapshot carries no boolean of its own beside its links:
          * {@link RdfDbVocabulary#FAST_PREDICATES_ONLY} is written on each member and a reader takes the conjunction
-         * ({@link SnapshotInfo#fast()}), and it has no {@link RdfDbVocabulary#FULL_MODELS} link at all until a
-         * {@link Checkpoint} gives it one, which is what {@link SnapshotInfo#hasFull()} reads.</p>
+         * ({@link SnapshotInfo#fast()}), and it has no {@link RdfDbVocabulary#FULL_MODELS} link of a standard profile
+         * until a {@link Checkpoint} gives it one, which is what {@link SnapshotInfo#hasFull()} reads; the one
+         * full link it may carry from the start is the whole graph of a custom profile.</p>
          *
          * @param query    where to write
          * @param scenario the scenario
-         * @param members  the models the snapshot adds
+         * @param members  the difference models the snapshot adds
          * @param now      the creation time
          */
         void appendTo(StringBuilder query, String scenario, Collection<String> members, ZonedDateTime now) {
@@ -147,12 +155,12 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
                     .append(SparqlText.iri(RdfDbVocabulary.SNAPSHOT_CLASS)).append(" ; ")
                     .append(SparqlText.iri(RdfDbVocabulary.SCENARIO)).append(' ')
                     .append(SparqlText.str(scenario)).append(" ; ")
+                    .append(SparqlText.iri(RdfDbVocabulary.MODELLING_AUTHORITY)).append(' ')
+                    .append(SparqlText.str(modellingAuthority)).append(" ; ")
+                    .append(SparqlText.iri(RdfDbVocabulary.TIMESTAMP)).append(' ')
+                    .append(SparqlText.dateTime(timestamp)).append(" ; ")
                     .append(SparqlText.iri(RdfDbVocabulary.VERSION)).append(' ')
-                    .append(SparqlText.str(version)).append(" ; ")
-                    .append(SparqlText.iri(RdfDbVocabulary.TIMESTEP)).append(' ')
-                    .append(SparqlText.str(timestep)).append(" ; ")
-                    .append(SparqlText.iri(RdfDbVocabulary.TIMESTEP_LABEL)).append(' ')
-                    .append(SparqlText.str(timestepLabel)).append(" ; ")
+                    .append(SparqlText.str(version.name())).append(" ; ")
                     .append(SparqlText.iri(RdfDbVocabulary.KIND)).append(' ')
                     .append(SparqlText.iri(parent == null ? RdfDbVocabulary.FULL : RdfDbVocabulary.DIFF))
                     .append(" ; ");
@@ -162,18 +170,23 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
                         .append(SparqlText.iri(RdfDbVocabulary.EDGE)).append(' ')
                         .append(SparqlText.iri(edge)).append(" ; ");
             }
+            if (parent == null) {
+                // A root is the first rollover of its tree: what a timestamp is ingested against by default
+                query.append(SparqlText.iri(RdfDbVocabulary.ROLLOVER)).append(' ').append(SparqlText.bool(true))
+                        .append(" ; ");
+            }
             query.append(SparqlText.iri(RdfDbVocabulary.DEPTH)).append(' ')
                     .append(SparqlText.integer(depth)).append(" ; ")
-                    .append(SparqlText.iri(RdfDbVocabulary.TIMESTEP_ROOT)).append(' ')
-                    .append(SparqlText.iri(timestepRoot)).append(" ; ")
+                    .append(SparqlText.iri(RdfDbVocabulary.TIMESTAMP_ROOT)).append(' ')
+                    .append(SparqlText.iri(timestampRoot)).append(" ; ")
                     .append(SparqlText.iri(RdfDbVocabulary.CREATED)).append(' ')
                     .append(SparqlText.dateTime(now));
             members.forEach(id -> appendIri(query, RdfDbVocabulary.MEMBER, id));
+            wholes.values().forEach(id -> appendIri(query, RdfDbVocabulary.MEMBER, id));
             state.values().forEach(id -> appendIri(query, RdfDbVocabulary.STATE, id));
-            if (parent == null) {
-                state.values().forEach(id -> appendIri(query, RdfDbVocabulary.FULL_MODELS, id));
-            }
-            query.append(" .");
+            (parent == null ? state : wholes).values()
+                    .forEach(id -> appendIri(query, RdfDbVocabulary.FULL_MODELS, id));
+            query.append(" . ").append(wholeNodes);
         }
     }
 
@@ -182,14 +195,15 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
      *
      * <p>It applies to an <em>unversioned</em> write and to nothing else. A scenario without snapshots has no other
      * way of keeping the chain of a profile linear, so the rule is the chain. A versioned write is guarded on the
-     * snapshot instead &mdash; one {@code pdb:VersionEdge} child per snapshot, a unique {@code (timestep, version)},
+     * snapshot instead &mdash; one {@code pdb:VersionEdge} child per snapshot, a version ranking above every other of
+     * its {@code (modellingAuthority, timestamp)},
      * and the parent's {@code pdb:state} unchanged &mdash; and those guards subsume it.</p>
      *
-     * <p>Keeping it for versioned writes would be worse than redundant: it would be wrong. Every timestep of a day
+     * <p>Keeping it for versioned writes would be worse than redundant: it would be wrong. Every timestamp of a day
      * is "the base plus these differences", so the base steady-state model legitimately has one successor per
-     * timestep; and once one of them exists, the model-level rule would refuse the <em>next base version</em> of
+     * timestamp; and once one of them exists, the model-level rule would refuse the <em>next base version</em> of
      * that profile and freeze the base chain for the rest of the day. Versions are the inner dimension precisely
-     * so that they keep growing while timesteps fan out.</p>
+     * so that they keep growing while timestamps fan out.</p>
      */
     private boolean modelChainMustStayLinear() {
         return snapshotWrite == null;
@@ -248,6 +262,7 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
 
     /**
      * A hook that runs between the two phases of a large write, so that a test can make a concurrent writer win.
+     * A test seam only: production code never sets it, so it is {@code null} there and costs one comparison.
      *
      * @param hook what to run, or {@code null} for nothing
      */
@@ -264,7 +279,7 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
     public void accept(DifferenceModelSet set) {
         Objects.requireNonNull(set);
         List<DifferenceModel> models = set.models().values().stream().filter(m -> !m.isEmpty()).toList();
-        if (models.isEmpty()) {
+        if (models.isEmpty() && (snapshotWrite == null || snapshotWrite.wholes().isEmpty())) {
             return;
         }
         Plan plan = plan(models);
@@ -321,8 +336,8 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
      * about them is already here.</p>
      */
     private void report(List<Planned> planned, Set<String> known) {
-        planned.forEach(p -> RdfDbReports.storedDifferenceReport(reportNode, p.header.id(), p.header.subset(),
-                scenario));
+        planned.forEach(p -> RdfDbReports.storedDifferenceReport(reportNode, p.header.id(),
+                Profiles.of(p.header.subset()), scenario));
         for (Planned p : planned) {
             p.header.dependentOn().stream().filter(id -> !known.contains(id))
                     .forEach(id -> RdfDbReports.dependencyNotStoredReport(reportNode, p.header.id(), id, scenario));
@@ -386,7 +401,7 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
             checkBase(header, baseId, base);
             if (modelChainMustStayLinear()) {
                 checkNoSuccessor(header, baseId, check.successors().getOrDefault(baseId, List.of()).stream()
-                        .filter(successor -> successor.subset() == header.subset())
+                        .filter(successor -> Profiles.of(header.subset()).equals(successor.subset()))
                         .map(ModelCatalog.Successor::id).toList());
             }
             if (check.models().containsKey(header.id())) {
@@ -418,10 +433,10 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
             throw new RdfDbConflictException("difference model " + header.id() + " supersedes " + baseId
                     + ", which is not stored in scenario '" + scenario + "'" + where);
         }
-        if (base.subset() != header.subset()) {
+        if (!base.subset().equals(Profiles.of(header.subset()))) {
             throw new RdfDbConflictException("difference model " + header.id() + " describes the "
-                    + header.subset().getIdentifier() + " profile but supersedes " + baseId + ", which describes the "
-                    + base.subset().getIdentifier() + " profile");
+                    + Profiles.of(header.subset()) + " profile but supersedes " + baseId + ", which describes the "
+                    + base.subset() + " profile");
         }
     }
 
@@ -429,7 +444,7 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
         if (!successors.isEmpty()) {
             throw new RdfDbConflictException("difference model " + header.id() + " supersedes " + baseId
                     + ", which is already superseded by " + successors + " in scenario '" + scenario + "': the "
-                    + header.subset().getIdentifier() + " chain of a scenario is linear, so load the head and"
+                    + Profiles.of(header.subset()) + " chain of a scenario is linear, so load the head and"
                     + " re-record, or address the state you want with a SnapshotRef");
         }
     }
@@ -502,7 +517,7 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
             i++;
             String id = SparqlText.iri(p.header.id());
             String base = SparqlText.iri(p.base.id());
-            String subset = SparqlText.str(p.header.subset().getIdentifier());
+            String subset = SparqlText.str(Profiles.of(p.header.subset()));
             insert.append(" FILTER NOT EXISTS { GRAPH ").append(meta).append(" { ").append(id)
                     .append(" ?p").append(i).append(" ?o").append(i).append(" } }")
                     .append(" FILTER EXISTS { GRAPH ").append(meta).append(" { ").append(base)
@@ -538,7 +553,7 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
                 .append(SparqlText.iri(RdfDbVocabulary.KIND)).append(' ')
                 .append(SparqlText.iri(RdfDbVocabulary.DIFF)).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.SUBSET)).append(' ')
-                .append(SparqlText.str(header.subset().getIdentifier())).append(" ; ")
+                .append(SparqlText.str(Profiles.of(header.subset()))).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.SCENARIO)).append(' ')
                 .append(SparqlText.str(scenario)).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.FORWARD_GRAPH)).append(' ')
@@ -549,6 +564,8 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
                 .append(SparqlText.bool(p.fast)).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.VARIANT_SAFE)).append(' ')
                 .append(SparqlText.bool(p.variantSafe)).append(" ; ")
+                .append(SparqlText.iri(RdfDbVocabulary.CAPABILITIES)).append(' ')
+                .append(SparqlText.str(FastRouteCapabilities.version())).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.TRIPLE_COUNT)).append(' ')
                 .append(SparqlText.integer((long) p.forward.size() + p.reverse.size())).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.CHAIN_DEPTH)).append(' ')
@@ -587,24 +604,27 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
         }
         SnapshotWrite s = snapshotWrite;
         String parent = SparqlText.iri(s.parent());
+        String moment = " a pdb:Snapshot ; pdb:modellingAuthority " + SparqlText.str(s.modellingAuthority())
+                + " ; pdb:timestamp " + SparqlText.dateTime(s.timestamp());
         query.append(" FILTER NOT EXISTS { GRAPH ").append(meta).append(" { ").append(SparqlText.iri(s.iri()))
                 .append(" ?ps ?os } }")
-                .append(" FILTER NOT EXISTS { GRAPH ").append(meta)
-                .append(" { ?ys a pdb:Snapshot ; pdb:timestep ").append(SparqlText.str(s.timestep()))
-                .append(" ; pdb:version ").append(SparqlText.str(s.version())).append(" } }")
                 .append(" FILTER EXISTS { GRAPH ").append(meta).append(" { ").append(parent)
                 .append(" a pdb:Snapshot } }");
         if (RdfDbVocabulary.VERSION_EDGE.equals(s.edge())) {
             query.append(" FILTER NOT EXISTS { GRAPH ").append(meta).append(" { ?cs pdb:parent ").append(parent)
                     .append(" ; pdb:edge pdb:VersionEdge } }");
         }
-        if (s.isNewTimestep()) {
-            query.append(" FILTER NOT EXISTS { GRAPH ").append(meta)
-                    .append(" { ?ts a pdb:Snapshot ; pdb:timestep ").append(SparqlText.str(s.timestep()))
+        if (s.isNewTimestamp()) {
+            query.append(" FILTER NOT EXISTS { GRAPH ").append(meta).append(" { ?ts").append(moment)
                     .append(" } }");
         }
         s.parentStates().values().forEach(id -> query.append(" FILTER EXISTS { GRAPH ").append(meta).append(" { ")
                 .append(parent).append(" pdb:state ").append(SparqlText.iri(id)).append(" } }"));
+        // A whole graph is a new model: written once, like the full model of a root
+        s.wholes().values().forEach(id -> query.append(" FILTER NOT EXISTS { GRAPH ").append(meta).append(" { ")
+                .append(SparqlText.iri(id)).append(" ?pw ?ow } }"));
+        // The name is registered at the rank that was checked, and the registry did not change under the write
+        connection.snapshots(scenario).registry().appendWriteGuards(query, s.version());
     }
 
     private static void appendOptional(StringBuilder query, String predicate, ZonedDateTime value) {

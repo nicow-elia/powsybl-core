@@ -8,7 +8,6 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.iidm.network.Network;
 
 import java.util.List;
@@ -32,7 +31,7 @@ import java.util.Map;
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 public record UpdateResult(UpdateResult.Route route, Network network,
-                           Map<CgmesSubset, List<String>> appliedModelIds, List<String> reasons,
+                           Map<String, List<String>> appliedModelIds, List<String> reasons,
                            UpdateStatistics statistics, String variantId) {
 
     /** Which way an update went. */
@@ -75,7 +74,7 @@ public record UpdateResult(UpdateResult.Route route, Network network,
      * @param statistics      see {@link #statistics()}
      */
     public UpdateResult(UpdateResult.Route route, Network network,
-                        Map<CgmesSubset, List<String>> appliedModelIds, List<String> reasons,
+                        Map<String, List<String>> appliedModelIds, List<String> reasons,
                         UpdateStatistics statistics) {
         this(route, network, appliedModelIds, reasons, statistics, null);
     }

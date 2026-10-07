@@ -352,6 +352,14 @@ class CgmesEqDiffRejectionTest {
         assertTrue(message.contains("impedance values must be finite"), message);
     }
 
+    /** Only a SeriesCompensator may be capacitive (owner decision O3): a negative reactance of a line segment is refused. */
+    @Test
+    void aNegativeReactanceIsRefusedForALineSegment() {
+        Network network = lineNetwork();
+        String message = refusal(network, n -> n.getLine(AC_LINE_SEGMENT).setX(-1.0));
+        assertTrue(message.contains("x < 0 for a SeriesCompensator only"), message);
+    }
+
     /**
      * A line whose identifier is a pair of identifiers joined by {@code " + "} names no single CGMES object.
      *

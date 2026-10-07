@@ -12,6 +12,7 @@ import org.eclipse.rdf4j.model.Value;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -130,6 +131,41 @@ class RdfDbSparqlSemanticsTest {
     }
 
     /**
+     * The typed literals of the key: an {@code xsd:dateTime} timestamp and an {@code xsd:integer} version are
+     * matched as triple-pattern constants and in {@code FILTER} equality, and the version guard of a write
+     * compares integers numerically ({@code 10 >= 9}, which as strings would be false).
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("backends")
+    void theTypedLiteralsOfTheKeyMatchOnBothBackends(String backend) {
+        try (RdfDbConnection db = open(backend)) {
+            db.clear(SCENARIO);
+            SparqlAccess sparql = db.sparql(SCENARIO);
+            Instant t = Instant.parse("2014-06-01T10:30:00Z");
+            sparql.update("INSERT DATA { GRAPH <" + M + "> { <" + EX + "s> <" + RdfDbVocabulary.TIMESTAMP + "> "
+                    + SparqlText.dateTime(t) + " ; <" + RdfDbVocabulary.VERSION + "> " + SparqlText.integer(10)
+                    + " } }");
+
+            assertThat(sparql.select("SELECT ?s WHERE { GRAPH <" + M + "> { ?s <" + RdfDbVocabulary.TIMESTAMP
+                    + "> " + SparqlText.dateTime(t) + " ; <" + RdfDbVocabulary.VERSION + "> "
+                    + SparqlText.integer(10) + " } }")).hasSize(1);
+            assertThat(sparql.select("SELECT ?s WHERE { GRAPH <" + M + "> { ?s <" + RdfDbVocabulary.TIMESTAMP
+                    + "> ?t FILTER(?t = \"2014-06-01T10:30:00Z\"^^<" + RdfDbVocabulary.XSD_NS + "dateTime>) } }"))
+                    .hasSize(1);
+            assertThat(sparql.select("SELECT ?s WHERE { GRAPH <" + M + "> { ?s <" + RdfDbVocabulary.VERSION
+                    + "> ?v FILTER(?v >= " + SparqlText.integer(9) + ") } }")).hasSize(1);
+            assertThat(sparql.select("SELECT ?s WHERE { GRAPH <" + M + "> { ?s <" + RdfDbVocabulary.VERSION
+                    + "> ?v FILTER(?v >= " + SparqlText.integer(11) + ") } }")).isEmpty();
+            // What a reader gets back is the instant it wrote, whatever lexical form the backend returns
+            Value read = sparql.select("SELECT ?t WHERE { GRAPH <" + M + "> { ?s <" + RdfDbVocabulary.TIMESTAMP
+                    + "> ?t } }").get(0).get("t");
+            assertThat(SnapshotRows.instantOf(read)).isEqualTo(t);
+
+            db.clear(SCENARIO);
+        }
+    }
+
+    /**
      * Probe (a) of the variant work package: a sub-select inside one branch of a {@code UNION}, combined with a
      * {@code pdb:parent*} walk from starts that several other branches bind.
      *
@@ -183,7 +219,7 @@ class RdfDbSparqlSemanticsTest {
     /**
      * Probe (b) of the variant work package: a hundred {@code UNION} branches in one query.
      *
-     * <p>A day of 96 timesteps loaded in one request binds one start per timestep, and some engines have a limit
+     * <p>A day of 96 timestamps loaded in one request binds one start per timestamp, and some engines have a limit
      * on the size of a {@code UNION} tree or turn one into a quadratic plan. This asserts that the request is
      * answered at all, and that every branch contributes its rows.</p>
      */
@@ -211,6 +247,67 @@ class RdfDbSparqlSemanticsTest {
 
             assertThat(rows).as("one row per branch").hasSize(100);
             assertThat(rows.stream().map(row -> row.get("side").stringValue()).distinct().count()).isEqualTo(100L);
+
+            db.clear(SCENARIO);
+        }
+    }
+
+    /**
+     * What the version registry rests on: a rank joined from a version node by name orders the snapshots under
+     * {@code FILTER}, a sub-select ordered by that rank and limited to one binds exactly the highest rank at or below
+     * a version, and a {@code DELETE/INSERT} guarded by an integer equality runs only at that revision.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("backends")
+    void theRankJoinOrdersVersionsOnBothBackends(String backend) {
+        try (RdfDbConnection db = open(backend)) {
+            db.clear(SCENARIO);
+            SparqlAccess sparql = db.sparql(SCENARIO);
+            StringBuilder data = new StringBuilder(RdfDbVocabulary.PREFIXES + "INSERT DATA { GRAPH <" + M + "> { <"
+                    + EX + "schema> pdb:rev " + SparqlText.integer(3) + " . ");
+            String[][] versions = {{"DA", "10"}, {"ID", "20"}, {"RT", "30"}, {"X", "40"}};
+            for (String[] v : versions) {
+                data.append('<').append(EX).append("v/").append(v[0]).append("> a pdb:Version ; pdb:name ")
+                        .append(SparqlText.str(v[0])).append(" ; pdb:rank ")
+                        .append(SparqlText.integer(Long.parseLong(v[1]))).append(" . ");
+            }
+            // One chain that carries DA, ID and X, but not RT
+            String parent = null;
+            for (String name : List.of("DA", "ID", "X")) {
+                data.append('<').append(EX).append("s/").append(name).append("> a pdb:Snapshot ; pdb:version ")
+                        .append(SparqlText.str(name));
+                if (parent != null) {
+                    data.append(" ; pdb:parent <").append(EX).append("s/").append(parent)
+                            .append("> ; pdb:edge pdb:VersionEdge");
+                }
+                data.append(" . ");
+                parent = name;
+            }
+            sparql.update(data.append("} }").toString());
+
+            String join = " ?s a pdb:Snapshot ; pdb:version ?n . ?vn a pdb:Version ; pdb:name ?n ; pdb:rank ?r ";
+            List<Map<String, Value>> above = sparql.select(RdfDbVocabulary.PREFIXES + "SELECT ?n WHERE { GRAPH <" + M
+                    + "> {" + join + "FILTER(?r >= " + SparqlText.integer(20) + ") } } ORDER BY ?r");
+            assertThat(above).extracting(row -> row.get("n").stringValue()).containsExactly("ID", "X");
+
+            // The highest at or below RT (30) is ID: X ranks above, DA below; a sub-select ordered by the joined rank
+            String atOrBelow = RdfDbVocabulary.PREFIXES + "SELECT ?n WHERE { GRAPH <" + M + "> { { SELECT ?s ?n"
+                    + " WHERE { ?q pdb:name \"RT\" ; pdb:rank ?bound ." + join + "FILTER(?r <= ?bound) }"
+                    + " ORDER BY DESC(?r) LIMIT 1 } } }";
+            assertThat(sparql.select(atOrBelow)).extracting(row -> row.get("n").stringValue()).containsExactly("ID");
+
+            // A revision guard: the edit runs at revision 3 and not again
+            String edit = RdfDbVocabulary.PREFIXES + "DELETE { GRAPH <" + M + "> { <" + EX + "schema> pdb:rev "
+                    + SparqlText.integer(3) + " } } INSERT { GRAPH <" + M + "> { <" + EX + "schema> pdb:rev "
+                    + SparqlText.integer(4) + " . <" + EX + "edited> <" + EX + "p> <" + EX + "o> } } WHERE { GRAPH <"
+                    + M + "> { <" + EX + "schema> pdb:rev " + SparqlText.integer(3) + " } }";
+            sparql.update(edit);
+            sparql.update(edit.replace("<" + EX + "edited>", "<" + EX + "again>"));
+            List<Map<String, Value>> rev = sparql.select(RdfDbVocabulary.PREFIXES + "SELECT ?r WHERE { GRAPH <" + M
+                    + "> { <" + EX + "schema> pdb:rev ?r } }");
+            assertThat(rev).extracting(row -> row.get("r").stringValue()).containsExactly("4");
+            assertThat(sparql.ask("ASK { GRAPH <" + M + "> { <" + EX + "again> ?p ?o } }")).isFalse();
+            assertThat(sparql.ask("ASK { GRAPH <" + M + "> { <" + EX + "edited> ?p ?o } }")).isTrue();
 
             db.clear(SCENARIO);
         }

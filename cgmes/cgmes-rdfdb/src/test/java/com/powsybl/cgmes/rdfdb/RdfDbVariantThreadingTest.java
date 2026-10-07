@@ -15,6 +15,7 @@ import com.powsybl.iidm.network.Network;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -25,6 +26,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static com.powsybl.cgmes.rdfdb.Backends.params;
+import static com.powsybl.cgmes.rdfdb.Backends.ref;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -45,7 +47,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class RdfDbVariantThreadingTest {
 
     private static final String S = "2016-01-01";
-    private static final int TIMESTEPS = 8;
+    private static final int TIMESTAMPS = 8;
     private static final int WRITES = 20;
 
     @ParameterizedTest(name = "{0}")
@@ -54,27 +56,28 @@ class RdfDbVariantThreadingTest {
         try (RdfDbConnection db = RdfDbConnection.open(Backends.database(backend, "variant-threads"))) {
             db.clear(S);
             db.snapshots(S).putFull(CgmesConformity1Catalog.microGridBaseCaseBE().dataSource(), null,
-                    SnapshotRef.of(S, "1.0"), params(), ReportNode.NO_OP);
-            List<String> timesteps = new ArrayList<>();
-            timesteps.add("2014-06-01T10:30:00Z");
-            for (int i = 1; i < TIMESTEPS; i++) {
-                String instant = String.format("2014-06-01T%02d:00:00Z", 11 + i);
-                db.snapshots(S).putAsDiff(TimestepFixtures.ssh(1 + i % 3, instant, "th" + i), null,
-                        new SnapshotRef(S, "1.0", instant), params(), ReportNode.NO_OP);
-                timesteps.add(instant);
+                    ref(S, 1), null, params(), ReportNode.NO_OP);
+            List<Instant> timestamps = new ArrayList<>();
+            timestamps.add(Instant.parse("2014-06-01T10:30:00Z"));
+            for (int i = 1; i < TIMESTAMPS; i++) {
+                Instant instant = Instant.parse(String.format("2014-06-01T%02d:00:00Z", 11 + i));
+                db.snapshots(S).putAsDiff(TimestampFixtures.ssh(1 + i % 3, instant, "th" + i), null,
+                        ref(S, 1, instant), null, params(), ReportNode.NO_OP);
+                timestamps.add(instant);
             }
 
-            VariantLoadResult loaded = RdfDbNetworkLoader.loadVariants(db, S, "1.0", timesteps,
+            VariantLoadResult loaded = RdfDbNetworkLoader.loadVariants(db, S,
+                    timestamps.stream().map(t -> VariantRequest.of(ref(S, 1, t))).toList(),
                     new RdfDbVariantLoadOptions().setAllowVariantMultiThreadAccess(true), null, params(),
                     ReportNode.NO_OP);
             assertThat(loaded.refused()).isEmpty();
             Network network = loaded.network();
             List<String> variants = loaded.bound().stream().map(VariantOutcome::variantId).toList();
-            assertThat(variants).hasSize(TIMESTEPS);
+            assertThat(variants).hasSize(TIMESTAMPS);
 
             List<String> readerVariants = variants.subList(0, 4);
             List<String> writerVariants = variants.subList(4, 6);
-            SnapshotRef other = new SnapshotRef(S, "1.0", timesteps.get(6));
+            SnapshotRef other = ref(S, 1, timestamps.get(6));
 
             AtomicBoolean stop = new AtomicBoolean();
             AtomicReference<Throwable> failure = new AtomicReference<>();
@@ -109,12 +112,12 @@ class RdfDbVariantThreadingTest {
             }
             assertThat(started.await(30, TimeUnit.SECONDS)).isTrue();
 
-            // Each writer variant alternates between its own timestep and one it does not hold, so that every
-            // single write really applies a difference; reading the current timestep back would make all but the
+            // Each writer variant alternates between its own timestamp and one it does not hold, so that every
+            // single write really applies a difference; reading the current timestamp back would make all but the
             // first write a NOOP
             Map<String, SnapshotRef> home = new LinkedHashMap<>();
             writerVariants.forEach(variant ->
-                    home.put(variant, new SnapshotRef(S, "1.0", timestepOf(network, variant))));
+                    home.put(variant, ref(S, 1, timestampOf(network, variant))));
             try {
                 for (int i = 0; i < WRITES; i++) {
                     for (String variant : writerVariants) {
@@ -144,8 +147,8 @@ class RdfDbVariantThreadingTest {
         }
     }
 
-    private static String timestepOf(Network network, String variant) {
-        return network.getExtension(RdfDbProvenance.class).variantBinding(variant).orElseThrow().timestep();
+    private static Instant timestampOf(Network network, String variant) {
+        return network.getExtension(RdfDbProvenance.class).variantBinding(variant).orElseThrow().timestamp();
     }
 
     private static double sumOf(Network network, String variant) {

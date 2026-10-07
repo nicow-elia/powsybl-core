@@ -64,24 +64,23 @@ class CgmesDiffRoundTripTest {
     /**
      * Fingerprint keys on which a sender and a receiver legitimately differ, with the reason.
      *
-     * <p>Every entry is a value the CGMES steady state hypothesis has no property for, so it cannot travel: it is the
-     * setpoint of a regulation mode that is not active, which the importer leaves at the value the equipment model
-     * gave it. A partial steady state hypothesis update shows exactly the same difference, which is what the second
-     * test of this class asserts, so these are not defects of the difference path.</p>
+     * <p>Every entry is a value the CGMES steady state hypothesis cannot carry as the sender holds it: either it has
+     * no property for it (the setpoint of a regulation mode that is not active, which the importer leaves at the value
+     * the equipment model gave it), or the sender's value is not a number and the export writes it as {@code 0}. A
+     * partial steady state hypothesis update shows exactly the same difference, which is what the second test of this
+     * class asserts, so these are not defects of the difference path.</p>
      */
     private static final Set<String> KNOWN_IMPORT_NORMALISATIONS = Set.of(
             // The steady state hypothesis has no property for the setpoint of a regulation mode that is not active,
             // so that value cannot travel at all. Both receivers keep what their equipment model
             // gave them.
-            "StaticVarCompensator-V.reactivePowerSetpoint",
-            "StaticVarCompensator-Q.voltageSetpoint",
-            "DCLineSegment-Vsc-VscConverter-2.voltageSetpoint",
-            "DCLineSegment-Vsc-VscConverter-2.reactivePowerSetpoint",
+            // (powsybl-core #3699: the voltage target of a compensator regulating reactive power is its local one)
+            "StaticVarCompensator-Q.localTargetV",
+            "StaticVarCompensator-Q.regulatingTargetV",
             "CSC_1_1.targetVdc",
-            // Same reason for an equivalent injection whose regulation is switched off: cim:EquivalentInjection
-            // .regulationTarget is only written while the regulation is on, so the receiver keeps the last target
-            // instead of clearing it. The regulation itself is off in both networks.
-            "EquivalentInjection.targetV",
+            // Every SSH export writes a regulation target of an EquivalentInjection that is not a number as 0, as the
+            // full export always did, and the importer reads 0: the sender's NaN arrives as 0 (owner decision O4)
+            "EquivalentInjection.localTargetV",
             // A detailed converter that changes to DC voltage control has cim:ACDCConverter.targetPpcc = 0, and the
             // importer turns a converter that does not control its active power into one with an undefined target
             "CSC_1_1.targetP",
@@ -93,7 +92,10 @@ class CgmesDiffRoundTripTest {
             // The importer represents a terminal that is disconnected in a node/breaker voltage level by a
             // fictitious switch. Opening or closing a branch that CGMES models as a switch changes the state of its
             // terminals, so any update closes that switch, while setting Switch.open on a network in memory does not
-            "SeriesCompensator-T1_SW_fict.open");
+            "SeriesCompensator-T1_SW_fict.open",
+            // Since powsybl-core #4085 an update that disconnects a terminal of a node/breaker voltage level creates
+            // that fictitious switch when it does not exist yet: undoing the closing of such a branch creates it
+            "SeriesCompensator-T2_SW_fict.open");
 
     /**
      * The single case in which a {@code CHANGED_ONLY} difference cannot be undone, with the reason.
@@ -180,6 +182,15 @@ class CgmesDiffRoundTripTest {
         assertEquals(CgmesDiffImport.Route.FAST,
                 CgmesDiffImport.revert(receiver, parsed, parameters, ReportNode.NO_OP).route());
         updateWithPartialSsh(sshReceiver, sender, undoEvents, scenario);
+        if ("branchModelledAsSwitchClosing".equals(scenario.name())) {
+            // Undoing the closing of a branch CGMES models as a switch disconnects its terminals, and since
+            // powsybl-core #4085 the update creates the fictitious switch of a disconnected node/breaker terminal: it
+            // is left behind, open, exactly as the partial SSH of the undo leaves it (open problem O6 of report 21)
+            for (Network reverted : List.of(receiver, sshReceiver)) {
+                assertTrue(reverted.getSwitch("SeriesCompensator-T2_SW_fict") != null
+                        && reverted.getSwitch("SeriesCompensator-T2_SW_fict").isOpen(), scenario.name());
+            }
+        }
         SortedMap<String, String> revertedViaDifference = SteadyStateFingerprint.of(receiver);
         SortedMap<String, String> revertedViaPartialSsh = SteadyStateFingerprint.of(sshReceiver);
         Map<String, String[]> undoDifferences =

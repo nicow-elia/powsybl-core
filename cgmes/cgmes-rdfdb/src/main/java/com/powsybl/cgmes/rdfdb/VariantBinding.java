@@ -8,8 +8,6 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
-
 import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.util.Map;
@@ -39,7 +37,7 @@ import java.util.Map;
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 public record VariantBinding(String variantId, String scenario, SnapshotRef ref, String snapshotIri,
-                             Map<CgmesSubset, String> modelIds, ZonedDateTime caseDate, String clonedFrom,
+                             Map<String, String> modelIds, ZonedDateTime caseDate, String clonedFrom,
                              Instant boundAt) {
 
     /**
@@ -57,14 +55,21 @@ public record VariantBinding(String variantId, String scenario, SnapshotRef ref,
     }
 
     /**
-     * @return the timestep of the snapshot, or {@code null} when the variant is not at a snapshot
+     * @return the modelling authority of the snapshot, or {@code null} when the variant is not at a snapshot
      */
-    public String timestep() {
-        return ref == null ? null : ref.timestep();
+    public String modellingAuthority() {
+        return ref == null ? null : ref.modellingAuthority();
     }
 
     /**
-     * @return the version label of the snapshot, or {@code null} when the variant is not at a snapshot
+     * @return the timestamp of the snapshot, or {@code null} when the variant is not at a snapshot
+     */
+    public Instant timestamp() {
+        return ref == null ? null : ref.timestamp();
+    }
+
+    /**
+     * @return the version name of the snapshot, or {@code null} when the variant is not at a snapshot
      */
     public String version() {
         return ref == null ? null : ref.version();

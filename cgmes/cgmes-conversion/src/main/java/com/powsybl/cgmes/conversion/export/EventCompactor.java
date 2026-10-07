@@ -8,6 +8,7 @@
 package com.powsybl.cgmes.conversion.export;
 
 import com.powsybl.commons.PowsyblException;
+import com.powsybl.iidm.network.Identifiable;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.events.ExtensionCreationNetworkEvent;
 import com.powsybl.iidm.network.events.ExtensionUpdateNetworkEvent;
@@ -35,9 +36,34 @@ import java.util.Set;
  * that is what the <em>first</em> change of an attribute remembers: its old value. Compaction is therefore the one
  * place where both ends of a change log are collected.</p>
  *
+ * <h2>Echoes of the deprecated voltage regulation setters</h2>
+ *
+ * <p>An <em>echo</em> is the event a deprecated voltage regulation setter reports under the historical attribute
+ * name after writing through the {@code VoltageRegulation} API, which reports the same change under its own name
+ * first (the keys of {@link RegulatingControlFamily} say which events are echoes and which values they repeat). The old
+ * value of an echo is not reliable: {@code ShuntCompensator.setTargetDeadband} reports {@code NaN} whatever the
+ * deadband was, {@code StaticVarCompensator.setReactivePowerSetpoint} the voltage target, and
+ * {@code Generator.setTargetV(v, local)} the local target as the old value of the remote one. One rule decides what
+ * becomes of every echo:</p>
+ * <ol>
+ *     <li>An echo <b>repeats</b> a change when an earlier event of the same equipment in the log reported one of the
+ *     canonical values it stands for with the same new value. It is dropped: neither exported nor remembered.</li>
+ *     <li>An echo that sets the value it had (old value equal to the new one) is a <b>no-op</b> and is dropped.</li>
+ *     <li>Any other echo is the <b>sole carrier</b> of a change the new model did not report. That happens when the
+ *     deprecated setter created the {@code VoltageRegulation}, which IIDM reports nowhere (gap G1), and when a
+ *     bridge reports a wrong old value for a value it did not change; the two cannot be told apart from the log.
+ *     The echo is kept under its own name, it never feeds the state before the change set, and both change exports
+ *     refuse it with the remedy (use the {@code VoltageRegulation} setters).</li>
+ * </ol>
+ * <p>No echo ever feeds the state before the change set: a repeated echo adds nothing to its canonical event, and
+ * the old value of a sole carrier is exactly what cannot be trusted.</p>
+ *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 final class EventCompactor {
+
+    /** The key of an echo that is dropped: compared by identity only, never looked up in a map. */
+    private static final UpdateKey DROPPED = new UpdateKey(null, null);
 
     private EventCompactor() {
     }
@@ -49,43 +75,76 @@ final class EventCompactor {
      * @param workingVariantId the variant the export reads its values from, or {@code null} when the caller only
      *                         needs the compacted list. Changes recorded on another variant never feed the previous
      *                         values, because the state they describe is not the state of this variant
+     * @param network          the network the changes were recorded on, which tells what kind of equipment a change
+     *                         belongs to: an echo of a target is recognised by it. {@code null} keeps the echoes of
+     *                         targets as changes of their own
      */
-    static CompactedChanges compact(Collection<NetworkEvent> events, String workingVariantId) {
+    static CompactedChanges compact(Collection<NetworkEvent> events, String workingVariantId, Network network) {
         Objects.requireNonNull(events);
-
+        List<NetworkEvent> eventList = new ArrayList<>(events);
+        UpdateKey[] keys = new UpdateKey[eventList.size()];
         Map<UpdateKey, FirstChange> firstChanges = new HashMap<>();
         Set<String> createdExtensions = new HashSet<>();
-        int index = 0;
-        for (NetworkEvent event : events) {
-            Objects.requireNonNull(event);
+        // The new values every canonical key was reported with so far, for rule 1
+        Map<UpdateKey, Set<Object>> reported = new HashMap<>();
+        for (int index = 0; index < keys.length; index++) {
+            NetworkEvent event = Objects.requireNonNull(eventList.get(index));
             if (event instanceof ExtensionCreationNetworkEvent creation) {
                 createdExtensions.add(extensionKey(creation.id(), creation.extensionName()));
             }
-            UpdateKey key = updateKey(event);
-            // Every recorded change of this variant feeds the previous values, including the ones a mapping later
-            // rejects: whether a change can be exported is decided after the previous state is known. The position
-            // is kept with the previous value, so that a caller comparing two positions can always read the
-            // previous value of the earlier one.
-            if (key != null && appliesTo(event, workingVariantId)) {
-                firstChanges.putIfAbsent(key, new FirstChange(oldValue(event), index));
+            Identifiable<?> identifiable = event instanceof UpdateNetworkEvent update ? identifiableFor(update, network) : null;
+            Set<String> repeated = event instanceof UpdateNetworkEvent update
+                    ? RegulatingControlFamily.repeatedKeys(identifiable, update.attribute()) : Set.of();
+            if (!repeated.isEmpty()) {
+                keys[index] = echoKey((UpdateNetworkEvent) event, repeated, reported);
+            } else {
+                keys[index] = keyOf(event);
+                if (keys[index] != null) {
+                    if (event instanceof UpdateNetworkEvent update
+                            && RegulatingControlFamily.isRepeatable(keys[index].attributeKey())) {
+                        reported.computeIfAbsent(keys[index], key -> new HashSet<>()).add(update.newValue());
+                    }
+                    // Every recorded change of this variant feeds the previous values, including the ones a mapping
+                    // later rejects: whether a change can be exported is decided after the previous state is known.
+                    // The position is kept with the previous value, so that a caller comparing two positions can
+                    // always read the previous value of the earlier one
+                    if (appliesTo(event, workingVariantId)) {
+                        firstChanges.putIfAbsent(keys[index], new FirstChange(oldValue(event), index));
+                    }
+                }
             }
-            index++;
         }
 
-        List<NetworkEvent> reversedEvents = new ArrayList<>(events);
-        Collections.reverse(reversedEvents);
-        List<NetworkEvent> compactedEvents = new ArrayList<>(reversedEvents.size());
+        // The last change of every key, in the order of those last changes
+        List<NetworkEvent> compactedEvents = new ArrayList<>(eventList.size());
         Set<UpdateKey> retainedUpdates = new HashSet<>();
-        for (NetworkEvent event : reversedEvents) {
-            UpdateKey key = updateKey(event);
-            if (key == null || retainedUpdates.add(key)) {
-                compactedEvents.add(event);
+        for (int index = keys.length - 1; index >= 0; index--) {
+            if (keys[index] != DROPPED && (keys[index] == null || retainedUpdates.add(keys[index]))) {
+                compactedEvents.add(eventList.get(index));
             }
         }
         Collections.reverse(compactedEvents);
 
         return new CompactedChanges(List.copyOf(compactedEvents), Map.copyOf(firstChanges),
                 Set.copyOf(createdExtensions));
+    }
+
+    /**
+     * The key of an echo: {@link #DROPPED} when it repeats a canonical value already reported with the same new value
+     * (rule 1) or changes nothing (rule 2), its own attribute name when it is the sole carrier of a change (rule 3).
+     */
+    private static UpdateKey echoKey(UpdateNetworkEvent echo, Set<String> repeated, Map<UpdateKey, Set<Object>> reported) {
+        // The reported values may hold null (a regulating terminal removed): an immutable empty set would throw on it
+        boolean repeats = repeated.stream().anyMatch(key -> reported
+                .getOrDefault(new UpdateKey(echo.id(), key), Collections.emptySet()).contains(echo.newValue()));
+        boolean noOp = Objects.equals(echo.oldValue(), echo.newValue());
+        return repeats || noOp ? DROPPED : new UpdateKey(echo.id(), echo.attribute());
+    }
+
+    /** The identifiable a change was reported on, looked up only when it decides whether the change is an echo. */
+    private static Identifiable<?> identifiableFor(UpdateNetworkEvent update, Network network) {
+        return network != null && RegulatingControlFamily.needsIdentifiable(update.attribute())
+                ? network.getIdentifiable(update.id()) : null;
     }
 
     /** Whether a change describes the given variant, which a change belonging to every variant always does. */
@@ -135,8 +194,8 @@ final class EventCompactor {
         };
     }
 
-    /** The attribute a change describes, or {@code null} for a change that no attribute identifies. */
-    static UpdateKey updateKey(NetworkEvent event) {
+    /** The attribute a change that is not an echo describes, or {@code null} for a change no attribute identifies. */
+    private static UpdateKey keyOf(NetworkEvent event) {
         return switch (event) {
             case UpdateNetworkEvent update -> new UpdateKey(update.id(), attributeKey(update));
             // An extension attribute is namespaced by its extension: two extensions of the same object may well
@@ -163,14 +222,14 @@ final class EventCompactor {
      * name as a whole replacement but carries the raw limits object as payload; it keeps the plain attribute name,
      * which is also what makes the mapping able to tell the two apart and refuse the selection change.</p>
      *
+     * <p>An echo of a deprecated voltage regulation setter never gets here: the compaction and the translator
+     * recognise it first ({@link RegulatingControlFamily#HOLDER_KEYS}).</p>
+     *
      * @param event a change of an attribute, that is an {@link UpdateNetworkEvent}
+     * @return the key
      */
     static String attributeKey(UpdateNetworkEvent event) {
         String attribute = event.attribute();
-        if (attribute.indexOf(KEY_SEPARATOR.charAt(0)) >= 0) {
-            // Already a refined key: a synthetic probe event built by the difference model importer
-            return attribute;
-        }
         Object payload = event.newValue() != null ? event.newValue() : event.oldValue();
         return switch (payload) {
             case PermanentLimitInfo info -> attribute + KEY_SEPARATOR + info.groupId();
@@ -178,16 +237,6 @@ final class EventCompactor {
                 attribute + KEY_SEPARATOR + info.groupId() + KEY_SEPARATOR + info.acceptableDuration();
             case OperationalLimitsInfo info -> attribute + KEY_SEPARATOR + info.groupId();
             case null, default -> attribute;
-        };
-    }
-
-    /** The key identifying the value a change describes, for any kind of event. */
-    static String attributeKey(NetworkEvent event) {
-        return switch (event) {
-            case UpdateNetworkEvent update -> attributeKey(update);
-            case ExtensionUpdateNetworkEvent update ->
-                extensionAttributeKey(update.extensionName(), update.attribute());
-            default -> null;
         };
     }
 

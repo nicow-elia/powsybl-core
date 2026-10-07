@@ -8,7 +8,6 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.commons.report.TypedValue;
 
@@ -22,8 +21,8 @@ import java.util.List;
  * has a reason a user can act on. Both go into the report next to everything else the conversion said, rather than
  * only into a log.</p>
  *
- * <p>The message templates live in the shared bundle of {@code powsybl-commons}, as every other powsybl report
- * does.</p>
+ * <p>The message templates live in the module's own bundle ({@link RdfDbReportResourceBundle}), so that nothing
+ * outside the module carries its texts.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
@@ -40,7 +39,8 @@ public final class RdfDbReports {
      * Report the route an update took, with the reasons it did not take a shorter one.
      *
      * @param reportNode where to report
-     * @param scenario   the scenario the network was brought to
+     * @param scenario   the scenario the network was brought to, or the address of the snapshot on the snapshot
+     *                   route
      * @param route      the route taken
      * @param diffCount  how many differences were applied
      * @param reasons    why the difference route was impossible, empty when it was taken
@@ -72,7 +72,7 @@ public final class RdfDbReports {
      * @param subset     the profile it describes
      * @param scenario   the scenario it was written into
      */
-    public static void storedDifferenceReport(ReportNode reportNode, String modelId, CgmesSubset subset,
+    public static void storedDifferenceReport(ReportNode reportNode, String modelId, String subset,
                                               String scenario) {
         if (reportNode == null) {
             return;
@@ -80,7 +80,7 @@ public final class RdfDbReports {
         reportNode.newReportNode()
                 .withMessageTemplate("core.cgmes.rdfdb.storedDifference")
                 .withUntypedValue(MODEL_ID, modelId)
-                .withUntypedValue(CGMES_SUBSET, subset.getIdentifier())
+                .withUntypedValue(CGMES_SUBSET, subset)
                 .withUntypedValue(SCENARIO, scenario)
                 .withSeverity(TypedValue.INFO_SEVERITY)
                 .add();
@@ -112,11 +112,11 @@ public final class RdfDbReports {
     }
 
     /**
-     * Say that an instance file of a timestep was read but left alone.
+     * Say that an instance file of a timestamp was read but left alone.
      *
-     * <p>State variables and topology change wholesale from one timestep to the next, so a difference of them
+     * <p>State variables and topology change wholesale from one timestamp to the next, so a difference of them
      * would be as large as the data itself; this release inherits the parent's. The caller is told, because the
-     * network it loads at that timestep will carry the base's state variables, not the file's.</p>
+     * network it loads at that timestamp will carry the base's state variables, not the file's.</p>
      *
      * @param reportNode the node to report to
      * @param subset     the profile that was ignored

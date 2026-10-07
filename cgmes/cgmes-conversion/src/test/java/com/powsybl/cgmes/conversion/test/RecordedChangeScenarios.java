@@ -14,6 +14,7 @@ import com.powsybl.iidm.network.ActivePowerLimits;
 import com.powsybl.iidm.network.ApparentPowerLimits;
 import com.powsybl.iidm.network.BoundaryLine;
 import com.powsybl.iidm.network.CurrentLimits;
+import com.powsybl.iidm.network.Generator;
 import com.powsybl.iidm.network.HvdcLine;
 import com.powsybl.iidm.network.LccConverterStation;
 import com.powsybl.iidm.network.Line;
@@ -27,6 +28,9 @@ import com.powsybl.iidm.network.VscConverterStation;
 import com.powsybl.iidm.network.events.NetworkEvent;
 import com.powsybl.iidm.network.extensions.ActivePowerControl;
 import com.powsybl.iidm.network.extensions.ReferencePriority;
+import com.powsybl.iidm.network.regulation.RegulationMode;
+import com.powsybl.iidm.network.regulation.VoltageRegulation;
+import com.powsybl.iidm.network.regulation.VoltageRegulationHolder;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -68,6 +72,8 @@ public final class RecordedChangeScenarios {
     private static final String OPERATIONAL_LIMITS_DIR = "/issues/operational-limits/";
 
     private static final String[] SWITCH_FILES = {"switch_EQ.xml", "switch_SSH.xml"};
+    private static final String CONTROL_AREA_DIR = "/update/control-area/";
+    private static final String[] CONTROL_AREA_FILES = {"controlArea_EQ.xml", "controlArea_EQ_BD.xml", "controlArea_SSH.xml"};
     private static final String[] LOAD_FILES = {"load_EQ.xml", "load_SSH.xml"};
     private static final String[] GENERATOR_FILES = {"generator_EQ.xml", "generator_SSH.xml"};
     private static final String[] TRANSFORMER_FILES = {"transformer_EQ.xml", "transformer_SSH.xml"};
@@ -166,6 +172,14 @@ public final class RecordedChangeScenarios {
         return new Scenario(name, importParams, dir, files, prepare, forward, backward);
     }
 
+    /**
+     * Make a converter station regulate its own terminal explicitly, with the target it regulates to now, which is
+     * what a switch to reactive power regulation needs in IIDM (powsybl-core #3699).
+     */
+    static void regulateOwnTerminal(VscConverterStation station) {
+        station.getVoltageRegulation().setTerminal(station.getTerminal(), station.getRegulatingTargetV());
+    }
+
     private static VscConverterStation vsc(Network network, int side) {
         HvdcLine line = network.getHvdcLine(VSC_LINE);
         return (VscConverterStation) (side == 1 ? line.getConverterStation1() : line.getConverterStation2());
@@ -174,6 +188,63 @@ public final class RecordedChangeScenarios {
     private static LccConverterStation lcc(Network network, int side) {
         HvdcLine line = network.getHvdcLine(LCC_LINE);
         return (LccConverterStation) (side == 1 ? line.getConverterStation1() : line.getConverterStation2());
+    }
+
+    private static VoltageRegulation ratioTapChangerRegulation(Network network) {
+        return network.getThreeWindingsTransformer(T3W).getLeg2().getRatioTapChanger().getVoltageRegulation();
+    }
+
+    /** The compensator regulating reactive power regulates to the target of its VoltageRegulation. */
+    private static VoltageRegulation svcQRegulation(Network network) {
+        return network.getStaticVarCompensator("StaticVarCompensator-Q").getVoltageRegulation();
+    }
+
+    /** Its reactive power target, then its local voltage target (not the active one: the mode is reactive power). */
+    private static void svcQTargets(Network network, double targetQ, double localTargetV) {
+        svcQRegulation(network).setTargetValue(targetQ);
+        network.getStaticVarCompensator("StaticVarCompensator-Q").setLocalTargetV(localTargetV);
+    }
+
+    /**
+     * One change of every supported type a model holds, for the export benchmarks: an injection setpoint, a generator
+     * target (and, with {@code toggleRegulation}, its regulation switched once, so that the change is a real one), a
+     * tap position, a shunt section count and a static var compensator voltage target. Through the VoltageRegulation
+     * API: a deprecated bridge reports an echo on top, which would weigh on what is measured.
+     */
+    public static List<Runnable> mixedEquipmentChanges(Network network, boolean toggleRegulation) {
+        List<Runnable> changes = new ArrayList<>();
+        network.getLoadStream().forEach(l -> changes.add(() -> l.setP0(l.getP0() + 1.0)));
+        network.getGeneratorStream().forEach(g -> {
+            changes.add(() -> g.setTargetP(g.getTargetP() + 1.0));
+            if (g.hasProperty(Conversion.PROPERTY_REGULATING_CONTROL)) {
+                changes.add(() -> setVoltageTarget(g, g.getRegulatingTargetV() + 1.0));
+                if (toggleRegulation) {
+                    changes.add(() -> g.getVoltageRegulation().setRegulating(!g.getVoltageRegulation().isRegulating()));
+                }
+            }
+        });
+        network.getTwoWindingsTransformerStream()
+                .filter(t -> t.hasRatioTapChanger() && t.getRatioTapChanger().getTapPosition() < t.getRatioTapChanger().getHighTapPosition())
+                .forEach(t -> changes.add(() -> t.getRatioTapChanger().setTapPosition(t.getRatioTapChanger().getTapPosition() + 1)));
+        network.getShuntCompensatorStream()
+                .filter(s -> s.getSectionCount() < s.getMaximumSectionCount())
+                .forEach(s -> changes.add(() -> s.setSectionCount(s.getSectionCount() + 1)));
+        network.getStaticVarCompensatorStream()
+                .forEach(s -> changes.add(() -> setVoltageTarget(s, s.getRegulatingTargetV() + 1.0)));
+        return changes;
+    }
+
+    /**
+     * Set the voltage target a holder regulates to, through the VoltageRegulation API: the target of its regulation
+     * when it regulates voltage at a terminal the regulation names, its local target otherwise.
+     */
+    public static void setVoltageTarget(VoltageRegulationHolder<?> holder, double value) {
+        VoltageRegulation regulation = holder.getVoltageRegulation();
+        if (regulation != null && regulation.isWithTerminal() && regulation.getMode() == RegulationMode.VOLTAGE) {
+            regulation.setTargetValue(value);
+        } else {
+            holder.setLocalTargetV(value);
+        }
     }
 
     private static BoundaryLine.Generation generation(Network network) {
@@ -257,6 +328,11 @@ public final class RecordedChangeScenarios {
         scenarios.add(scenario("seriesCompensatorReactance", LINE_DIR, LINE_FILES,
                 n -> n.getLine("SeriesCompensator").setX(10.0),
                 n -> n.getLine("SeriesCompensator").setX(11.0),
+                n -> n.getLine("SeriesCompensator").setX(10.0)));
+        // A capacitive series compensator: CGMES and its import accept a negative reactance (owner decision O3)
+        scenarios.add(scenario("capacitiveSeriesCompensatorReactance", LINE_DIR, LINE_FILES,
+                n -> n.getLine("SeriesCompensator").setX(10.0),
+                n -> n.getLine("SeriesCompensator").setX(-12.5),
                 n -> n.getLine("SeriesCompensator").setX(10.0)));
         scenarios.add(scenario("equivalentBranchImpedance", LINE_DIR, LINE_FILES,
                 n -> n.getLine("EquivalentBranch").setR(0.5).setX(5.0),
@@ -344,6 +420,11 @@ public final class RecordedChangeScenarios {
                 n -> n.getDcSwitch("DCSW_1_1").setOpen(false),
                 n -> n.getDcSwitch("DCSW_1_1").setOpen(true)));
 
+        // Control areas
+        scenarios.add(scenario("controlAreaInterchangeTarget", CONTROL_AREA_DIR, CONTROL_AREA_FILES,
+                n -> n.getArea("ControlArea").setInterchangeTarget(250.0),
+                n -> n.getArea("ControlArea").setInterchangeTarget(235.0)));
+
         // Loads
         scenarios.add(scenario("loadActivePower", LOAD_DIR, LOAD_FILES,
                 n -> n.getLoad("EnergyConsumer").setP0(12.5),
@@ -360,30 +441,45 @@ public final class RecordedChangeScenarios {
 
         // Generators
         scenarios.add(scenario("generatorTargets", GENERATOR_DIR, GENERATOR_FILES,
-                n -> n.getGenerator(SYNCHRONOUS_MACHINE).setTargetP(165.0).setTargetQ(-5.0).setTargetV(410.0),
+                n -> n.getGenerator(SYNCHRONOUS_MACHINE).setTargetP(165.0).setLocalTargetQ(-5.0).setLocalTargetV(410.0),
                 // RotatingMachine.q is 0 in the fixture and IIDM negates it, so the reactive target starts at -0.0
-                n -> n.getGenerator(SYNCHRONOUS_MACHINE).setTargetP(160.0).setTargetQ(-0.0).setTargetV(405.0)));
+                n -> n.getGenerator(SYNCHRONOUS_MACHINE).setTargetP(160.0).setLocalTargetQ(-0.0).setLocalTargetV(405.0)));
         // A negative target makes the machine a motor, which changes SynchronousMachine.operatingMode as well
         scenarios.add(scenario("generatorTargetPTurnsTheMachineIntoAMotor", GENERATOR_DIR, GENERATOR_FILES,
                 n -> n.getGenerator(SYNCHRONOUS_MACHINE).setTargetP(-50.0),
                 n -> n.getGenerator(SYNCHRONOUS_MACHINE).setTargetP(160.0)));
         scenarios.add(scenario("generatorVoltageRegulationOff", GENERATOR_DIR, GENERATOR_FILES,
-                n -> n.getGenerator(SYNCHRONOUS_MACHINE).setVoltageRegulatorOn(false),
-                n -> n.getGenerator(SYNCHRONOUS_MACHINE).setVoltageRegulatorOn(true)));
+                n -> n.getGenerator(SYNCHRONOUS_MACHINE).getVoltageRegulation().setRegulating(false),
+                n -> n.getGenerator(SYNCHRONOUS_MACHINE).getVoltageRegulation().setRegulating(true)));
         scenarios.add(scenario("generatorVoltageTarget", GENERATOR_DIR, GENERATOR_FILES,
-                n -> n.getGenerator(SYNCHRONOUS_MACHINE).setTargetV(410.0),
-                n -> n.getGenerator(SYNCHRONOUS_MACHINE).setTargetV(405.0)));
+                n -> n.getGenerator(SYNCHRONOUS_MACHINE).setLocalTargetV(410.0),
+                n -> n.getGenerator(SYNCHRONOUS_MACHINE).setLocalTargetV(405.0)));
         scenarios.add(scenario("externalNetworkInjectionSetpoints", GENERATOR_DIR, GENERATOR_FILES,
-                n -> n.getGenerator("ExternalNetworkInjection").setTargetP(45.0).setTargetQ(-12.0),
-                n -> n.getGenerator("ExternalNetworkInjection").setTargetP(-0.0).setTargetQ(-0.0)));
+                n -> n.getGenerator("ExternalNetworkInjection").setTargetP(45.0).setLocalTargetQ(-12.0),
+                n -> n.getGenerator("ExternalNetworkInjection").setTargetP(-0.0).setLocalTargetQ(-0.0)));
         scenarios.add(scenario("equivalentInjectionSetpoints", GENERATOR_DIR, GENERATOR_FILES,
-                n -> n.getGenerator("EquivalentInjection").setTargetP(-70.0).setTargetQ(15.0),
-                n -> n.getGenerator("EquivalentInjection").setTargetP(-184.0).setTargetQ(-0.0)));
+                n -> n.getGenerator("EquivalentInjection").setTargetP(-70.0).setLocalTargetQ(15.0),
+                n -> n.getGenerator("EquivalentInjection").setTargetP(-184.0).setLocalTargetQ(-0.0)));
+        // Since powsybl-core #3699 the regulation of the injection is a VoltageRegulation, which the fixture does not
+        // give it. Creating one is not a recorded change and cannot be undone by a difference (gap G1 of plan 21), so
+        // the preparation creates it, switched off, with a target the regulation can later be switched on with
         scenarios.add(scenario("equivalentInjectionRegulation", GENERATOR_DIR, GENERATOR_FILES,
-                n -> n.getGenerator("EquivalentInjection")
-                        .setProperty(Conversion.PROPERTY_REGULATION_CAPABILITY, "true"),
-                n -> n.getGenerator("EquivalentInjection").setTargetV(401.0).setVoltageRegulatorOn(true),
-                n -> n.getGenerator("EquivalentInjection").setVoltageRegulatorOn(false).setTargetV(Double.NaN)));
+                n -> {
+                    Generator injection = n.getGenerator("EquivalentInjection");
+                    injection.setProperty(Conversion.PROPERTY_REGULATION_CAPABILITY, "true");
+                    injection.newVoltageRegulation().withMode(RegulationMode.VOLTAGE).withRegulating(false).build();
+                    injection.setLocalTargetV(400.0);
+                },
+                n -> {
+                    Generator injection = n.getGenerator("EquivalentInjection");
+                    injection.setLocalTargetV(401.0);
+                    injection.getVoltageRegulation().setRegulating(true);
+                },
+                n -> {
+                    Generator injection = n.getGenerator("EquivalentInjection");
+                    injection.getVoltageRegulation().setRegulating(false);
+                    injection.setLocalTargetV(400.0);
+                }));
         scenarios.add(scenario("generatorReferencePriority", GENERATOR_DIR, GENERATOR_FILES,
                 n -> ReferencePriority.set(n.getGenerator(SYNCHRONOUS_MACHINE), 3),
                 n -> ReferencePriority.set(n.getGenerator(SYNCHRONOUS_MACHINE), 0)));
@@ -417,9 +513,9 @@ public final class RecordedChangeScenarios {
                 n -> n.getTwoWindingsTransformer(T2W).getPhaseTapChanger().setRegulationValue(55.0).setTargetDeadband(1.5),
                 n -> n.getTwoWindingsTransformer(T2W).getPhaseTapChanger().setRegulationValue(50.0).setTargetDeadband(0.5)));
         scenarios.add(scenario("ratioTapChangerRegulationValueAndDeadband", TRANSFORMER_DIR, TRANSFORMER_FILES,
-                n -> n.getThreeWindingsTransformer(T3W).getLeg2().getRatioTapChanger().setRegulationValue(225.0).setTargetDeadband(2.0),
-                n -> n.getThreeWindingsTransformer(T3W).getLeg2().getRatioTapChanger().setRegulationValue(226.0).setTargetDeadband(3.0),
-                n -> n.getThreeWindingsTransformer(T3W).getLeg2().getRatioTapChanger().setRegulationValue(225.0).setTargetDeadband(2.0)));
+                n -> ratioTapChangerRegulation(n).setTargetValue(225.0).setTargetDeadband(2.0),
+                n -> ratioTapChangerRegulation(n).setTargetValue(226.0).setTargetDeadband(3.0),
+                n -> ratioTapChangerRegulation(n).setTargetValue(225.0).setTargetDeadband(2.0)));
         scenarios.add(scenario("phaseTapChangerRegulationState", TRANSFORMER_DIR, TRANSFORMER_FILES,
                 n -> n.getTwoWindingsTransformer(T2W).getPhaseTapChanger().setRegulating(false),
                 n -> n.getTwoWindingsTransformer(T2W).getPhaseTapChanger().setRegulating(true),
@@ -430,38 +526,40 @@ public final class RecordedChangeScenarios {
                 n -> n.getShuntCompensator("NonLinearShuntCompensator").setSectionCount(2),
                 n -> n.getShuntCompensator("NonLinearShuntCompensator").setSectionCount(1)));
         scenarios.add(scenario("shuntVoltageTarget", SHUNT_DIR, SHUNT_FILES,
-                n -> n.getShuntCompensator(LINEAR_SHUNT).setTargetV(407.0),
-                n -> n.getShuntCompensator(LINEAR_SHUNT).setTargetV(405.0)));
+                n -> n.getShuntCompensator(LINEAR_SHUNT).setLocalTargetV(407.0),
+                n -> n.getShuntCompensator(LINEAR_SHUNT).setLocalTargetV(405.0)));
         scenarios.add(scenario("shuntVoltageRegulationOn", SHUNT_DIR, SHUNT_FILES,
-                n -> n.getShuntCompensator(LINEAR_SHUNT).setVoltageRegulatorOn(true),
-                n -> n.getShuntCompensator(LINEAR_SHUNT).setVoltageRegulatorOn(false)));
+                n -> n.getShuntCompensator(LINEAR_SHUNT).getVoltageRegulation().setRegulating(true),
+                n -> n.getShuntCompensator(LINEAR_SHUNT).getVoltageRegulation().setRegulating(false)));
         scenarios.add(scenario("shuntTargetDeadband", SHUNT_DIR, SHUNT_FILES,
-                n -> n.getShuntCompensator(LINEAR_SHUNT).setVoltageRegulatorOn(true).setTargetDeadband(1.0),
-                n -> n.getShuntCompensator(LINEAR_SHUNT).setTargetDeadband(2.5),
-                n -> n.getShuntCompensator(LINEAR_SHUNT).setTargetDeadband(1.0)));
+                n -> n.getShuntCompensator(LINEAR_SHUNT).getVoltageRegulation().setTargetDeadband(1.0).setRegulating(true),
+                n -> n.getShuntCompensator(LINEAR_SHUNT).getVoltageRegulation().setTargetDeadband(2.5),
+                n -> n.getShuntCompensator(LINEAR_SHUNT).getVoltageRegulation().setTargetDeadband(1.0)));
 
         // Static var compensators
         scenarios.add(scenario("staticVarCompensatorVoltageSetpoint", STATIC_VAR_COMPENSATOR_DIR, SVC_FILES,
-                n -> n.getStaticVarCompensator("StaticVarCompensator-V").setVoltageSetpoint(400.0),
-                n -> n.getStaticVarCompensator("StaticVarCompensator-V").setVoltageSetpoint(405.0)));
+                n -> n.getStaticVarCompensator("StaticVarCompensator-V").setLocalTargetV(400.0),
+                n -> n.getStaticVarCompensator("StaticVarCompensator-V").setLocalTargetV(405.0)));
         scenarios.add(scenario("staticVarCompensatorReactivePowerSetpoint", STATIC_VAR_COMPENSATOR_DIR, SVC_FILES,
-                n -> n.getStaticVarCompensator("StaticVarCompensator-Q").setReactivePowerSetpoint(200.0),
-                n -> n.getStaticVarCompensator("StaticVarCompensator-Q").setReactivePowerSetpoint(215.0),
-                n -> n.getStaticVarCompensator("StaticVarCompensator-Q").setReactivePowerSetpoint(200.0)));
+                n -> svcQRegulation(n).setTargetValue(200.0),
+                n -> svcQRegulation(n).setTargetValue(215.0),
+                n -> svcQRegulation(n).setTargetValue(200.0)));
         scenarios.add(scenario("staticVarCompensatorRegulating", STATIC_VAR_COMPENSATOR_DIR, SVC_FILES,
-                n -> n.getStaticVarCompensator("StaticVarCompensator-V").setRegulating(false),
-                n -> n.getStaticVarCompensator("StaticVarCompensator-V").setRegulating(true)));
-        // The setpoint of the mode a compensator is not in has no property in the steady state hypothesis: its
-        // RegulatingControl carries the target of the CGMES mode alone. Changed next to the active setpoint, so
-        // that the difference is not empty and the inactive value really is left out of both directions.
+                n -> n.getStaticVarCompensator("StaticVarCompensator-V").getVoltageRegulation().setRegulating(false),
+                n -> n.getStaticVarCompensator("StaticVarCompensator-V").getVoltageRegulation().setRegulating(true)));
+        // The setpoint of the mode a compensator is not in has no property on its RegulatingControl, which carries
+        // the target of the CGMES mode alone. Changed next to the active setpoint, so that the difference is not
+        // empty. Since powsybl-core #3699 the reactive setpoint of a compensator regulating voltage is its local
+        // reactive target, which is exported as StaticVarCompensator.q; the voltage setpoint of a compensator
+        // regulating reactive power is still left out of both directions.
         scenarios.add(scenario("staticVarCompensatorInactiveReactiveSetpoint", STATIC_VAR_COMPENSATOR_DIR, SVC_FILES,
-                n -> n.getStaticVarCompensator("StaticVarCompensator-V").setReactivePowerSetpoint(10.0),
-                n -> n.getStaticVarCompensator("StaticVarCompensator-V").setVoltageSetpoint(400.0).setReactivePowerSetpoint(50.0),
-                n -> n.getStaticVarCompensator("StaticVarCompensator-V").setVoltageSetpoint(405.0).setReactivePowerSetpoint(10.0)));
+                n -> n.getStaticVarCompensator("StaticVarCompensator-V").setLocalTargetQ(10.0),
+                n -> n.getStaticVarCompensator("StaticVarCompensator-V").setLocalTargetV(400.0).setLocalTargetQ(50.0),
+                n -> n.getStaticVarCompensator("StaticVarCompensator-V").setLocalTargetV(405.0).setLocalTargetQ(10.0)));
         scenarios.add(scenario("staticVarCompensatorInactiveVoltageSetpoint", STATIC_VAR_COMPENSATOR_DIR, SVC_FILES,
-                n -> n.getStaticVarCompensator("StaticVarCompensator-Q").setReactivePowerSetpoint(200.0).setVoltageSetpoint(400.0),
-                n -> n.getStaticVarCompensator("StaticVarCompensator-Q").setReactivePowerSetpoint(215.0).setVoltageSetpoint(401.0),
-                n -> n.getStaticVarCompensator("StaticVarCompensator-Q").setReactivePowerSetpoint(200.0).setVoltageSetpoint(400.0)));
+                n -> svcQTargets(n, 200.0, 400.0),
+                n -> svcQTargets(n, 215.0, 401.0),
+                n -> svcQTargets(n, 200.0, 400.0)));
 
         // HVDC, simplified model
         scenarios.add(scenario("hvdcActivePowerSetpoint", HVDC_DIR, HVDC_FILES,
@@ -483,18 +581,43 @@ public final class RecordedChangeScenarios {
                 n -> lcc(n, 2).setPowerFactor(0.95f),
                 n -> lcc(n, 2).setPowerFactor(0.9f)));
         scenarios.add(scenario("vscVoltageSetpoint", HVDC_DIR, HVDC_FILES,
-                n -> vsc(n, 1).setVoltageSetpoint(396.54),
-                n -> vsc(n, 1).setVoltageSetpoint(392.54)));
+                n -> vsc(n, 1).setLocalTargetV(396.54),
+                n -> vsc(n, 1).setLocalTargetV(392.54)));
+        // ACDCConverter.q is the local reactive power target of a station and travels in one block with targetPpcc,
+        // which the import takes as the power of the link from either side (powsybl-core #4057): both converters
+        // have to travel together, on both routes, whichever station changed (review 21 B1 and round 2 R2-B1)
+        scenarios.add(scenario("vscLocalReactiveTargetInverter", HVDC_DIR, HVDC_FILES,
+                n -> vsc(n, 1).setLocalTargetQ(10.0),
+                n -> vsc(n, 1).setLocalTargetQ(12.5),
+                n -> vsc(n, 1).setLocalTargetQ(10.0)));
+        scenarios.add(scenario("vscLocalReactiveTargetRectifier", HVDC_DIR, HVDC_FILES,
+                n -> vsc(n, 2).setLocalTargetQ(10.0),
+                n -> vsc(n, 2).setLocalTargetQ(12.5),
+                n -> vsc(n, 2).setLocalTargetQ(10.0)));
+        // Switching a station from voltage to reactive power regulation is a change of the mode of its
+        // VoltageRegulation since powsybl-core #3699 (the deprecated setVoltageRegulatorOn(false) now keeps the voltage
+        // mode and only stops regulating). IIDM only accepts reactive power regulation with a regulating terminal,
+        // which is not a per variant value and not a steady state one, so the preparation sets it: the station
+        // regulates its own terminal, as the CGMES import sets it for reactive power regulation
         scenarios.add(scenario("vscReactivePowerSetpointAndRegulation", HVDC_DIR, HVDC_FILES,
-                n -> vsc(n, 2).setReactivePowerSetpoint(20.0),
-                n -> vsc(n, 2).setVoltageRegulatorOn(false).setReactivePowerSetpoint(30.0),
-                n -> vsc(n, 2).setReactivePowerSetpoint(20.0).setVoltageRegulatorOn(true)));
+                n -> {
+                    vsc(n, 2).setLocalTargetQ(20.0);
+                    regulateOwnTerminal(vsc(n, 2));
+                },
+                n -> {
+                    vsc(n, 2).getVoltageRegulation().setMode(RegulationMode.REACTIVE_POWER);
+                    vsc(n, 2).getVoltageRegulation().setTargetValue(30.0);
+                },
+                n -> {
+                    vsc(n, 2).getVoltageRegulation().setTargetValue(vsc(n, 2).getLocalTargetV());
+                    vsc(n, 2).getVoltageRegulation().setMode(RegulationMode.VOLTAGE);
+                }));
 
         // HVDC, detailed model
         scenarios.add(scenario("detailedVscReactivePowerSetpoint", detailedDcModel(), DC_DIR, DC_FILES,
-                n -> n.getVoltageSourceConverter("VSC_1_2").setReactivePowerSetpoint(20.0),
-                n -> n.getVoltageSourceConverter("VSC_1_2").setReactivePowerSetpoint(40.0),
-                n -> n.getVoltageSourceConverter("VSC_1_2").setReactivePowerSetpoint(20.0)));
+                n -> n.getVoltageSourceConverter("VSC_1_2").getVoltageRegulation().setTargetValue(20.0),
+                n -> n.getVoltageSourceConverter("VSC_1_2").getVoltageRegulation().setTargetValue(40.0),
+                n -> n.getVoltageSourceConverter("VSC_1_2").getVoltageRegulation().setTargetValue(20.0)));
         scenarios.add(scenario("detailedConverterControlMode", detailedDcModel(), DC_DIR, DC_FILES,
                 n -> n.getLineCommutatedConverter("CSC_1_1").setTargetVdc(450.0)
                         .setControlMode(AcDcConverter.ControlMode.P_PCC),

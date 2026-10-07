@@ -13,5 +13,6 @@
         <cim:EquivalentInjection.p>310.5</cim:EquivalentInjection.p>
         <cim:EquivalentInjection.q>-40.5</cim:EquivalentInjection.q>
         <cim:EquivalentInjection.regulationStatus>false</cim:EquivalentInjection.regulationStatus>
+        <cim:EquivalentInjection.regulationTarget>0</cim:EquivalentInjection.regulationTarget>
     </cim:EquivalentInjection>
 </rdf:RDF>

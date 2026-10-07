@@ -43,6 +43,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * named graphs. The only thing the caller chooses is how many files are read at once: a local store serialises its
  * writers and gains nothing from parallelism, while an upload over HTTP does.</p>
  *
+ * <p>Public API: a client outside this module builds on this signature.</p>
+ *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 public final class CgmesTripleStoreLoader {

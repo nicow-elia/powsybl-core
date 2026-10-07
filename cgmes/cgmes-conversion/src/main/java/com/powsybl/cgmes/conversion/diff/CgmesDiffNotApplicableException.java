@@ -19,6 +19,8 @@ import java.util.List;
  * the slow route (re-import with the difference applied to the source data, or apply the difference in an RDF
  * database and re-import from there).</p>
  *
+ * <p>Public API: a client outside this module builds on this signature.</p>
+ *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 public class CgmesDiffNotApplicableException extends PowsyblException {

@@ -12,7 +12,6 @@ import com.powsybl.cgmes.conformity.Cgmes3Catalog;
 import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
 import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.cgmes.model.CgmesNamespace;
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.triplestore.CgmesTripleStoreLoader;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.datasource.ReadOnlyMemDataSource;
@@ -210,10 +209,10 @@ class RdfDbSplitLoadingTest {
                 assertThat(g.contextName()).startsWith("contexts:");
                 assertNotNull(g.remoteGraph());
             });
-            assertThat(graphs.stream().map(GraphInfo::subset))
-                    .contains(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS,
-                            CgmesSubset.TOPOLOGY, CgmesSubset.STATE_VARIABLES,
-                            CgmesSubset.EQUIPMENT_BOUNDARY, CgmesSubset.TOPOLOGY_BOUNDARY);
+            assertThat(graphs.stream().map(GraphInfo::profile))
+                    .contains(Profiles.EQ, Profiles.SSH,
+                            Profiles.TP, Profiles.SV,
+                            Profiles.EQ_BD, Profiles.TP_BD);
         }
     }
 
@@ -299,8 +298,8 @@ class RdfDbSplitLoadingTest {
             CgmesTripleStoreLoader.Result result =
                     db.loadCgmes(scenario, withoutBoundary, boundaryOnly, p, ReportNode.NO_OP);
             assertTrue(result.boundaryLoaded(), "the boundary of a model that has none must be read");
-            assertThat(db.graphs(scenario).stream().map(GraphInfo::subset))
-                    .contains(CgmesSubset.EQUIPMENT_BOUNDARY, CgmesSubset.TOPOLOGY_BOUNDARY);
+            assertThat(db.graphs(scenario).stream().map(GraphInfo::profile))
+                    .contains(Profiles.EQ_BD, Profiles.TP_BD);
 
             Network fromDb = RdfDbNetworkLoader.load(db, scenario, NetworkFactory.findDefault(), p, ReportNode.NO_OP);
             Networks.assertSameNetwork(Network.read(whole, p), fromDb);

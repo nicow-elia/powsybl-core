@@ -8,10 +8,9 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
+import com.powsybl.cgmes.conversion.diff.FastRouteCapabilities;
 
 import java.util.ArrayList;
-import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 
@@ -44,7 +43,7 @@ import java.util.Map;
  */
 public record UpdatePlan(Kind kind, String from, String to, List<DiffStep> steps, List<String> reasons,
                          int chainLength, boolean checkpointRecommended, int distanceToFullSnapshot,
-                         Map<CgmesSubset, String> targetState) {
+                         Map<String, String> targetState) {
 
     /** What the caller has to do to reach the target. */
     public enum Kind {
@@ -65,6 +64,17 @@ public record UpdatePlan(Kind kind, String from, String to, List<DiffStep> steps
      *                 that walks <em>up</em> from A to the common ancestor
      */
     public record DiffStep(String snapshot, StoredModel model, boolean inverted) {
+
+        /**
+         * Whether the stored verdicts of this difference were reached by a capability table this reader does not
+         * trust &mdash; a newer writer's, or another table of the same core version &mdash; so that its statements
+         * are checked against the reader's own table before they are applied.
+         *
+         * @return whether the difference is re-checked once fetched
+         */
+        boolean recheck() {
+            return !model.isTrustedBy(FastRouteCapabilities.version());
+        }
     }
 
     /**
@@ -89,8 +99,8 @@ public record UpdatePlan(Kind kind, String from, String to, List<DiffStep> steps
      *
      * @return the steps per profile
      */
-    public Map<CgmesSubset, List<DiffStep>> stepsBySubset() {
-        Map<CgmesSubset, List<DiffStep>> bySubset = new EnumMap<>(CgmesSubset.class);
+    public Map<String, List<DiffStep>> stepsBySubset() {
+        Map<String, List<DiffStep>> bySubset = Profiles.map();
         steps.forEach(step -> bySubset.computeIfAbsent(step.model().subset(), k -> new ArrayList<>()).add(step));
         return bySubset;
     }
