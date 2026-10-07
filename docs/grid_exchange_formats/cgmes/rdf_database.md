@@ -1046,6 +1046,10 @@ s3://grid-archive/2016-01-01: states before 2016-01-01T12:00:00Z are not served 
   materialisation of every later timestamp starts, so nothing after the cutoff needs an archived graph.
 * **The listings still show archived snapshots** (`snapshots()`, `timestamps`, `versions`, `verify()`), and the walk
   of a plan still passes through them: the ancestry is metadata, only the graphs are gone.
+* **Nothing starts at an archived snapshot.** A network loaded before the cutoff was set and still at an archived
+  snapshot is not walked from: its plan is `FULL` with the archive text as the reason, and an update reloads the
+  target. A recorded change of such a network is not filed under it by default: when the archived snapshot is the
+  only one stating what the change supersedes, the export is refused with the same text (name a served `pin`).
 * **It holds at once, everywhere.** The cutoff is read with the schema check (the same request, no cost), and it is
   also a filter inside the query that resolves an address (`FILTER NOT EXISTS { <schema> pdb:archiveCutoff ?c
   FILTER(?ts < ?c) }`), so a cutoff another connection set is honoured before this one has read it; the refusal

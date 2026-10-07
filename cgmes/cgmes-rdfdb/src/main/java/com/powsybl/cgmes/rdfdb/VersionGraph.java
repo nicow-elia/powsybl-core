@@ -149,8 +149,10 @@ public final class VersionGraph {
         if (from == null && !identity.isEmpty()) {
             from = catalog.byState(identity).map(SnapshotInfo::iri).orElse(null);
         }
+        // A network at an archived snapshot is reloaded, not walked from: the differences of its chain may be gone
+        Optional<RdfDbException> archived = from == null ? Optional.empty() : catalog.archived(from);
         Map<String, Start> starts = new LinkedHashMap<>();
-        if (from != null) {
+        if (from != null && archived.isEmpty()) {
             starts.put(SIDE_A, new Start(from, null));
         }
         starts.put(SIDE_B, new Start(null, target));
@@ -161,8 +163,9 @@ public final class VersionGraph {
             throw catalog.noSuchSnapshot(target);
         }
         if (from != null && a.isEmpty()) {
-            return new UpdatePlan(UpdatePlan.Kind.FULL, from, b.get(0).iri(), List.of(),
-                    List.of("scenario '" + scenario + "' no longer holds the snapshot " + from), 0,
+            String reason = archived.map(Throwable::getMessage)
+                    .orElse("scenario '" + scenario + "' no longer holds the snapshot " + from);
+            return new UpdatePlan(UpdatePlan.Kind.FULL, from, b.get(0).iri(), List.of(), List.of(reason), 0,
                     checkpointRecommended(b, effective), distanceToFull(b), b.get(0).state());
         }
         // No start (FULL), the start is the target (NOOP) and the path itself are what path() answers

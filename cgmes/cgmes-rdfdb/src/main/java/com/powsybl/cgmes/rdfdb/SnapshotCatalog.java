@@ -209,6 +209,20 @@ public final class SnapshotCatalog {
         return ref;
     }
 
+    /**
+     * The refusal of a snapshot the archive cutoff, as last read, covers: what a walk from it or a pin on it gets,
+     * since the differences of an archived snapshot may be gone.
+     *
+     * @param snapshotIri the IRI of a snapshot of this scenario
+     * @return the refusal, or empty when the snapshot is served
+     */
+    Optional<RdfDbException> archived(String snapshotIri) {
+        Archive known = archive;
+        SnapshotRef ref = RdfDbNames.refOf(snapshotIri);
+        return known != null && ref != null && known.holds(ref.timestamp())
+                ? Optional.of(known.refusal(ref)) : Optional.empty();
+    }
+
     /** The timestamp an address names: its own, or the base timestamp of its tree; {@code null} without a tree. */
     private Instant timestampOf(SnapshotRef ref) {
         return ref.timestamp() != null ? ref.timestamp()
@@ -305,8 +319,10 @@ public final class SnapshotCatalog {
      * timestamp is before the cutoff, with a text naming the location, and a write into such a timestamp is refused
      * the same way. The listings ({@link #snapshots()}, {@link #timestamps}, {@link #versions}, {@link #verify()})
      * still show the archived snapshots, and the walk of a plan still passes through them: the ancestry is metadata,
-     * only the graphs are gone. A root is not exempt; set the cutoff at a {@linkplain #rollover rollover}, so that
-     * the materialisation of every later timestamp starts at full graphs that stay.</p>
+     * only the graphs are gone. A network at an archived snapshot is reloaded instead of walked from, and a recorded
+     * change is never filed under an archived snapshot by default. A root is not exempt; set the cutoff at a
+     * {@linkplain #rollover rollover}, so that the materialisation of every later timestamp starts at full graphs
+     * that stay.</p>
      *
      * <p>The cutoff lives on the schema node of the scenario ({@code pdb:archiveCutoff}, {@code pdb:archiveLocation}),
      * is read with the schema check (no request of its own), and is decided inside the query that resolves an
@@ -1336,7 +1352,9 @@ public final class SnapshotCatalog {
      * <p>A timestamp is "its pin plus these differences", and which pin is not a guess: it is the snapshot the
      * sender is at, when it is one of the same tree, at another timestamp, stating what the differences supersede;
      * otherwise the snapshot of the tree whose state the differences say they supersede, the deepest one when
-     * several do (a snapshot that changed none of the superseded profiles states them as well as its parent).</p>
+     * several do (a snapshot that changed none of the superseded profiles states them as well as its parent). An
+     * archived snapshot is never a default pin: its differences may be gone, so the change is refused naming the
+     * archive.</p>
      */
     private SnapshotInfo defaultPin(List<DifferenceModel> models, String authority, Instant timestamp,
                                     String sender) {
@@ -1351,7 +1369,7 @@ public final class SnapshotCatalog {
         }
         Optional<SnapshotInfo> senderPin = sender == null ? Optional.empty() : info(sender)
                 .filter(at -> at.modellingAuthority().equals(authority) && !at.timestamp().equals(timestamp)
-                        && at.state().values().containsAll(superseded));
+                        && at.state().values().containsAll(superseded) && archived(at.iri()).isEmpty());
         if (senderPin.isPresent()) {
             return senderPin.get();
         }
@@ -1368,7 +1386,12 @@ public final class SnapshotCatalog {
                     + " supersedes; the first is taken", authority, scenario, rows.get(0).get("d").stringValue(),
                     timestamp);
         }
-        return info(rows.get(0).get("s").stringValue()).orElseThrow(() -> new RdfDbException(
+        String deepest = rows.get(0).get("s").stringValue();
+        Optional<RdfDbException> archivedPin = archived(deepest);
+        if (archivedPin.isPresent()) {
+            throw archivedPin.get();
+        }
+        return info(deepest).orElseThrow(() -> new RdfDbException(
                 "scenario '" + scenario + "' lost the snapshot it was pinned to"));
     }
 

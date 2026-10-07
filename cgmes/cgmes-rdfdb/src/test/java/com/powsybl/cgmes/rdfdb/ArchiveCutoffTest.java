@@ -41,6 +41,7 @@ class ArchiveCutoffTest {
     private static final Instant BASE = Instant.parse("2014-06-01T10:30:00Z");
     private static final Instant T1 = Instant.parse("2014-06-01T11:00:00Z");
     private static final Instant T2 = Instant.parse("2014-06-01T11:15:00Z");
+    private static final Instant T3 = Instant.parse("2014-06-01T11:30:00Z");
     private static final String LOCATION = "s3://archive/2016-01-01";
     private static final Set<String> IDENTITY = Set.of("cgmesMetadataModels", "rdfDbProvenance");
 
@@ -103,6 +104,42 @@ class ArchiveCutoffTest {
             // ...while an update inside the served part still walks
             assertThat(RdfDbNetworkLoader.update(network, db, ref(S, 1, T1), new RdfDbUpdateOptions(), params(),
                     ReportNode.NO_OP).route()).isEqualTo(UpdateResult.Route.DIFF_APPLIED);
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void aNetworkAtAnArchivedSnapshotIsReloadedNotWalkedFrom(String backend) {
+        try (RdfDbConnection db = day(backend)) {
+            // Loaded before the cutoff was set: the network is at the base, whose differences may be gone
+            Network network = load(db, ref(S, 1));
+            db.snapshots(S).setArchiveCutoff(T1, LOCATION);
+
+            UpdatePlan plan = db.versionGraph(S).plan(network, ref(S, 1, T2), new RdfDbUpdateOptions());
+            assertThat(plan.kind()).isEqualTo(UpdatePlan.Kind.FULL);
+            assertThat(plan.steps()).isEmpty();
+            assertThat(plan.reasons()).singleElement().asString().contains("is in the archive at " + LOCATION);
+            UpdateResult result = RdfDbNetworkLoader.update(network, db, ref(S, 1, T2), new RdfDbUpdateOptions(),
+                    params(), ReportNode.NO_OP);
+            assertThat(result.route()).isEqualTo(UpdateResult.Route.FULL_RELOAD);
+            Networks.assertSameNetwork(load(db, ref(S, 1, T2)), result.network(), IDENTITY);
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void aRecordedChangeIsNotFiledUnderAnArchivedSnapshot(String backend) {
+        try (RdfDbConnection db = day(backend)) {
+            SnapshotCatalog catalog = db.snapshots(S);
+            Network sender = load(db, ref(S, 1));
+            catalog.setArchiveCutoff(T1, LOCATION);
+            List<SnapshotInfo> before = catalog.snapshots();
+
+            // The default pin would be the sender's snapshot, the base: the only one stating its steady state
+            assertThatThrownBy(() -> Changes.export(sender, db, ref(S, 1, T3), n -> Changes.moveLoad(n, 12.0)))
+                    .isInstanceOf(RdfDbException.class)
+                    .hasMessage(refusal(catalog.root(BE).orElseThrow().ref()));
+            assertThat(catalog.snapshots()).isEqualTo(before);
         }
     }
 
