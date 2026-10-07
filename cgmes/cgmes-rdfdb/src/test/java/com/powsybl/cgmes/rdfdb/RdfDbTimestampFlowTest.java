@@ -196,6 +196,42 @@ class RdfDbTimestampFlowTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void aSenderlessChangeIsRefusedWhenTheSnapshotsStatingWhatItSupersedesDiffer(String backend) {
+        try (RdfDbConnection db = twoDays(backend)) {
+            SnapshotCatalog catalog = db.snapshots(S);
+            SnapshotInfo root = catalog.require(ref(S, 1));
+            Network sender = load(db, S, 1, null);
+            // 11:00, pinned to the root, drifts the equipment only: it states the root's steady state one level deeper
+            SnapshotInfo eqOnly = catalog.putAsDiff(TimestampFixtures.eqDrift(2, T1, "eq-only"), null, ref(S, 1, T1),
+                    Set.of(EQ), params(), ReportNode.NO_OP);
+            assertThat(eqOnly.state().get(SSH)).isEqualTo(root.state().get(SSH));
+            assertThat(eqOnly.state().get(EQ)).isNotEqualTo(root.state().get(EQ));
+            DifferenceModelSet recorded = CgmesDiffExport.toDifferences(sender,
+                    Changes.record(sender, n -> Changes.moveLoad(n, 16.0)),
+                    new CgmesDiffExport.ExportOptions().setScenarioTime(T2.atZone(java.time.ZoneOffset.UTC)))
+                    .differences();
+
+            // Without the sender, the root and 11:00 both state the superseded steady state, and they differ in the
+            // equipment the change does not touch: which one it was made against is not known, so it is refused
+            assertThatThrownBy(() -> catalog.putDiff(recorded, ref(S, 1, T2), null, ReportNode.NO_OP))
+                    .isInstanceOf(RdfDbException.class)
+                    .hasMessageContaining("several snapshots of modelling authority '" + BE + "'")
+                    .hasMessageContaining("differ in [" + EQ + "]")
+                    .hasMessageContaining(root.ref().toString())
+                    .hasMessageContaining(eqOnly.ref().toString())
+                    .hasMessageContaining("name the pin");
+            assertThat(catalog.head(BE, T2)).isEmpty();
+            // Named, it is written; through the export the sender names it
+            assertThat(catalog.putDiff(recorded, ref(S, 1, T2), root.ref(), ReportNode.NO_OP).parent())
+                    .isEqualTo(root.iri());
+            SnapshotInfo t3 = Changes.export(sender, db, ref(S, 1, T3), n -> Changes.moveLoad(n, 18.0)).snapshot();
+            assertThat(t3.parent()).isEqualTo(root.iri());
+            catalog.verify();
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aTimestampRootHangsOffThePinItNames(String backend) {
         try (RdfDbConnection db = twoDays(backend)) {
             SnapshotCatalog catalog = db.snapshots(S);

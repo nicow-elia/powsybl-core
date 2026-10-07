@@ -690,7 +690,7 @@ with the first-root guard behind it):
    always of the same authority;
 9. a new timestamp hangs off its **pin**, any snapshot of another timestamp of its tree: by default the latest
    rollover at or before it for an ingestion and, for a recorded change, the snapshot the recording network is at
-   (else the deepest snapshot stating what the differences supersede) ([Timestamps](#timestamps-and-one-tree-per-modelling-authority)); a pin is refused for a
+   (else the one snapshot stating what the differences supersede; several with different states are refused) ([Timestamps](#timestamps-and-one-tree-per-modelling-authority)); a pin is refused for a
    timestamp that exists;
 10. nothing is written into a timestamp before the scenario's **archive cutoff**
     ([Archiving](#archiving-the-states-before-a-cutoff)): the head lookup of the write is a read, and is refused like
@@ -1028,10 +1028,15 @@ timestamp is created:
   it** — the root until a later snapshot is flagged — or the pin the caller names;
 * a **recorded** change (`RdfDbExport.export`) hangs off the **snapshot the recording network is at** (its
   `RdfDbProvenance`), when that one is of the same tree and states what the differences supersede; otherwise —
-  `putDiff` of a bare difference set, a network loaded from files — off the **deepest snapshot of the tree that
-  states what its differences supersede**. The caller may name the pin instead, which must state them
-  (*"supersedes … but the pin (…) is at …"*). A deeper snapshot stating the same models of the touched profiles may
-  differ in the others, which the network never had: that is why the network's own snapshot comes first;
+  `putDiff` of a bare difference set, a network loaded from files — off **the snapshot of the tree that states what
+  its differences supersede**. When several do and their states differ (a later timestamp that drifted the
+  equipment states the steady state of the snapshot it hangs off), the change could have been made against any of
+  them, and the write is refused rather than guessed: *"several snapshots of modelling authority '…' of scenario '…'
+  state what the difference models of … supersede […], and they differ in [EQ], which the differences do not touch:
+  (…), (…); without its sender it is not known which one the change was made against, so name the pin"*.
+  Snapshots that agree on their whole state are one pin, and the deepest is taken. The caller may name the pin,
+  which must state them (*"supersedes … but the pin (…) is at …"*). That is why the network's own snapshot comes
+  first;
 * a pin is refused for a timestamp that exists: its new versions grow on its head (*"… already exists, and a pin is
   chosen when a timestamp is created"*).
 

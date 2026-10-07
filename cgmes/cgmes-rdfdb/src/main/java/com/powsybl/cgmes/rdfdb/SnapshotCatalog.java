@@ -721,18 +721,13 @@ public final class SnapshotCatalog {
         if (stateIds.isEmpty()) {
             return Optional.empty();
         }
-        List<Map<String, Value>> rows = deepestByState(stateIds, "", 1);
+        List<Map<String, Value>> rows = select("SELECT ?s WHERE {" + graphClause() + "{ ?s a pdb:Snapshot"
+                + " ; pdb:depth ?d" + stateIds.stream().map(id -> " ; pdb:state " + SparqlText.iri(id))
+                .collect(Collectors.joining()) + " } } ORDER BY DESC(?d) LIMIT 1");
         if (rows.isEmpty()) {
             return Optional.empty();
         }
         return info(rows.get(0).get("s").stringValue());
-    }
-
-    /** The snapshots stating all the given models, deepest first: rows of {@code ?s} and {@code ?d}. */
-    private List<Map<String, Value>> deepestByState(List<String> stateIds, String restriction, int limit) {
-        return select("SELECT ?s ?d WHERE {" + graphClause() + "{ ?s a pdb:Snapshot" + restriction
-                + " ; pdb:depth ?d" + stateIds.stream().map(id -> " ; pdb:state " + SparqlText.iri(id))
-                .collect(Collectors.joining()) + " } } ORDER BY DESC(?d) LIMIT " + limit);
     }
 
     /**
@@ -1351,10 +1346,11 @@ public final class SnapshotCatalog {
      *
      * <p>A timestamp is "its pin plus these differences", and which pin is not a guess: it is the snapshot the
      * sender is at, when it is one of the same tree, at another timestamp, stating what the differences supersede;
-     * otherwise the snapshot of the tree whose state the differences say they supersede, the deepest one when
-     * several do (a snapshot that changed none of the superseded profiles states them as well as its parent). An
-     * archived snapshot is never a default pin: its differences may be gone, so the change is refused naming the
-     * archive.</p>
+     * otherwise the one snapshot of the tree whose state the differences say they supersede. When several state it
+     * with different states (an equipment drift of a later timestamp states the steady state of the snapshot it hangs
+     * off), the change may have been made against any of them, and it is refused naming them; snapshots that agree
+     * on their whole state are one pin, and the deepest is taken. An archived snapshot is never a default pin: its
+     * differences may be gone, so the change is refused naming the archive.</p>
      */
     private SnapshotInfo defaultPin(List<DifferenceModel> models, String authority, Instant timestamp,
                                     String sender) {
@@ -1373,26 +1369,41 @@ public final class SnapshotCatalog {
         if (senderPin.isPresent()) {
             return senderPin.get();
         }
-        List<Map<String, Value>> rows = deepestByState(superseded, " ; pdb:modellingAuthority "
-                + SparqlText.str(authority), 2);
-        if (rows.isEmpty()) {
+        // One request: every snapshot of the tree stating what the differences supersede, grouped by state, deepest
+        // first. They agree on the profiles the differences touch (each difference supersedes the pin's model of its
+        // profile), so two states differ in a profile the differences do not touch
+        Map<Map<String, String>, List<SnapshotInfo>> byState = new LinkedHashMap<>();
+        snapshotsWhere("?s pdb:modellingAuthority " + SparqlText.str(authority) + superseded.stream()
+                .map(id -> " ; pdb:state " + SparqlText.iri(id)).collect(Collectors.joining()) + " . ", "")
+                .values().stream()
+                .sorted(Comparator.comparingInt(SnapshotInfo::depth).reversed().thenComparing(SnapshotInfo::iri))
+                .forEach(candidate -> byState.computeIfAbsent(candidate.state(), k -> new ArrayList<>())
+                        .add(candidate));
+        if (byState.isEmpty()) {
             throw new RdfDbConflictException("a new timestamp hangs off a snapshot of its own tree, and no snapshot"
                     + " of modelling authority '" + authority + "' of scenario '" + scenario + "' states what the"
                     + " difference models of " + timestamp + " supersede " + superseded + "; update the network to"
                     + " a snapshot of the tree and re-record");
         }
-        if (rows.size() > 1 && SnapshotRows.intOf(rows.get(0).get("d")) == SnapshotRows.intOf(rows.get(1).get("d"))) {
-            LOGGER.warn("Several snapshots of '{}' in scenario '{}' at depth {} state what the new timestamp {}"
-                    + " supersedes; the first is taken", authority, scenario, rows.get(0).get("d").stringValue(),
-                    timestamp);
+        if (byState.size() > 1) {
+            Set<Map<String, String>> states = byState.keySet();
+            List<String> differing = states.stream().flatMap(state -> state.keySet().stream()).distinct()
+                    .filter(profile -> states.stream().map(state -> Optional.ofNullable(state.get(profile)))
+                            .distinct().count() > 1)
+                    .sorted(Profiles.ORDER).toList();
+            throw new RdfDbException("several snapshots of modelling authority '" + authority + "' of scenario '"
+                    + scenario + "' state what the difference models of " + timestamp + " supersede " + superseded
+                    + ", and they differ in " + differing + ", which the differences do not touch: "
+                    + byState.values().stream().map(group -> group.get(0).ref().toString())
+                    .collect(Collectors.joining(", ")) + "; without its sender it is not known which one the"
+                    + " change was made against, so name the pin");
         }
-        String deepest = rows.get(0).get("s").stringValue();
-        Optional<RdfDbException> archivedPin = archived(deepest);
+        SnapshotInfo deepest = byState.values().iterator().next().get(0);
+        Optional<RdfDbException> archivedPin = archived(deepest.iri());
         if (archivedPin.isPresent()) {
             throw archivedPin.get();
         }
-        return info(deepest).orElseThrow(() -> new RdfDbException(
-                "scenario '" + scenario + "' lost the snapshot it was pinned to"));
+        return deepest;
     }
 
     /**
