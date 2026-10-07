@@ -171,6 +171,54 @@ class SnapshotCatalogTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void anOpenAuthorityIntoAScenarioOfOneTreeRefusesFilesThatAgreeOnAnother(String backend) {
+        try (RdfDbConnection db = open(backend)) {
+            SnapshotInfo be = root(db, S, null);
+            SnapshotCatalog catalog = db.snapshots(S);
+            String refusal = "modelling authority " + NL + " but the scenario's only tree is " + BE + ": pass " + BE
+                    + " in the address to store them under it, or " + NL + " to open a second tree";
+            // NL's files, authority left open: neither silently a second tree nor silently diffed into BE's
+            assertThatThrownBy(() -> catalog.putFull(microGridNl(), null, SnapshotRef.latest(S, null), null,
+                    params(), ReportNode.NO_OP))
+                    .isInstanceOf(RdfDbException.class)
+                    .hasMessageContaining("the instance files of scenario '" + S + "' state " + refusal);
+            assertThatThrownBy(() -> catalog.putAsDiff(microGridNl(), null, SnapshotRef.latest(S, null), null,
+                    params(), ReportNode.NO_OP))
+                    .isInstanceOf(RdfDbException.class)
+                    .hasMessageContaining("the instance files of scenario '" + S + "' state " + refusal);
+            assertThatThrownBy(() -> catalog.putDiff(authored(be, NL, NL), SnapshotRef.latest(S, null)))
+                    .isInstanceOf(RdfDbException.class)
+                    .hasMessageContaining("the difference models of scenario '" + S + "' state " + refusal);
+            assertThat(catalog.snapshots()).containsExactly(be);
+            // Members that do not agree decide nothing, and the open authority is the only tree
+            assertThat(catalog.putDiff(authored(be, NL, BE), SnapshotRef.latest(S, null)).modellingAuthority())
+                    .isEqualTo(BE);
+            // Named, either is taken: the address decides
+            assertThat(catalog.putFull(microGridNl(), null, SnapshotRef.latest(S, NL), null, params(),
+                    ReportNode.NO_OP).modellingAuthority()).isEqualTo(NL);
+            catalog.verify();
+        }
+    }
+
+    /** An equipment and a steady state hypothesis difference on top of a snapshot, stating the given authorities. */
+    private static DifferenceModelSet authored(SnapshotInfo parent, String eqAuthority, String sshAuthority) {
+        return new DifferenceModelSet(List.of(authored(parent, EQ, "urn:uuid:eq-authored", eqAuthority,
+                        CgmesStatement.literal("_line", "IdentifiedObject", "IdentifiedObject.description", "renamed")),
+                authored(parent, SSH, "urn:uuid:ssh-authored", sshAuthority,
+                        CgmesStatement.literal(Changes.LOAD_ID, "EnergyConsumer", "EnergyConsumer.p", "13.0"))));
+    }
+
+    private static DifferenceModel authored(SnapshotInfo parent, CgmesSubset subset, String id, String authority,
+                                            CgmesStatement forward) {
+        DifferenceModelHeader header = DifferenceModelHeader.builder(id, subset, CIM16)
+                .supersedes(List.of(parent.state().get(subset)))
+                .modelingAuthoritySet(authority)
+                .build();
+        return new DifferenceModel(header, List.of(forward), List.of(), List.of());
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aDifferenceWithoutEquipmentOrSteadyStateMustNameItsAuthority(String backend) {
         try (RdfDbConnection db = open(backend)) {
             SnapshotInfo be = root(db, S, null);
@@ -242,7 +290,8 @@ class SnapshotCatalogTest {
         try (RdfDbConnection db = open(backend)) {
             SnapshotCatalog catalog = db.snapshots(S);
             SnapshotInfo be = root(db, S, null);
-            SnapshotInfo nl = catalog.putFull(microGridNl(), null, SnapshotRef.latest(S, null), null, params(),
+            // A second tree is opened by naming it (left open, NL's files are refused: the scenario's only tree is BE)
+            SnapshotInfo nl = catalog.putFull(microGridNl(), null, SnapshotRef.latest(S, NL), null, params(),
                     ReportNode.NO_OP);
 
             assertThat(nl.modellingAuthority()).isEqualTo(NL);

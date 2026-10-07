@@ -50,6 +50,7 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -609,7 +610,9 @@ public final class SnapshotCatalog {
      * @param boundary     the data source holding the boundary files, or {@code null} when {@code ds} carries them
      * @param ref          the address of the root. An explicit modelling authority is taken whatever the
      *                     files state; a {@code null} one is the {@code md:Model.modelingAuthoritySet} the equipment
-     *                     and steady state hypothesis files agree on, refused when they do not; its timestamp may be {@code null}
+     *                     and steady state hypothesis files agree on, refused when they do not &mdash; in a scenario of
+     *                     one tree, that tree, and files agreeing on another authority are refused (a second tree is
+     *                     opened by naming it); its timestamp may be {@code null}
      *                     and is then the {@code md:Model.scenarioTime} of the steady state file; its version may be
      *                     {@code null} and is then 1
      * @param profiles     the profiles to store, or {@code null} or empty for every profile the files carry. The
@@ -640,7 +643,7 @@ public final class SnapshotCatalog {
                     CgmesTripleStoreLoader.load(ds, boundary, scratch, 1, report);
             Map<String, Header> headers = project(readHeaders(repository, parsed.contextNames()), profiles);
             String authority = authorityOf(statedAuthorities(headers.values()), ref.modellingAuthority(),
-                    "the instance files");
+                    roots::keySet, "the instance files");
             refuseSecondRoot(roots, authority);
             Instant timestamp = ref.timestamp() != null ? ref.timestamp() : scenarioTimeOf(headers);
             int version = ref.version() == null ? 1 : ref.version();
@@ -785,7 +788,7 @@ public final class SnapshotCatalog {
 
     /**
      * The modelling authority a snapshot is stored under: the one its address names, or the one its equipment and
-     * steady state hypothesis members state when the address names none.
+     * steady state hypothesis members state when the address names none, or the scenario's only tree.
      *
      * <p>One snapshot is stored under one modelling authority; the files it carries may come from several. A
      * realistic IGM is one: its equipment and topology come from the TSO's modelling tool, its state variables from
@@ -795,14 +798,23 @@ public final class SnapshotCatalog {
      * say, recorded from a merged model) is refused rather than filed under whatever its other members state: that
      * would be the merging agent's tree. The boundary is never asked, it is the scenario's.</p>
      *
+     * <p>A scenario of one tree takes the write into that tree when the deciding members do not agree or state
+     * none, as a read of it is addressed there. Members that agree on <em>another</em> authority are refused: they
+     * are another TSO's files, and neither silently diffing them into the tree nor silently opening a second tree
+     * is what a caller who left the authority open can have meant.</p>
+     *
      * @param stated what each non-boundary member states, by profile
      * @param given  the authority of the address, or {@code null}
+     * @param trees  the modelling authorities the scenario holds a tree of, asked only when {@code given} is
+     *               {@code null}
      * @param what   what the members are, for the message
      * @return the authority
      * @throws RdfDbException if the address names none and the deciding members are missing, state none or state
-     *                        several
+     *                        several where the scenario holds no single tree, or agree on another authority than
+     *                        the single tree it holds
      */
-    private String authorityOf(Map<CgmesSubset, String> stated, String given, String what) {
+    private String authorityOf(Map<CgmesSubset, String> stated, String given,
+                               Supplier<? extends Collection<String>> trees, String what) {
         if (given != null) {
             return given;
         }
@@ -816,6 +828,17 @@ public final class SnapshotCatalog {
                     + " modelling authority in the address");
         }
         Set<String> authorities = new TreeSet<>(deciding.values());
+        Collection<String> all = trees.get();
+        if (all.size() == 1) {
+            String tree = all.iterator().next();
+            if (authorities.size() == 1 && !authorities.contains(tree)) {
+                String other = authorities.iterator().next();
+                throw new RdfDbException(what + " of scenario '" + scenario + "' state modelling authority " + other
+                        + " but the scenario's only tree is " + tree + ": pass " + tree + " in the address to store"
+                        + " them under it, or " + other + " to open a second tree");
+            }
+            return tree;
+        }
         if (authorities.size() == 1) {
             return authorities.iterator().next();
         }
@@ -869,7 +892,8 @@ public final class SnapshotCatalog {
      *
      * @param set        the difference models
      * @param target     the address the new snapshot gets. A {@code null} modelling authority is the one the EQ
-     *                   and SSH difference headers agree on, and a set with neither is refused; a {@code null}
+     *                   and SSH difference headers agree on, and a set with neither is refused; in a scenario of one
+     *                   tree it is that tree, and headers agreeing on another authority are refused; a {@code null}
      *                   timestamp is the base timestamp of that
      *                   authority's tree; a {@code null} version is the head's plus one (1 for a new timestamp).
      *                   An explicit version must be greater than the head's; gaps are allowed
@@ -887,7 +911,8 @@ public final class SnapshotCatalog {
         Map<CgmesSubset, String> stated = new EnumMap<>(CgmesSubset.class);
         models.stream().filter(model -> model.header().modelingAuthoritySet() != null)
                 .forEach(model -> stated.put(model.header().subset(), model.header().modelingAuthoritySet()));
-        String authority = authorityOf(stated, target.modellingAuthority(), "the difference models");
+        String authority = authorityOf(stated, target.modellingAuthority(), this::modellingAuthorities,
+                "the difference models");
         // One request: an open timestamp is the base one, resolved inside the head lookup. A timestamp this tree
         // does not hold yet becomes a new timestamp root hanging off the base chain; a timestamp it already holds
         // grows another version inside itself
@@ -1052,7 +1077,9 @@ public final class SnapshotCatalog {
      * @param ds           the data source holding the instance files of that timestamp
      * @param boundary     the data source holding the boundary files, or {@code null}
      * @param target       the address the new snapshot gets. A {@code null} modelling authority is the one the
-     *                     equipment and steady state hypothesis files agree on, a {@code null} timestamp the base timestamp of that authority's tree, a
+     *                     equipment and steady state hypothesis files agree on (in a scenario of one tree: that tree,
+     *                     and files agreeing on another authority are refused), a {@code null} timestamp the base
+     *                     timestamp of that authority's tree, a
      *                     {@code null} version the head's plus one
      * @param profiles     the profiles to compare, or {@code null} or empty for {@code EQ} and {@code SSH}. A
      *                     listed profile the files do not carry is refused
@@ -1072,7 +1099,7 @@ public final class SnapshotCatalog {
         // first: a header-only pass, which stops at every md:FullModel
         String authority = target.modellingAuthority() != null ? target.modellingAuthority()
                 : authorityOf(statedAuthorities(headersOf(IngestParser.read(ds, boundary, ReportNode.NO_OP, Map.of(),
-                        Set.of())).values()), null, "the instance files");
+                        Set.of())).values()), null, this::modellingAuthorities, "the instance files");
         SnapshotInfo root = root(authority).orElseThrow(() -> noRoot(authority));
         Instant timestamp = target.timestamp() == null ? root.timestamp() : target.timestamp();
         SnapshotInfo parent = head(authority, timestamp)

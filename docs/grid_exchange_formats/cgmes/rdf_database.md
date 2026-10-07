@@ -517,7 +517,10 @@ merging agent that ran the power flow (`CGMES_Full.zip` of pypowsybl states `pow
 and `http://tennet.nl/CGMES`). Name the authority on the write and the files are stored under it whatever they
 state; leave it open and the equipment and steady state hypothesis headers decide, refused with *"… state the
 modelling authorities {EQ=…, SSH=…, SV=…}, and the equipment and steady state hypothesis members do not agree on
-one: pass the modelling authority in the address"* when they disagree.
+one: pass the modelling authority in the address"* when they disagree. Into a scenario of **one tree** an open
+authority is that tree, and files whose equipment and steady state hypothesis agree on another authority are
+refused with *"… state modelling authority X but the scenario's only tree is Y: pass Y in the address to store them
+under it, or X to open a second tree"*.
 
 Several days in one database are **several scenarios**. Inside a scenario every modelling authority owns **one
 tree** with exactly one root; a second root of the same authority is refused. All trees of a scenario live in its
