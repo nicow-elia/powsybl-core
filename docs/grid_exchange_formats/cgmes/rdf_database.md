@@ -696,7 +696,8 @@ with the first-root guard behind it):
    timestamp that exists;
 10. nothing is written into a timestamp before the scenario's **archive cutoff**
     ([Archiving](#archiving-the-states-before-a-cutoff)): the head lookup of the write is a read, and is refused like
-    one.
+    one. A cutoff set through another connection bumps the revision every write is guarded on, so a writer that had
+    not read it yet is refused by the guard, re-reads the schema node and names the archive instead of retrying.
 
 Concurrent writers: the guard decides, the loser gets a `RdfDbConflictException` naming the rule, and there is no
 retry. Writers of two authorities never conflict — every guard is scoped by the authority — with one exception:

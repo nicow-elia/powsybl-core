@@ -1320,6 +1320,12 @@ public final class SnapshotCatalog {
                 if (registry.changedSince(version)) {
                     String changed = "the version registry of scenario '" + scenario + "' changed (rev " + seen
                             + " → " + registry.rev() + ")";
+                    // The edit may have been an archive cutoff, which the re-read registry now knows: a moment or a
+                    // parent it archived is refused, not retried
+                    Optional<RdfDbException> archivedNow = archived(snapshotIri).or(() -> archived(parent.iri()));
+                    if (archivedNow.isPresent()) {
+                        throw archivedNow.get();
+                    }
                     if (attempt <= REGISTRY_RETRIES) {
                         LOGGER.info("{} under the write of {}: retrying", changed, address);
                         continue;
@@ -1944,6 +1950,15 @@ public final class SnapshotCatalog {
             return "version '" + version.name() + "' (rank " + version.rank() + ") is not above the head '"
                     + nowHead.get().version() + "' (rank " + nowHead.get().rank() + ") of " + nowHead.get().ref()
                     + ": a new version ranks above the head it is written on";
+        }
+        if (nowHead.isEmpty()) {
+            // The head lookup filters archived moments: a cutoff set through another connection looks like no head
+            readSchema();
+            Optional<RdfDbException> archivedMoment = archived(RdfDbNames.snapshot(scenario,
+                    address.modellingAuthority(), address.timestamp(), version.name()));
+            if (archivedMoment.isPresent()) {
+                return archivedMoment.get().getMessage();
+            }
         }
         return "the snapshot " + address + " was not written: " + detail;
     }

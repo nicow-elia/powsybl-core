@@ -239,4 +239,43 @@ class ArchiveCutoffTest {
             assertThat(mine.archiveCutoff()).contains(T1);
         }
     }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void aWriteIntoATimestampArchivedElsewhereNamesTheArchive(String backend) {
+        try (RdfDbConnection db = day(backend)) {
+            SnapshotCatalog mine = db.snapshots(S);
+            SnapshotInfo t1 = mine.require(ref(S, 1, T1));
+            new SnapshotCatalog(db, S).setArchiveCutoff(T2, LOCATION);
+            List<SnapshotInfo> before = new SnapshotCatalog(db, S).snapshots();
+
+            // This catalogue still believes 11:00 is served: its head lookup finds nothing (the filter is in the
+            // query), the write is refused by its guard, and the refusal names the archive, not a lost race
+            assertThatThrownBy(() -> mine.putDiff(SnapshotCatalogTest.change(t1, Profiles.SSH, "urn:uuid:late",
+                    "12.0"), ref(S, 2, T1)))
+                    .isInstanceOf(RdfDbException.class)
+                    .hasMessageContaining("is in the archive at " + LOCATION)
+                    .hasMessageContaining("states before " + T2);
+            assertThat(mine.snapshots()).isEqualTo(before);
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void aNewTimestampBeforeACutoffSetElsewhereIsRefusedNamingTheArchive(String backend) {
+        try (RdfDbConnection db = day(backend)) {
+            SnapshotCatalog mine = db.snapshots(S);
+            SnapshotInfo root = mine.require(ref(S, 1));
+            new SnapshotCatalog(db, S).setArchiveCutoff(T2, LOCATION);
+            List<SnapshotInfo> before = new SnapshotCatalog(db, S).snapshots();
+            Instant early = Instant.parse("2014-06-01T10:45:00Z");
+
+            assertThatThrownBy(() -> mine.putDiff(SnapshotCatalogTest.change(root, Profiles.SSH, "urn:uuid:early",
+                    "12.0"), ref(S, 1, early)))
+                    .isInstanceOf(RdfDbException.class)
+                    .hasMessageContaining("is in the archive at " + LOCATION)
+                    .hasMessageContaining("states before " + T2);
+            assertThat(mine.snapshots()).isEqualTo(before);
+        }
+    }
 }
