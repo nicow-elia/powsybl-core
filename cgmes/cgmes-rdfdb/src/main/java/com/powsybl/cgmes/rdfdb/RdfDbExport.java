@@ -209,7 +209,8 @@ public final class RdfDbExport {
      * @param db         the open connection
      * @param target     the address the new snapshot gets, as for the form without a pin
      * @param pin        the snapshot a new timestamp hangs off, of the same tree and stating what the changes
-     *                   supersede, or {@code null} for the deepest one that does (see
+     *                   supersede, or {@code null} for the snapshot the network is at when it is such a snapshot,
+     *                   else the deepest one that is (see
      *                   {@link SnapshotCatalog#putDiff(com.powsybl.cgmes.model.diff.DifferenceModelSet, SnapshotRef,
      *                   SnapshotRef, ReportNode)})
      * @param options    the granularity, the header values and the unsupported change behaviour
@@ -282,7 +283,9 @@ public final class RdfDbExport {
     private static SnapshotResult store(Network network, RdfDbConnection db, SnapshotCatalog catalog,
                                         CgmesDiffExport.Result exported, SnapshotRef effective, SnapshotRef pin,
                                         ReportNode reportNode) {
-        SnapshotInfo snapshot = catalog.putDiff(exported.differences(), effective, pin,
+        RdfDbProvenance provenance = network.getExtension(RdfDbProvenance.class);
+        String sender = provenance == null ? null : provenance.snapshot().orElse(null);
+        SnapshotInfo snapshot = catalog.putDiff(exported.differences(), effective, pin, sender,
                 reportNode == null ? ReportNode.NO_OP : reportNode);
 
         List<StoredModel> stored = db.catalog(effective.scenario())
@@ -290,7 +293,6 @@ public final class RdfDbExport {
                 .filter(model -> snapshot.members().contains(model.id()))
                 .toList();
         advanceSender(network, db, effective.scenario(), stored);
-        RdfDbProvenance provenance = network.getExtension(RdfDbProvenance.class);
         if (provenance instanceof RdfDbProvenanceImpl impl) {
             impl.setSnapshot(snapshot.iri());
         }

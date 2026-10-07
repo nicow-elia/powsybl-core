@@ -1012,7 +1012,8 @@ public final class SnapshotCatalog {
      *
      * <p>A timestamp the tree does not hold yet gets a root of its own, linked by a {@code pdb:TimestampEdge} to
      * its <em>pin</em>: any snapshot of the same tree, at another timestamp. Which one is not a guess: the caller
-     * names it, or it is the deepest snapshot of the tree whose state the differences say they supersede. Either
+     * names it, or it is the deepest snapshot of the tree whose state the differences say they supersede
+     * ({@link RdfDbExport} prefers the snapshot the recording network is at). Either
      * way the pin must state what every difference supersedes, because the new timestamp is "the pin plus these
      * differences". A timestamp the tree holds already grows another version on its head, and a pin is refused
      * there: it is chosen once, when the timestamp is created.</p>
@@ -1031,6 +1032,21 @@ public final class SnapshotCatalog {
      */
     public SnapshotInfo putDiff(DifferenceModelSet set, SnapshotRef target, SnapshotRef pin,
                                 ReportNode reportNode) {
+        return putDiff(set, target, pin, null, reportNode);
+    }
+
+    /**
+     * Write a recorded difference set; without a pin, a new timestamp hangs off the snapshot the sender is at.
+     *
+     * <p>A recorded change is "the sender's snapshot plus these differences", so that snapshot is the default pin
+     * when it is a snapshot of the same tree, at another timestamp, stating what every difference supersedes;
+     * otherwise the rule of the public form applies. A deeper snapshot stating the same models of the touched
+     * profiles may differ in the others, which the sender never had.</p>
+     *
+     * @param sender the IRI of the snapshot the sending network is at, or {@code null}
+     */
+    SnapshotInfo putDiff(DifferenceModelSet set, SnapshotRef target, SnapshotRef pin, String sender,
+                         ReportNode reportNode) {
         Objects.requireNonNull(set);
         check(target);
         checkSchema();
@@ -1038,7 +1054,7 @@ public final class SnapshotCatalog {
         if (models.isEmpty()) {
             throw new RdfDbException("no difference to store as " + target + " of scenario '" + scenario + "'");
         }
-        return putDiff(models, Wholes.NONE, target, pin == null ? null : require(pin), reportNode);
+        return putDiff(models, Wholes.NONE, target, pin == null ? null : require(pin), sender, reportNode);
     }
 
     /**
@@ -1058,12 +1074,13 @@ public final class SnapshotCatalog {
      * @param models     the differences, possibly none when {@code wholes} names a profile and a pin is given
      * @param wholes     the custom profiles stored whole, whose graphs were uploaded already
      * @param target     the address
-     * @param pin        the snapshot a new timestamp hangs off, or {@code null} for the deepest one stating what the
-     *                   differences supersede
+     * @param pin        the snapshot a new timestamp hangs off, or {@code null} for the default pin of a recorded
+     *                   change
+     * @param sender     the snapshot the sender of a recorded change is at, or {@code null}
      * @param reportNode where the write reports
      */
     private SnapshotInfo putDiff(List<DifferenceModel> models, Wholes wholes, SnapshotRef target,
-                                 SnapshotInfo pin, ReportNode reportNode) {
+                                 SnapshotInfo pin, String sender, ReportNode reportNode) {
         check(target);
         checkSchema();
         Map<String, String> stated = Profiles.map();
@@ -1095,7 +1112,8 @@ public final class SnapshotCatalog {
                 checkNotASecondRoot(models, parent, authority, timestamp);
             }
         } else {
-            parent = pin != null ? checkPin(pin, authority, timestamp) : defaultPin(models, authority, timestamp);
+            parent = pin != null ? checkPin(pin, authority, timestamp)
+                    : defaultPin(models, authority, timestamp, sender);
         }
         checkSupersedes(models, parent, newTimestamp ? "the pin" : "the head");
 
@@ -1155,11 +1173,13 @@ public final class SnapshotCatalog {
     /**
      * The snapshot a new timestamp root of a recorded change hangs off when the caller names none.
      *
-     * <p>A timestamp is "its pin plus these differences", and which pin is not a guess: it is the snapshot of the
-     * same tree whose state the differences say they supersede, the deepest one when several do (a snapshot that
-     * changed none of the superseded profiles states them as well as its parent).</p>
+     * <p>A timestamp is "its pin plus these differences", and which pin is not a guess: it is the snapshot the
+     * sender is at, when it is one of the same tree, at another timestamp, stating what the differences supersede;
+     * otherwise the snapshot of the tree whose state the differences say they supersede, the deepest one when
+     * several do (a snapshot that changed none of the superseded profiles states them as well as its parent).</p>
      */
-    private SnapshotInfo defaultPin(List<DifferenceModel> models, String authority, Instant timestamp) {
+    private SnapshotInfo defaultPin(List<DifferenceModel> models, String authority, Instant timestamp,
+                                    String sender) {
         List<String> superseded = models.stream()
                 .filter(model -> model.header().supersedes().size() == 1)
                 .map(model -> model.header().supersedes().get(0))
@@ -1168,6 +1188,12 @@ public final class SnapshotCatalog {
             throw new RdfDbConflictException("the difference models of the new timestamp " + timestamp
                     + " of scenario '" + scenario + "' do not each supersede exactly one stored model, so the"
                     + " snapshot they were made against cannot be identified");
+        }
+        Optional<SnapshotInfo> senderPin = sender == null ? Optional.empty() : info(sender)
+                .filter(at -> at.modellingAuthority().equals(authority) && !at.timestamp().equals(timestamp)
+                        && at.state().values().containsAll(superseded));
+        if (senderPin.isPresent()) {
+            return senderPin.get();
         }
         List<Map<String, Value>> rows = deepestByState(superseded, " ; pdb:modellingAuthority "
                 + SparqlText.str(authority), 2);
@@ -1442,7 +1468,7 @@ public final class SnapshotCatalog {
             Wholes wholes = wholeFiles.isEmpty() ? Wholes.NONE
                     : uploadWholes(ds, parsed, headers, wholeFiles, uploaded);
             written = putDiff(models, wholes, SnapshotRef.of(scenario, authority, timestamp, target.version()),
-                    head.isPresent() ? null : parent, report);
+                    head.isPresent() ? null : parent, null, report);
         } finally {
             if (written == null) {
                 // Unreferenced graphs are invisible to every reader; dropping them keeps a refusal traceless

@@ -686,8 +686,8 @@ with the first-root guard behind it):
    `pdb:parent`, `pdb:member`, `pdb:state` and `pdb:full` of a snapshot points inside its scenario, and a parent is
    always of the same authority;
 9. a new timestamp hangs off its **pin**, any snapshot of another timestamp of its tree: by default the latest
-   rollover at or before it for an ingestion and the deepest snapshot stating what the differences supersede for a
-   recorded change ([Timestamps](#timestamps-and-one-tree-per-modelling-authority)); a pin is refused for a
+   rollover at or before it for an ingestion and, for a recorded change, the snapshot the recording network is at
+   (else the deepest snapshot stating what the differences supersede) ([Timestamps](#timestamps-and-one-tree-per-modelling-authority)); a pin is refused for a
    timestamp that exists.
 
 Concurrent writers: the guard decides, the loser gets a `RdfDbConflictException` naming the rule, and there is no
@@ -962,9 +962,12 @@ timestamp is created:
 
 * an **ingested** timestamp (`putAsDiff`) is compared against and hangs off the **latest rollover at or before
   it** — the root until a later snapshot is flagged — or the pin the caller names;
-* a **recorded** change (`putDiff`, `RdfDbExport.export`) hangs off the **deepest snapshot of the tree that states
-  what its differences supersede** — where the recording network was — or the pin the caller names, which must
-  state them (*"supersedes … but the pin (…) is at …"*);
+* a **recorded** change (`RdfDbExport.export`) hangs off the **snapshot the recording network is at** (its
+  `RdfDbProvenance`), when that one is of the same tree and states what the differences supersede; otherwise —
+  `putDiff` of a bare difference set, a network loaded from files — off the **deepest snapshot of the tree that
+  states what its differences supersede**. The caller may name the pin instead, which must state them
+  (*"supersedes … but the pin (…) is at …"*). A deeper snapshot stating the same models of the touched profiles may
+  differ in the others, which the network never had: that is why the network's own snapshot comes first;
 * a pin is refused for a timestamp that exists: its new versions grow on its head (*"… already exists, and a pin is
   chosen when a timestamp is created"*).
 

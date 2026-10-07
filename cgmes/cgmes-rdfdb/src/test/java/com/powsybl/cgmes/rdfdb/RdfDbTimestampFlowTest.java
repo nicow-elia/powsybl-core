@@ -168,6 +168,30 @@ class RdfDbTimestampFlowTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void aRecordedTimestampHangsOffTheSnapshotItsSenderIsAt(String backend) {
+        try (RdfDbConnection db = twoDays(backend)) {
+            SnapshotCatalog catalog = db.snapshots(S);
+            Network sender = load(db, S, 1, null);
+            SnapshotInfo t1 = Changes.export(sender, db, ref(S, 1, T1), n -> Changes.moveLoad(n, 12.0)).snapshot();
+            // 11:15, pinned to 11:00, drifts the equipment only: it states 11:00's steady state one level deeper
+            SnapshotInfo deeper = catalog.putAsDiff(TimestampFixtures.eqDrift(2, T2, "eq-only"), null, ref(S, 1, T2),
+                    Set.of(EQ), t1.ref(), params(), ReportNode.NO_OP);
+            assertThat(deeper.state().get(SSH)).isEqualTo(t1.state().get(SSH));
+            assertThat(deeper.depth()).isGreaterThan(t1.depth());
+
+            // The sender is at 11:00 and never had 11:15's equipment: its change is filed under 11:00
+            SnapshotInfo t3 = Changes.export(sender, db, ref(S, 1, T3), n -> Changes.moveLoad(n, 16.0)).snapshot();
+
+            assertThat(t3.parent()).isEqualTo(t1.iri());
+            assertThat(t3.state().get(EQ)).isEqualTo(t1.state().get(EQ));
+            Networks.assertSameNetworkIgnoringStateVariables(sender, load(db, S, 1, T3), IDENTITY,
+                    Set.of(Changes.LOAD_ID));
+            catalog.verify();
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void aTimestampRootHangsOffThePinItNames(String backend) {
         try (RdfDbConnection db = twoDays(backend)) {
             SnapshotCatalog catalog = db.snapshots(S);
