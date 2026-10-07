@@ -22,16 +22,25 @@ import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Properties;
 import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static java.util.Map.entry;
@@ -291,6 +300,8 @@ public final class FastRouteCapabilities {
     private static final Map<Family, FamilySpec> BY_FAMILY = byFamily();
     private static final Map<String, Set<Family>> BY_PROPERTY = byProperty();
     private static final Map<String, Family> BY_CLASS = byClass();
+    private static final String TABLE_HASH = HexFormat.of().formatHex(sha256(canonicalText())).substring(0, 12);
+    private static final String VERSION = TABLE_HASH + "/" + coreVersion();
 
     private FastRouteCapabilities() {
     }
@@ -400,6 +411,84 @@ public final class FastRouteCapabilities {
     /** The whole table, in the order the families are declared. */
     public static List<FamilySpec> table() {
         return TABLE;
+    }
+
+    /**
+     * The capability version of this table: {@code <hash>/<core version>}, for example
+     * {@code 3f9a1c2b7d0e/7.5.0}.
+     *
+     * <p>A store of differences writes it next to the verdicts of {@link #check(DifferenceModelSet)} and
+     * {@link #checkVariantSafe(DifferenceModelSet)}, so that a reader can tell whether those verdicts were reached
+     * by a table it agrees with. The {@link #tableHash() hash} says <em>what</em> the writer could apply, the core
+     * version <em>when</em>: two builds of one development version may hash differently, and a hash alone does not
+     * say which table is newer.</p>
+     *
+     * @return the version, the same in every JVM running the same declarations
+     */
+    public static String version() {
+        return VERSION;
+    }
+
+    /**
+     * The first twelve hexadecimal digits of the SHA-256 of {@link #canonicalText()}: what the table declares,
+     * nothing of how this class evaluates it.
+     */
+    public static String tableHash() {
+        return TABLE_HASH;
+    }
+
+    /**
+     * The declarations of the table as text, independent of the iteration order of its sets: one line per family in
+     * table order ({@code family|handler|updateQuery|subsets|canonicalType|rdfTypes|groups|variantSafety}, every set
+     * sorted, a group as {@code required;optional}, groups separated by commas), then one line per property outside
+     * the in-place route and one per property shared by every variant although its family is not, each sorted.
+     */
+    static String canonicalText() {
+        StringBuilder text = new StringBuilder();
+        for (FamilySpec spec : TABLE) {
+            text.append(String.join("|", spec.family().name(), spec.handler().name(),
+                    String.valueOf(spec.updateQuery()),
+                    sorted(spec.subsets().stream().map(CgmesSubset::getIdentifier)), spec.canonicalType(),
+                    sorted(spec.rdfTypes().stream()),
+                    spec.groups().stream()
+                            .map(group -> sorted(group.required().stream()) + ";" + sorted(group.optional().stream()))
+                            .collect(Collectors.joining(",")),
+                    spec.variantSafety().name())).append('\n');
+        }
+        NOT_DIFFERENCE_UPDATABLE.stream().sorted()
+                .forEach(property -> text.append("notDifferenceUpdatable|").append(property).append('\n'));
+        VARIANT_UNSAFE_PROPERTIES.keySet().stream().sorted()
+                .forEach(property -> text.append("variantUnsafe|").append(property).append('\n'));
+        return text.toString();
+    }
+
+    private static String sorted(Stream<String> values) {
+        return values.sorted().collect(Collectors.joining(" "));
+    }
+
+    private static byte[] sha256(String text) {
+        try {
+            return MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /**
+     * The powsybl-core version this class was built with, from the resource the build filters; {@code unknown} when
+     * it was not filtered (a build outside Maven), which no reader takes for an older version.
+     */
+    private static String coreVersion() {
+        Properties properties = new Properties();
+        try (InputStream in = FastRouteCapabilities.class.getResourceAsStream("capabilities.properties")) {
+            if (in != null) {
+                properties.load(in);
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        String version = properties.getProperty("powsybl.version", "");
+        return version.isBlank() || version.contains("${") ? "unknown" : version.strip();
     }
 
     /** The specification of one family. */

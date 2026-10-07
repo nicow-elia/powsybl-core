@@ -23,6 +23,22 @@
     <description>Conversion between CGMES and IIDM Network definitions</description>
 
     <build>
+        <resources>
+            <!-- The capability version names the core version: the one resource the build fills in -->
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+                <includes>
+                    <include>com/powsybl/cgmes/conversion/diff/capabilities.properties</include>
+                </includes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+                <excludes>
+                    <exclude>com/powsybl/cgmes/conversion/diff/capabilities.properties</exclude>
+                </excludes>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
