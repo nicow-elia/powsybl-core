@@ -270,4 +270,26 @@ class VersionRegistryTest {
             mine.verify();
         }
     }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void aDropIsRefusedWhenAChildWasWrittenAfterTheListing(String backend) {
+        try (RdfDbConnection db = open(backend)) {
+            SnapshotInfo base = root(db, "1");
+            SnapshotCatalog catalog = db.snapshots(S);
+            SnapshotInfo leaf = catalog.putDiff(change(base, SSH, "urn:uuid:reg-leaf", "12.0"), at("2"));
+            List<SnapshotInfo> listing = catalog.snapshots();
+            // Another connection builds on the leaf after the listing the leaf check read
+            SnapshotInfo child = new SnapshotCatalog(db, S).putDiff(change(leaf, SSH, "urn:uuid:reg-child", "13.0"),
+                    at("3"));
+
+            assertThatThrownBy(() -> catalog.dropSnapshots(List.of(leaf), listing))
+                    .isInstanceOf(RdfDbConflictException.class)
+                    .hasMessageContaining(leaf.iri())
+                    .hasMessageContaining("nothing was dropped");
+            assertThat(catalog.snapshots()).containsExactly(base, leaf, child);
+            assertThat(Backends.count(db, S, RdfDbNames.forwardGraph(S, "urn:uuid:reg-leaf"), "?s ?p ?o")).isPositive();
+            catalog.verify();
+        }
+    }
 }

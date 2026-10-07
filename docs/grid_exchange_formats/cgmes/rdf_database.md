@@ -407,7 +407,8 @@ always writable as one — the CGMES 3 Svedala fixture has a space in every file
 Consistency rules, each of which has a test:
 
 * stored data graphs are **immutable**: no API rewrites a forward or reverse graph, and the cache is allowed to
-  trust them without checking;
+  trust them without checking (a `dropTimestamp` followed by a re-ingestion of the same files is the one way an IRI
+  comes back; see the limitations);
 * a difference supersedes exactly one stored model of the same profile, and its CIM namespace is the one of that
   model; a `md:Model.DependentOn` the scenario does not hold is reported as a **warning**, not refused — a steady
   state difference may legitimately depend on an equipment model that was never uploaded;
@@ -976,7 +977,8 @@ read of the registry one more (the append dropped the cache); an edit of
   and 10 / 136 ms.
 * **Timestamps.** Ingesting a new timestamp from files is at most nine requests (the default pin is one query and
   replaced the second head lookup); a rollover of a one-profile timestamp eight (its checkpoint, the flag and the
-  read-back); `changesBetween` three; `dropTimestamp` three. Asserted by `RdfDbRequestCountTest`.
+  read-back); `changesBetween` three; `dropTimestamp` five (the listing, the members, the guarded drop of the nodes
+  and its read-back, the graphs). Asserted by `RdfDbRequestCountTest`.
 * **An archive cutoff costs a read nothing**: it rides in the schema check and is a filter of the query a read
   sends anyway; setting it is two requests (asserted), a refusal one more (the re-read that names the location).
 * Planning, fetching and composing a fifty-difference chain stays well under 100 ms on both backends (40 ms on
@@ -1131,7 +1133,9 @@ DifferenceModelSet changes = RdfDbNetworkLoader.changesBetween(db,
 graphs and their checkpoint copies — when nothing depends on them. A timestamp another one is pinned to is refused,
 naming every dependant, and nothing is dropped: there is no cascade, because dropping a pin would take every
 timestamp ingested against it along. The base timestamp is the tree itself and is never dropped; another day is
-another scenario, cleared as a whole.
+another scenario, cleared as a whole. The nodes go first, in one request guarded on the same check, so a snapshot
+written on the timestamp after the check refuses the drop (`RdfDbConflictException`, nothing dropped); the graphs
+follow, and a failure in between leaves graphs nothing names, never a snapshot without its graphs.
 
 `changesBetween(db, from, to)` answers what a network at `from` has to apply to be at `to`, as one
 `DifferenceModelSet`: the path between the two, its differences fetched, the ones up out of `from` turned round
@@ -1491,6 +1495,12 @@ and 10, while `lv : sep` stayed between 9 and 11 throughout.
   ([Rollovers](#rollovers-roll-over-when-the-equipment-drifts-not-on-churn)) is the caller's loop over
   `lastIngestStatistics()`. A rollover changes the default pin of timestamps written afterwards only; nothing is
   re-pinned, and `dropTimestamp` never cascades.
+
+* **A dropped timestamp re-opens its graph IRIs.** A difference graph is named after the model identifier of the
+  file it was ingested from, so ingesting the same files again after `dropTimestamp` writes the same IRIs. The
+  promise "a graph IRI never changes content" holds per process: another process's `GraphCache` may still hold the
+  dropped graph and serve it for the re-ingested one until it is evicted or the process restarts. Drop and
+  re-ingest with the readers stopped, or under new file identifiers.
 
 * **A CGM is a query, and a flat load.** The IGMs of one day are the trees of the modelling authorities of one
   scenario, and `SnapshotCatalog.assembly(timestamp, version)` names the snapshot of each at one moment;

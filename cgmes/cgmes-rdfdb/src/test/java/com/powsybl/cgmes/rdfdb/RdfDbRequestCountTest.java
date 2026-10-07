@@ -336,6 +336,12 @@ class RdfDbRequestCountTest {
                 ReportNode.NO_OP);
         assertAtMost("writing one difference per variant for 3 variants, version label given", since(mark),
                 8 * 3);
+
+        // Dropping a timestamp nothing depends on: the listing, the members and copies, the guarded drop of the
+        // nodes and its read-back, the graphs
+        mark = BenchMeters.FusekiMeter.mark();
+        catalog.dropTimestamp(Backends.BE, Instant.parse("2014-06-01T18:00:00Z"));
+        assertAtMost("dropping a timestamp", since(mark), 5);
     }
 
     /**

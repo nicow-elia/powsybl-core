@@ -2065,12 +2065,14 @@ public final class SnapshotCatalog {
      * <p>The one primitive that removes snapshots, for {@link VersionRegistry#delete} of a transient version and
      * {@link #dropTimestamp}. Every snapshot must be a leaf &mdash; no snapshot outside the list names it as its
      * parent, by either edge &mdash; and none may be the root of its tree, whose full graphs are the tree's base.
-     * After the check one request drops the graphs and the nodes; the decoded parent states and the cached graphs
-     * of the scenario are forgotten.</p>
+     * After the check one request drops the nodes, guarded on the same check so that a child written since the
+     * listing refuses the drop, a read-back tells which, and one more request drops the graphs; the decoded parent
+     * states and the cached graphs of the scenario are forgotten.</p>
      *
      * @param leaves the snapshots to drop
      * @throws RdfDbException naming the first snapshot that is a root or has a child outside the list; nothing is
-     *                        dropped then
+     *                        dropped then ({@link RdfDbConflictException} when the child was written after the
+     *                        listing)
      */
     void dropSnapshots(List<SnapshotInfo> leaves) {
         if (!leaves.isEmpty()) {
@@ -2078,7 +2080,7 @@ public final class SnapshotCatalog {
         }
     }
 
-    private void dropSnapshots(List<SnapshotInfo> leaves, List<SnapshotInfo> all) {
+    void dropSnapshots(List<SnapshotInfo> leaves, List<SnapshotInfo> all) {
         Set<String> dropped = new LinkedHashSet<>();
         leaves.forEach(leaf -> {
             check(leaf.ref());
@@ -2110,12 +2112,22 @@ public final class SnapshotCatalog {
                 graphs.add(graph);
             }
         });
-        StringBuilder update = new StringBuilder(RdfDbVocabulary.PREFIXES);
-        graphs.forEach(graph -> update.append("DROP SILENT GRAPH ").append(SparqlText.iri(graph)).append(" ; "));
+        // The nodes first, in one request guarded on the leaf check: a child written since the listing keeps them all
         String meta = SparqlText.iri(metaGraph);
-        update.append(nodes.stream().map(node -> "DELETE WHERE { GRAPH " + meta + " { " + SparqlText.iri(node)
-                + " ?p ?o } }").collect(Collectors.joining(" ; ")));
-        sparql().update(update.toString());
+        sparql().update(RdfDbVocabulary.PREFIXES + "DELETE { GRAPH " + meta + " { ?n ?p ?o } } WHERE { GRAPH " + meta
+                + " { VALUES ?n { " + nodes.stream().map(SparqlText::iri).collect(Collectors.joining(" ")) + " } ?n ?p"
+                + " ?o FILTER NOT EXISTS { VALUES ?d { " + values + " } ?c pdb:parent ?d FILTER(?c NOT IN ("
+                + dropped.stream().map(SparqlText::iri).collect(Collectors.joining(", ")) + ")) } } }");
+        if (info(dropped.iterator().next()).isPresent()) {
+            throw new RdfDbConflictException("a snapshot was written on one of " + dropped + " of scenario '"
+                    + scenario + "' since they were listed, and only a snapshot nothing was built on is dropped:"
+                    + " nothing was dropped");
+        }
+        // Then the graphs: a failure in between leaves graphs nothing names, never a snapshot without its graphs
+        if (!graphs.isEmpty()) {
+            sparql().update(RdfDbVocabulary.PREFIXES + graphs.stream().map(graph -> "DROP SILENT GRAPH "
+                    + SparqlText.iri(graph)).collect(Collectors.joining(" ; ")));
+        }
         connection.forgetParentIndexes(scenario);
         connection.invalidateCache(scenario);
         LOGGER.info("Dropped the snapshot(s) {} of scenario '{}' with {} graph(s)", dropped, scenario,
