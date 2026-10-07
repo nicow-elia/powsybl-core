@@ -370,7 +370,7 @@ reader who knows CGMES can read the metadata graph without knowing PowSyBl.
 | `pdb:forwardGraph`, `pdb:reverseGraph` | the named graphs of a difference |
 | `pdb:fastPredicatesOnly` | whether every property the difference states is one an update query reads |
 | `pdb:variantSafe` | whether every statement of the difference writes per-variant IIDM state (see "`pdb:variantSafe`, and stores written before it existed" under variant mode) |
-| `pdb:capabilities` | the capability version of the writer of a difference, `<12 hex>/<core version>` (`FastRouteCapabilities.version()`, e.g. `8638764b83d6/7.5.0-SNAPSHOT`): the first twelve hex digits of the SHA-256 of the canonical text of the capability table, and the powsybl-core version. A reader trusts the two verdicts above when it equals its own or names an older core version, and re-checks the statements otherwise ([integration page](rdf_database_integration.md#import-the-diff-route-the-full-route-and-how-a-refusal-travels-back)) |
+| `pdb:capabilities` | the capability version of the writer of a difference, `<12 hex>/<core version>` (`FastRouteCapabilities.version()`, e.g. `0d197680e6ba/7.5.0-SNAPSHOT`): the first twelve hex digits of the SHA-256 of the canonical text of the capability table, and the powsybl-core version. A reader trusts the two verdicts above when it equals its own or names an older core version, and re-checks the statements otherwise ([integration page](rdf_database_integration.md#import-the-diff-route-the-full-route-and-how-a-refusal-travels-back)) |
 | `pdb:tripleCount` | how many statements the model holds, forward plus reverse for a difference |
 | `pdb:subjectBase` | the IRI prefix the subjects carry before `_<mRID>`, e.g. `http://microgrid/#` |
 | `pdb:cimNamespace` | the CIM namespace the properties live in |
@@ -391,7 +391,7 @@ reader who knows CGMES can read the metadata graph without knowing PowSyBl.
     pdb:forwardGraph <http://powsybl.org/rdfdb/2016-01-01/graph/urn%3Auuid%3Assh-d2/forward> ;
     pdb:reverseGraph <http://powsybl.org/rdfdb/2016-01-01/graph/urn%3Auuid%3Assh-d2/reverse> ;
     md:Model.Supersedes <urn:uuid:ssh-1> ; md:Model.version "3" ; pdb:fastPredicatesOnly true ;
-    pdb:variantSafe true ; pdb:capabilities "8638764b83d6/7.5.0-SNAPSHOT" ; pdb:tripleCount 4 ; pdb:chainDepth 1 .
+    pdb:variantSafe true ; pdb:capabilities "0d197680e6ba/7.5.0-SNAPSHOT" ; pdb:tripleCount 4 ; pdb:chainDepth 1 .
 
 # graph <http://powsybl.org/rdfdb/2016-01-01/graph/urn%3Auuid%3Assh-d2/forward>
 <http://microgridtestconfiguration_bc_be_v2/#_load-1> cim:EnergyConsumer.p "12.5" ; cim:EnergyConsumer.q "5" .

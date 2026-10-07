@@ -17,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -96,14 +97,17 @@ class FastRouteCapabilitiesVersionTest {
     }
 
     /**
-     * The canonical text built from the public table, independently of the production builder: one line per family
-     * in table order, then the properties outside the in-place route, then the properties that are shared by every
-     * variant although their family is not.
+     * The canonical text built from the public table, independently of the production builder: one line per family,
+     * the lines sorted, then the properties outside the in-place route, then the properties that are shared by every
+     * variant although their family is not. Sorted lines and sorted groups make it a function of what is declared,
+     * not of the order of the declarations.
      */
     private static String expectedCanonicalText() {
         StringBuilder text = new StringBuilder();
+        List<String> families = new ArrayList<>();
         for (FamilySpec spec : FastRouteCapabilities.table()) {
-            text.append(spec.family().name()).append('|')
+            StringBuilder line = new StringBuilder();
+            line.append(spec.family().name()).append('|')
                     .append(spec.handler().name()).append('|')
                     .append(spec.updateQuery()).append('|')
                     .append(sorted(spec.subsets().stream().map(CgmesSubset::getIdentifier))).append('|')
@@ -111,9 +115,11 @@ class FastRouteCapabilitiesVersionTest {
                     .append(sorted(spec.rdfTypes().stream())).append('|')
                     .append(spec.groups().stream()
                             .map(group -> sorted(group.required().stream()) + ";" + sorted(group.optional().stream()))
-                            .collect(Collectors.joining(","))).append('|')
+                            .sorted().collect(Collectors.joining(","))).append('|')
                     .append(spec.variantSafety().name()).append('\n');
+            families.add(line.toString());
         }
+        families.stream().sorted().forEach(text::append);
         FastRouteCapabilities.notDifferenceUpdatableProperties().stream().sorted()
                 .forEach(property -> text.append("notDifferenceUpdatable|").append(property).append('\n'));
         FastRouteCapabilities.table().stream()

@@ -438,23 +438,22 @@ public final class FastRouteCapabilities {
     }
 
     /**
-     * The declarations of the table as text, independent of the iteration order of its sets: one line per family in
-     * table order ({@code family|handler|updateQuery|subsets|canonicalType|rdfTypes|groups|variantSafety}, every set
-     * sorted, a group as {@code required;optional}, groups separated by commas), then one line per property outside
-     * the in-place route and one per property shared by every variant although its family is not, each sorted.
+     * The declarations of the table as text, independent of the iteration order of its sets and of the order of the
+     * declarations: one line per family ({@code family|handler|updateQuery|subsets|canonicalType|rdfTypes|groups|
+     * variantSafety}, every set sorted, a group as {@code required;optional}, the groups sorted and separated by
+     * commas), the lines sorted, then one line per property outside the in-place route and one per property shared
+     * by every variant although its family is not, each sorted.
      */
     static String canonicalText() {
         StringBuilder text = new StringBuilder();
-        for (FamilySpec spec : TABLE) {
-            text.append(String.join("|", spec.family().name(), spec.handler().name(),
-                    String.valueOf(spec.updateQuery()),
-                    sorted(spec.subsets().stream().map(CgmesSubset::getIdentifier)), spec.canonicalType(),
-                    sorted(spec.rdfTypes().stream()),
-                    spec.groups().stream()
-                            .map(group -> sorted(group.required().stream()) + ";" + sorted(group.optional().stream()))
-                            .collect(Collectors.joining(",")),
-                    spec.variantSafety().name())).append('\n');
-        }
+        TABLE.stream().map(spec -> String.join("|", spec.family().name(), spec.handler().name(),
+                        String.valueOf(spec.updateQuery()),
+                        sorted(spec.subsets().stream().map(CgmesSubset::getIdentifier)), spec.canonicalType(),
+                        sorted(spec.rdfTypes().stream()),
+                        spec.groups().stream().map(group -> sorted(group.required().stream()) + ";"
+                                + sorted(group.optional().stream())).sorted().collect(Collectors.joining(",")),
+                        spec.variantSafety().name()))
+                .sorted().forEach(line -> text.append(line).append('\n'));
         NOT_DIFFERENCE_UPDATABLE.stream().sorted()
                 .forEach(property -> text.append("notDifferenceUpdatable|").append(property).append('\n'));
         VARIANT_UNSAFE_PROPERTIES.keySet().stream().sorted()
