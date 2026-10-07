@@ -350,8 +350,9 @@ public final class SnapshotCatalog {
         connection.sparql(scenario).update(RdfDbVocabulary.PREFIXES + "DELETE { GRAPH " + graph + " { " + node
                 + " pdb:rev " + SparqlText.integer(rev) + " ; pdb:archiveCutoff ?c ; pdb:archiveLocation ?l } }"
                 + " INSERT { GRAPH " + graph + " { " + node + " pdb:rev " + SparqlText.integer(rev + 1)
-                + (cutoff == null ? "" : " ; pdb:archiveCutoff " + SparqlText.dateTime(cutoff)
-                        + " ; pdb:archiveLocation " + SparqlText.str(location))
+                + (cutoff == null ? "" : " ; " + SparqlText.iri(RdfDbVocabulary.ARCHIVE_CUTOFF) + " "
+                        + SparqlText.dateTime(cutoff) + " ; " + SparqlText.iri(RdfDbVocabulary.ARCHIVE_LOCATION) + " "
+                        + SparqlText.str(location))
                 + " } } WHERE { GRAPH " + graph + " { " + node + " pdb:rev " + SparqlText.integer(rev)
                 + " OPTIONAL { " + node + " pdb:archiveCutoff ?c } OPTIONAL { " + node + " pdb:archiveLocation ?l }"
                 + " } }");

@@ -668,17 +668,20 @@ public final class VersionRegistry {
     private void appendBootstrap(StringBuilder insert, boolean permissive) {
         insert.append(schemaNode).append(" pdb:schema ").append(SparqlText.integer(RdfDbVocabulary.SCHEMA_VERSION))
                 .append(" ; pdb:scenario ").append(SparqlText.str(scenario))
-                .append(" ; pdb:rev ").append(SparqlText.integer(1))
-                .append(" ; pdb:permissive ").append(SparqlText.bool(permissive)).append(" . ");
+                .append(" ; ").append(SparqlText.iri(RdfDbVocabulary.REV)).append(' ').append(SparqlText.integer(1))
+                .append(" ; ").append(SparqlText.iri(RdfDbVocabulary.PERMISSIVE)).append(' ')
+                .append(SparqlText.bool(permissive)).append(" . ");
     }
 
     private void appendNode(StringBuilder insert, String name, int rank, boolean isTransient, ZonedDateTime now) {
-        insert.append(nodeOf(name)).append(" a pdb:Version ; pdb:name ").append(SparqlText.str(name))
+        insert.append(nodeOf(name)).append(" a ").append(SparqlText.iri(RdfDbVocabulary.VERSION_CLASS)).append(" ; ")
+                .append(SparqlText.iri(RdfDbVocabulary.NAME)).append(' ').append(SparqlText.str(name))
                 .append(" ; pdb:rank ").append(SparqlText.integer(rank))
                 .append(" ; pdb:scenario ").append(SparqlText.str(scenario))
                 .append(" ; pdb:created ").append(SparqlText.dateTime(now));
         if (isTransient) {
-            insert.append(" ; pdb:transient ").append(SparqlText.bool(true));
+            insert.append(" ; ").append(SparqlText.iri(RdfDbVocabulary.TRANSIENT)).append(' ')
+                    .append(SparqlText.bool(true));
         }
         insert.append(" . ");
     }
