@@ -142,6 +142,75 @@ final class TimestampFixtures {
         return source;
     }
 
+    // ------------------------------------------------------------------ a custom profile
+
+    /** The file name of the synthetic custom profile: its last token, {@code CFG}, is its profile. */
+    static final String CFG = "MicroGridTestConfiguration_BC_BE_CFG.xml";
+
+    /** The namespace of the invented vocabulary the custom profile speaks. */
+    static final String CFG_NS = "http://example.org/Configuration/1#";
+
+    /**
+     * A custom profile file: a {@code md:FullModel} header of the BE authority and three settings in an invented
+     * namespace, every subject an absolute IRI so that the statements do not depend on the base the file is parsed
+     * against. It declares the CIM namespace without using it, as a CIM extension does, which is what makes a CGMES
+     * data source list it.
+     *
+     * @param modelId the identifier of the model the file carries
+     * @param instant the scenario time it claims
+     * @param value   the value of the first setting, which is what a later timestamp changes
+     * @return the RDF/XML text
+     */
+    static String cfg(String modelId, Instant instant, String value) {
+        return """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                         xmlns:cim="http://iec.ch/TC57/2013/CIM-schema-cim16#"
+                         xmlns:md="http://iec.ch/TC57/61970-552/ModelDescription/1#"
+                         xmlns:cfg="%s">
+                  <md:FullModel rdf:about="%s">
+                    <md:Model.scenarioTime>%s</md:Model.scenarioTime>
+                    <md:Model.created>2014-06-01T09:00:00Z</md:Model.created>
+                    <md:Model.version>1</md:Model.version>
+                    <md:Model.profile>http://example.org/Configuration/1</md:Model.profile>
+                    <md:Model.modelingAuthoritySet>http://elia.be/CGMES/2.4.15</md:Model.modelingAuthoritySet>
+                  </md:FullModel>
+                  <cfg:Setting rdf:about="http://example.org/cfg/setting-1">
+                    <cfg:Setting.name>ramp limit</cfg:Setting.name>
+                    <cfg:Setting.value>%s</cfg:Setting.value>
+                  </cfg:Setting>
+                  <cfg:Setting rdf:about="http://example.org/cfg/setting-2">
+                    <cfg:Setting.name>reserve share</cfg:Setting.name>
+                    <cfg:Setting.value>0.25</cfg:Setting.value>
+                  </cfg:Setting>
+                  <cfg:Setting rdf:about="http://example.org/cfg/setting-3">
+                    <cfg:Setting.next rdf:resource="http://example.org/cfg/setting-1"/>
+                  </cfg:Setting>
+                </rdf:RDF>
+                """.formatted(CFG_NS, modelId, instant, value);
+    }
+
+    /**
+     * A copy of a data source with one more file.
+     *
+     * @param base    the files to copy
+     * @param name    the name of the added file
+     * @param content its text
+     * @return the copy
+     */
+    static ReadOnlyDataSource with(ReadOnlyDataSource base, String name, String content) {
+        MemDataSource source = new MemDataSource();
+        try {
+            for (String file : base.listNames(".*")) {
+                put(source, file, read(base, file));
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        put(source, name, content);
+        return source;
+    }
+
     // ------------------------------------------------------------------ the edits
 
     private static String scaleConsumers(String ssh, int loads) {

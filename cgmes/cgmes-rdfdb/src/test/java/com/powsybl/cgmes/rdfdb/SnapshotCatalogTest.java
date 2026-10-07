@@ -49,8 +49,8 @@ class SnapshotCatalogTest {
     private static final String S = "2016-01-01";
     private static final String OTHER = "other";
     private static final String CIM16 = "http://iec.ch/TC57/2013/CIM-schema-cim16#";
-    private static final CgmesSubset SSH = CgmesSubset.STEADY_STATE_HYPOTHESIS;
-    private static final CgmesSubset EQ = CgmesSubset.EQUIPMENT;
+    private static final String SSH = Profiles.SSH;
+    private static final String EQ = Profiles.EQ;
     private static final Instant NOON = Instant.parse("2014-06-01T12:30:00Z");
 
     private static RdfDbConnection open(String backend) {
@@ -74,8 +74,8 @@ class SnapshotCatalogTest {
     }
 
     /** A difference of one profile superseding what the given snapshot states for it. */
-    static DifferenceModelSet change(SnapshotInfo parent, CgmesSubset subset, String id, String value) {
-        DifferenceModelHeader header = DifferenceModelHeader.builder(id, subset, CIM16)
+    static DifferenceModelSet change(SnapshotInfo parent, String subset, String id, String value) {
+        DifferenceModelHeader header = DifferenceModelHeader.builder(id, Profiles.subset(subset).orElseThrow(), CIM16)
                 .supersedes(List.of(parent.state().get(subset)))
                 .profiles(List.of("http://entsoe.eu/CIM/SteadyStateHypothesis/1/1"))
                 .build();
@@ -104,7 +104,7 @@ class SnapshotCatalogTest {
             assertThat(root.isRoot()).isTrue();
             assertThat(root.edge()).isEqualTo(SnapshotInfo.EdgeKind.NONE);
             assertThat(root.timestampRoot()).isEqualTo(root.iri());
-            assertThat(root.state()).containsKeys(EQ, SSH, CgmesSubset.TOPOLOGY, CgmesSubset.STATE_VARIABLES);
+            assertThat(root.state()).containsKeys(EQ, SSH, Profiles.TP, Profiles.SV);
             assertThat(root.profiles()).isEqualTo(root.state().keySet());
             assertThat(root.state()).isEqualTo(root.fullModels());
             assertThat(root.members()).hasSameSizeAs(root.state().values());
@@ -150,7 +150,7 @@ class SnapshotCatalogTest {
             SnapshotInfo full = db.snapshots(OTHER).putFull(cgmesFull(), null,
                     SnapshotRef.latest(OTHER, CGMES_FULL_SSH), null, params(), ReportNode.NO_OP);
             assertThat(full.modellingAuthority()).isEqualTo(CGMES_FULL_SSH);
-            assertThat(full.profiles()).contains(EQ, SSH, CgmesSubset.TOPOLOGY, CgmesSubset.STATE_VARIABLES);
+            assertThat(full.profiles()).contains(EQ, SSH, Profiles.TP, Profiles.SV);
             db.snapshots(OTHER).verify();
         }
     }
@@ -169,7 +169,7 @@ class SnapshotCatalogTest {
             assertThat(db.snapshots(S).snapshots()).isEmpty();
             // The state variables of another party never decide: without SSH in the projection, EQ does
             SnapshotInfo eqTp = db.snapshots(S).putFull(cgmesFull(), null, SnapshotRef.latest(S, null),
-                    Set.of(EQ, CgmesSubset.TOPOLOGY, CgmesSubset.STATE_VARIABLES), params(), ReportNode.NO_OP);
+                    Set.of(EQ, Profiles.TP, Profiles.SV), params(), ReportNode.NO_OP);
             assertThat(eqTp.modellingAuthority()).isEqualTo("powsybl.org");
         }
     }
@@ -213,9 +213,9 @@ class SnapshotCatalogTest {
                         CgmesStatement.literal(Changes.LOAD_ID, "EnergyConsumer", "EnergyConsumer.p", "13.0"))));
     }
 
-    private static DifferenceModel authored(SnapshotInfo parent, CgmesSubset subset, String id, String authority,
+    private static DifferenceModel authored(SnapshotInfo parent, String subset, String id, String authority,
                                             CgmesStatement forward) {
-        DifferenceModelHeader header = DifferenceModelHeader.builder(id, subset, CIM16)
+        DifferenceModelHeader header = DifferenceModelHeader.builder(id, Profiles.subset(subset).orElseThrow(), CIM16)
                 .supersedes(List.of(parent.state().get(subset)))
                 .modelingAuthoritySet(authority)
                 .build();
@@ -228,8 +228,8 @@ class SnapshotCatalogTest {
         try (RdfDbConnection db = open(backend)) {
             SnapshotInfo be = root(db, S, null);
             // State variables recorded from a merged model: the merging agent's header must not pick the tree
-            CgmesSubset sv = CgmesSubset.STATE_VARIABLES;
-            DifferenceModelHeader header = DifferenceModelHeader.builder("urn:uuid:sv-merged", sv, CIM16)
+            String sv = Profiles.SV;
+            DifferenceModelHeader header = DifferenceModelHeader.builder("urn:uuid:sv-merged", CgmesSubset.STATE_VARIABLES, CIM16)
                     .supersedes(List.of(be.state().get(sv)))
                     .modelingAuthoritySet("http://merging.agent/CGMES")
                     .build();
@@ -303,12 +303,12 @@ class SnapshotCatalogTest {
             assertThat(nl.version()).isEqualTo("1");
             assertThat(catalog.modellingAuthorities()).containsExactly(BE, NL);
             // The second root links the stored boundary instead of uploading it again
-            assertThat(nl.state().get(CgmesSubset.EQUIPMENT_BOUNDARY))
-                    .isEqualTo(be.state().get(CgmesSubset.EQUIPMENT_BOUNDARY)).isNotNull();
-            assertThat(nl.state().get(CgmesSubset.TOPOLOGY_BOUNDARY))
-                    .isEqualTo(be.state().get(CgmesSubset.TOPOLOGY_BOUNDARY)).isNotNull();
+            assertThat(nl.state().get(Profiles.EQ_BD))
+                    .isEqualTo(be.state().get(Profiles.EQ_BD)).isNotNull();
+            assertThat(nl.state().get(Profiles.TP_BD))
+                    .isEqualTo(be.state().get(Profiles.TP_BD)).isNotNull();
             assertThat(nl.state().get(EQ)).isNotEqualTo(be.state().get(EQ));
-            assertThat(db.catalog(S).model(be.state().get(CgmesSubset.EQUIPMENT_BOUNDARY)).orElseThrow()
+            assertThat(db.catalog(S).model(be.state().get(Profiles.EQ_BD)).orElseThrow()
                     .isBoundary()).isTrue();
             // Each authority is its own tree: versions and heads never mix
             SnapshotInfo be2 = catalog.putDiff(change(be, SSH, "urn:uuid:ssh-be", "12.0"), SnapshotRef.latest(S, BE));

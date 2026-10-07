@@ -62,7 +62,7 @@ public final class RdfDbVocabulary {
     /** Whether the node is a full model or a difference, as {@link #FULL} or {@link #DIFF}. */
     public static final String KIND = NS + "kind";
 
-    /** The CGMES profile of the model, as {@code CgmesSubset.getIdentifier()}: {@code EQ}, {@code SSH}, … */
+    /** The CGMES profile of the model, a {@link Profiles} name: {@code EQ}, {@code SSH}, … or a custom one */
     public static final String SUBSET = NS + "subset";
 
     /** The named graph holding the statements of a full model. */

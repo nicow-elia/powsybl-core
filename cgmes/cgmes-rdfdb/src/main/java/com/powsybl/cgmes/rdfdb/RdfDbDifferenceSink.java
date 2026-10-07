@@ -10,7 +10,6 @@ package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conversion.diff.CgmesDiffImport;
 import com.powsybl.cgmes.conversion.diff.FastRouteCapabilities;
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
@@ -106,8 +105,8 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
      */
     record SnapshotWrite(String iri, String modellingAuthority, VersionRegistry.Resolved version, Instant timestamp,
                          String parent,
-                         String edge, int depth, Map<CgmesSubset, String> state, String timestampRoot,
-                         Map<CgmesSubset, String> parentStates) {
+                         String edge, int depth, Map<String, String> state, String timestampRoot,
+                         Map<String, String> parentStates) {
 
         /**
          * A root snapshot: no parent, and full models of every profile.
@@ -120,7 +119,7 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
          * @return the write
          */
         static SnapshotWrite root(String iri, String modellingAuthority, VersionRegistry.Resolved version,
-                                  Instant timestamp, Map<CgmesSubset, String> state) {
+                                  Instant timestamp, Map<String, String> state) {
             return new SnapshotWrite(iri, modellingAuthority, version, timestamp, null, null, 0, state, iri,
                     Map.of());
         }
@@ -326,8 +325,8 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
      * about them is already here.</p>
      */
     private void report(List<Planned> planned, Set<String> known) {
-        planned.forEach(p -> RdfDbReports.storedDifferenceReport(reportNode, p.header.id(), p.header.subset(),
-                scenario));
+        planned.forEach(p -> RdfDbReports.storedDifferenceReport(reportNode, p.header.id(),
+                Profiles.of(p.header.subset()), scenario));
         for (Planned p : planned) {
             p.header.dependentOn().stream().filter(id -> !known.contains(id))
                     .forEach(id -> RdfDbReports.dependencyNotStoredReport(reportNode, p.header.id(), id, scenario));
@@ -391,7 +390,7 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
             checkBase(header, baseId, base);
             if (modelChainMustStayLinear()) {
                 checkNoSuccessor(header, baseId, check.successors().getOrDefault(baseId, List.of()).stream()
-                        .filter(successor -> successor.subset() == header.subset())
+                        .filter(successor -> Profiles.of(header.subset()).equals(successor.subset()))
                         .map(ModelCatalog.Successor::id).toList());
             }
             if (check.models().containsKey(header.id())) {
@@ -423,10 +422,10 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
             throw new RdfDbConflictException("difference model " + header.id() + " supersedes " + baseId
                     + ", which is not stored in scenario '" + scenario + "'" + where);
         }
-        if (base.subset() != header.subset()) {
+        if (!base.subset().equals(Profiles.of(header.subset()))) {
             throw new RdfDbConflictException("difference model " + header.id() + " describes the "
-                    + header.subset().getIdentifier() + " profile but supersedes " + baseId + ", which describes the "
-                    + base.subset().getIdentifier() + " profile");
+                    + Profiles.of(header.subset()) + " profile but supersedes " + baseId + ", which describes the "
+                    + base.subset() + " profile");
         }
     }
 
@@ -434,7 +433,7 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
         if (!successors.isEmpty()) {
             throw new RdfDbConflictException("difference model " + header.id() + " supersedes " + baseId
                     + ", which is already superseded by " + successors + " in scenario '" + scenario + "': the "
-                    + header.subset().getIdentifier() + " chain of a scenario is linear, so load the head and"
+                    + Profiles.of(header.subset()) + " chain of a scenario is linear, so load the head and"
                     + " re-record, or address the state you want with a SnapshotRef");
         }
     }
@@ -507,7 +506,7 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
             i++;
             String id = SparqlText.iri(p.header.id());
             String base = SparqlText.iri(p.base.id());
-            String subset = SparqlText.str(p.header.subset().getIdentifier());
+            String subset = SparqlText.str(Profiles.of(p.header.subset()));
             insert.append(" FILTER NOT EXISTS { GRAPH ").append(meta).append(" { ").append(id)
                     .append(" ?p").append(i).append(" ?o").append(i).append(" } }")
                     .append(" FILTER EXISTS { GRAPH ").append(meta).append(" { ").append(base)
@@ -543,7 +542,7 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
                 .append(SparqlText.iri(RdfDbVocabulary.KIND)).append(' ')
                 .append(SparqlText.iri(RdfDbVocabulary.DIFF)).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.SUBSET)).append(' ')
-                .append(SparqlText.str(header.subset().getIdentifier())).append(" ; ")
+                .append(SparqlText.str(Profiles.of(header.subset()))).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.SCENARIO)).append(' ')
                 .append(SparqlText.str(scenario)).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.FORWARD_GRAPH)).append(' ')

@@ -8,7 +8,6 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
@@ -158,8 +157,8 @@ public final class RdfDbDiffSource {
      * @param headers the header the composed model of each profile is to carry
      * @return the composed set, profiles whose chain is empty left out
      */
-    public static DifferenceModelSet compose(Map<CgmesSubset, List<DifferenceModel>> chains,
-                                             Map<CgmesSubset, DifferenceModelHeader> headers) {
+    public static DifferenceModelSet compose(Map<String, List<DifferenceModel>> chains,
+                                             Map<String, DifferenceModelHeader> headers) {
         Objects.requireNonNull(chains);
         Objects.requireNonNull(headers);
         List<DifferenceModel> composed = new ArrayList<>();
@@ -169,7 +168,7 @@ public final class RdfDbDiffSource {
             }
             DifferenceModelHeader header = headers.get(subset);
             if (header == null) {
-                throw new RdfDbException("No header for the composed " + subset.getIdentifier() + " difference");
+                throw new RdfDbException("No header for the composed " + subset + " difference");
             }
             composed.add(chain.size() == 1 && chain.get(0).header().equals(header)
                     ? chain.get(0) : DifferenceModel.compose(chain, header));

@@ -9,11 +9,11 @@
 package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conversion.diff.CgmesDiffImport;
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.iidm.network.NetworkFactory;
 
-import java.util.EnumSet;
+import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * How far an update may go to bring a network to a stored state.
@@ -37,8 +37,8 @@ public final class RdfDbUpdateOptions {
     private boolean allowFullReload = true;
     private int maxDiffChain = DEFAULT_MAX_DIFF_CHAIN;
     private CgmesDiffImport.Options diffOptions = new CgmesDiffImport.Options();
-    private EnumSet<CgmesSubset> profiles =
-            EnumSet.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS);
+    private Set<String> profiles =
+            Profiles.set(List.of(Profiles.EQ, Profiles.SSH));
     private NetworkFactory networkFactory;
     private String targetVariant;
     private VariantFallback variantFallback = VariantFallback.REFUSE;
@@ -178,21 +178,23 @@ public final class RdfDbUpdateOptions {
      *
      * @param profiles the profiles
      * @return this
+     * @throws RdfDbException if the set is empty or a name is not a profile name ({@link Profiles#check})
      */
-    public RdfDbUpdateOptions setProfiles(EnumSet<CgmesSubset> profiles) {
+    public RdfDbUpdateOptions setProfiles(Set<String> profiles) {
         Objects.requireNonNull(profiles);
         if (profiles.isEmpty()) {
             throw new RdfDbException("An update looks at at least one profile");
         }
-        this.profiles = EnumSet.copyOf(profiles);
+        profiles.forEach(Profiles::check);
+        this.profiles = Profiles.set(profiles);
         return this;
     }
 
     /**
      * @return the profiles an update looks at
      */
-    public EnumSet<CgmesSubset> getProfiles() {
-        return EnumSet.copyOf(profiles);
+    public Set<String> getProfiles() {
+        return Profiles.set(profiles);
     }
 
     /**
@@ -255,7 +257,7 @@ public final class RdfDbUpdateOptions {
         copy.allowFullReload = allowFullReload;
         copy.maxDiffChain = maxDiffChain;
         copy.diffOptions = diffOptions.copy();
-        copy.profiles = EnumSet.copyOf(profiles);
+        copy.profiles = Profiles.set(profiles);
         copy.networkFactory = networkFactory;
         copy.targetVariant = targetVariant;
         copy.variantFallback = variantFallback;

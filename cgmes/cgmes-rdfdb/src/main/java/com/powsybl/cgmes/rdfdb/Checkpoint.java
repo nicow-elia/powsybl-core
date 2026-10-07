@@ -8,12 +8,10 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
-import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -63,11 +61,11 @@ public final class Checkpoint {
             return info;
         }
         MaterializationPlan plan = db.versionGraph(ref.scenario()).materialization(info.iri());
-        Map<CgmesSubset, List<UpdatePlan.DiffStep>> steps = new EnumMap<>(CgmesSubset.class);
-        Map<CgmesSubset, String> nodes = new EnumMap<>(CgmesSubset.class);
+        Map<String, List<UpdatePlan.DiffStep>> steps = Profiles.map();
+        Map<String, String> nodes = Profiles.map();
         plan.steps().forEach(step -> steps.computeIfAbsent(step.model().subset(), subset -> {
             nodes.put(subset, RdfDbNames.materialized(ref.scenario(), info.modellingAuthority(), info.timestamp(),
-                    info.version(), subset.getIdentifier()));
+                    info.version(), subset));
             return new ArrayList<>();
         }).add(step));
         if (steps.isEmpty()) {
@@ -173,7 +171,7 @@ public final class Checkpoint {
     // ------------------------------------------------------------------ the metadata operation
 
     private static String metadata(String scenario, SnapshotInfo info, MaterializationPlan plan,
-                                   Map<CgmesSubset, String> nodes) {
+                                   Map<String, String> nodes) {
         String meta = SparqlText.iri(RdfDbNames.metaGraph(scenario));
         StringBuilder update = new StringBuilder(RdfDbVocabulary.PREFIXES)
                 .append("INSERT DATA { GRAPH ").append(meta).append(" { ");
@@ -187,7 +185,7 @@ public final class Checkpoint {
                 .append(SparqlText.iri(RdfDbVocabulary.SCENARIO)).append(' ')
                 .append(SparqlText.str(scenario)).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.SUBSET)).append(' ')
-                .append(SparqlText.str(subset.getIdentifier())).append(" ; ")
+                .append(SparqlText.str(subset)).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.OF_MODEL)).append(' ')
                 .append(SparqlText.iri(plan.targetState().get(subset))).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.SNAPSHOT)).append(' ')

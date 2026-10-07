@@ -8,7 +8,6 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
 import org.eclipse.rdf4j.model.Literal;
 import org.eclipse.rdf4j.model.Value;
 
@@ -18,7 +17,6 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -166,17 +164,14 @@ final class SnapshotRows {
                 .thenComparingInt(SnapshotInfo::rank);
     }
 
-    static CgmesSubset subsetOf(Value value) {
-        if (value == null) {
-            return null;
-        }
-        String identifier = value.stringValue();
-        for (CgmesSubset subset : CgmesSubset.values()) {
-            if (subset.getIdentifier().equals(identifier)) {
-                return subset;
-            }
-        }
-        return null;
+    /**
+     * The profile a {@code pdb:subset} binding names: any profile name, standard or custom.
+     *
+     * @return the name, or {@code null} when the binding is absent or not a profile name (a node of an older
+     *         writer that recorded an unrecognised file as {@code "unknown"})
+     */
+    static String profileOf(Value value) {
+        return value != null && Profiles.isName(value.stringValue()) ? value.stringValue() : null;
     }
 
     static boolean booleanOf(Value value) {
@@ -246,8 +241,8 @@ final class SnapshotRows {
         private boolean fast = true;
         private ZonedDateTime created;
         private final List<String> members = new ArrayList<>();
-        private final Map<CgmesSubset, String> state = new EnumMap<>(CgmesSubset.class);
-        private final Map<CgmesSubset, String> full = new EnumMap<>(CgmesSubset.class);
+        private final Map<String, String> state = Profiles.map();
+        private final Map<String, String> full = Profiles.map();
         private boolean isSnapshot;
 
         Builder(String iri) {
@@ -306,8 +301,8 @@ final class SnapshotRows {
             return flag == null || booleanOf(flag);
         }
 
-        private static void put(Map<CgmesSubset, String> map, Value object, Value subsetValue) {
-            CgmesSubset subset = subsetOf(subsetValue);
+        private static void put(Map<String, String> map, Value object, Value subsetValue) {
+            String subset = profileOf(subsetValue);
             if (subset != null) {
                 map.put(subset, object.stringValue());
             }

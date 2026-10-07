@@ -92,11 +92,11 @@ class RdfDbDifferenceSinkTest {
                 assertThat(model.subjectBase()).endsWith("#");
             });
             assertThat(models.stream().map(StoredModel::subset).toList())
-                    .contains(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS,
-                            CgmesSubset.TOPOLOGY, CgmesSubset.STATE_VARIABLES);
+                    .contains(Profiles.EQ, Profiles.SSH,
+                            Profiles.TP, Profiles.SV);
             // The subject base is the one the instance files were parsed with, so a statement written with it
             // addresses the very objects the graphs hold
-            StoredModel ssh = db.catalog(S).full(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow();
+            StoredModel ssh = db.catalog(S).full(Profiles.SSH).orElseThrow();
             assertThat(db.sparql(S).ask("ASK { GRAPH <" + ssh.graph() + "> { <" + ssh.subjectBase() + "_"
                     + Changes.LOAD_ID + "> ?p ?o } }")).isTrue();
         }
@@ -121,10 +121,10 @@ class RdfDbDifferenceSinkTest {
     void writesForwardReverseAndMetadataInOneRequest(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network network = load(db, S);
-            StoredModel sshBefore = db.catalog(S).full(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow();
+            StoredModel sshBefore = db.catalog(S).full(Profiles.SSH).orElseThrow();
 
             RdfDbExport.Result result = exportLoadChange(network, db, S);
-            StoredModel diff = result.get(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow();
+            StoredModel diff = result.get(Profiles.SSH).orElseThrow();
 
             assertThat(diff.kind()).isEqualTo(StoredModel.Kind.DIFF);
             assertThat(diff.chainDepth()).isEqualTo(1);
@@ -139,7 +139,7 @@ class RdfDbDifferenceSinkTest {
             assertThat(forward).isPositive();
             assertThat(reverse).isPositive();
             assertThat(forward + reverse).isEqualTo(diff.tripleCount());
-            assertThat(db.catalog(S).head(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow().id())
+            assertThat(db.catalog(S).head(Profiles.SSH).orElseThrow().id())
                     .isEqualTo(diff.id());
         }
     }
@@ -173,12 +173,12 @@ class RdfDbDifferenceSinkTest {
     void senderIdentityAdvancesAfterExportSoASecondExportChains(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             Network network = load(db, S);
-            StoredModel first = exportLoadChange(network, db, S).get(CgmesSubset.STEADY_STATE_HYPOTHESIS)
+            StoredModel first = exportLoadChange(network, db, S).get(Profiles.SSH)
                     .orElseThrow();
-            assertThat(NetworkIdentity.modelIds(network).get(CgmesSubset.STEADY_STATE_HYPOTHESIS))
+            assertThat(NetworkIdentity.modelIds(network).get(Profiles.SSH))
                     .isEqualTo(first.id());
 
-            StoredModel second = exportLoadChange(network, db, S).get(CgmesSubset.STEADY_STATE_HYPOTHESIS)
+            StoredModel second = exportLoadChange(network, db, S).get(Profiles.SSH)
                     .orElseThrow();
             assertThat(second.supersedes()).containsExactly(first.id());
             assertThat(second.chainDepth()).isEqualTo(2);
@@ -200,10 +200,10 @@ class RdfDbDifferenceSinkTest {
             RdfDbExport.Result result =
                     RdfDbExport.export(network, events, db, S, new CgmesDiffExport.ExportOptions());
             assertThat(result.stored()).hasSize(2);
-            assertThat(result.get(CgmesSubset.EQUIPMENT)).isPresent();
-            assertThat(result.get(CgmesSubset.STEADY_STATE_HYPOTHESIS)).isPresent();
-            assertThat(db.catalog(S).head(CgmesSubset.EQUIPMENT).orElseThrow().id())
-                    .isEqualTo(result.get(CgmesSubset.EQUIPMENT).orElseThrow().id());
+            assertThat(result.get(Profiles.EQ)).isPresent();
+            assertThat(result.get(Profiles.SSH)).isPresent();
+            assertThat(db.catalog(S).head(Profiles.EQ).orElseThrow().id())
+                    .isEqualTo(result.get(Profiles.EQ).orElseThrow().id());
         }
     }
 
@@ -225,7 +225,7 @@ class RdfDbDifferenceSinkTest {
     @MethodSource("backends")
     void rejectsMultipleSupersedes(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
-            String base = db.catalog(S).full(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow().id();
+            String base = db.catalog(S).full(Profiles.SSH).orElseThrow().id();
             DifferenceModelSet set = handMade("urn:uuid:diff-2", List.of(base, "urn:uuid:other"));
             assertThatThrownBy(() -> new RdfDbDifferenceSink(db, S).accept(set))
                     .isInstanceOf(RdfDbConflictException.class)
@@ -237,7 +237,7 @@ class RdfDbDifferenceSinkTest {
     @MethodSource("backends")
     void rejectsDuplicateId(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
-            StoredModel base = db.catalog(S).full(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow();
+            StoredModel base = db.catalog(S).full(Profiles.SSH).orElseThrow();
             DifferenceModelSet set = handMade("urn:uuid:diff-3", List.of(base.id()));
             new RdfDbDifferenceSink(db, S).accept(set);
             // The same identifier again, on a base that is free now, so only the duplicate rule can refuse it
@@ -252,7 +252,7 @@ class RdfDbDifferenceSinkTest {
     @MethodSource("backends")
     void rejectsSecondSuccessorAndNamesIt(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
-            StoredModel base = db.catalog(S).full(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow();
+            StoredModel base = db.catalog(S).full(Profiles.SSH).orElseThrow();
             new RdfDbDifferenceSink(db, S).accept(handMade("urn:uuid:diff-a", List.of(base.id())));
             DifferenceModelSet fork = handMade("urn:uuid:diff-b", List.of(base.id()));
             assertThatThrownBy(() -> new RdfDbDifferenceSink(db, S).accept(fork))
@@ -266,7 +266,7 @@ class RdfDbDifferenceSinkTest {
     @MethodSource("backends")
     void rejectsCimNamespaceMismatch(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
-            StoredModel base = db.catalog(S).full(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow();
+            StoredModel base = db.catalog(S).full(Profiles.SSH).orElseThrow();
             DifferenceModelHeader header = DifferenceModelHeader
                     .builder("urn:uuid:diff-ns", CgmesSubset.STEADY_STATE_HYPOTHESIS, "http://iec.ch/TC57/CIM100#")
                     .version(2).supersedes(List.of(base.id())).build();
@@ -287,7 +287,7 @@ class RdfDbDifferenceSinkTest {
             db.clear(third);
             db.loadCgmes(third, CgmesConformity1Catalog.miniBusBranch().dataSource(), null, params(),
                     ReportNode.NO_OP);
-            String beBase = db.catalog(S).full(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow().id();
+            String beBase = db.catalog(S).full(Profiles.SSH).orElseThrow().id();
             DifferenceModelSet set = handMade("urn:uuid:diff-cross", List.of(beBase));
             assertThatThrownBy(() -> new RdfDbDifferenceSink(db, third).accept(set))
                     .isInstanceOf(RdfDbConflictException.class)
@@ -307,8 +307,8 @@ class RdfDbDifferenceSinkTest {
             exportLoadChange(network, db, S);
 
             assertThat(db.catalog(OTHER).models()).allMatch(model -> model.kind() == StoredModel.Kind.FULL);
-            assertThat(db.catalog(OTHER).head(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow().id())
-                    .isEqualTo(db.catalog(OTHER).full(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow().id());
+            assertThat(db.catalog(OTHER).head(Profiles.SSH).orElseThrow().id())
+                    .isEqualTo(db.catalog(OTHER).full(Profiles.SSH).orElseThrow().id());
             assertThat(db.catalog(OTHER).models()).allMatch(model -> OTHER.equals(model.scenario()));
             assertThat(db.catalog(S).models()).allMatch(model -> S.equals(model.scenario()));
             assertThat(db.scenarios()).contains(S, OTHER);
@@ -377,7 +377,7 @@ class RdfDbDifferenceSinkTest {
     @MethodSource("backends")
     void aLargeSetUsesTwoPhasesAndReadsBackEqual(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
-            StoredModel base = db.catalog(S).full(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow();
+            StoredModel base = db.catalog(S).full(Profiles.SSH).orElseThrow();
             int statements = RdfDbDifferenceSink.SINGLE_REQUEST_MAX_STATEMENTS / 2 + 500;
             List<CgmesStatement> forward = new ArrayList<>();
             List<CgmesStatement> reverse = new ArrayList<>();
@@ -404,7 +404,7 @@ class RdfDbDifferenceSinkTest {
     @MethodSource("backends")
     void aLargeSetWithAnEmptyReverseUsesTwoPhasesAndReadsBackEqual(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
-            StoredModel base = db.catalog(S).full(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow();
+            StoredModel base = db.catalog(S).full(Profiles.SSH).orElseThrow();
             List<CgmesStatement> forward = new ArrayList<>();
             for (int i = 0; i <= RdfDbDifferenceSink.SINGLE_REQUEST_MAX_STATEMENTS; i++) {
                 forward.add(CgmesStatement.literal("synthetic-" + i, null, "EnergyConsumer.p", String.valueOf(i)));
@@ -425,7 +425,7 @@ class RdfDbDifferenceSinkTest {
     @MethodSource("backends")
     void aLostRaceInTheTwoPhaseWriteLeavesNoOrphanGraph(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
-            StoredModel base = db.catalog(S).full(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow();
+            StoredModel base = db.catalog(S).full(Profiles.SSH).orElseThrow();
             int statements = RdfDbDifferenceSink.SINGLE_REQUEST_MAX_STATEMENTS / 2 + 500;
             List<CgmesStatement> forward = new ArrayList<>();
             List<CgmesStatement> reverse = new ArrayList<>();

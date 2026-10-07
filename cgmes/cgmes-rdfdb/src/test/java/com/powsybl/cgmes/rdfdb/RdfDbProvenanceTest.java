@@ -10,7 +10,6 @@ package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
 import com.powsybl.cgmes.conversion.CgmesImport;
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.NetworkFactory;
@@ -22,6 +21,7 @@ import java.util.Properties;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * A network that came out of a database remembers where from, and does not carry that into a file.
@@ -54,7 +54,7 @@ class RdfDbProvenanceTest {
             assertThat(provenance.loadedAt()).isAfterOrEqualTo(before);
             assertThat(provenance.graphs()).isNotEmpty();
             assertThat(provenance.graphs()).allSatisfy(g -> assertEquals("2026-09-18", g.scenario()));
-            assertThat(provenance.graphs().stream().map(GraphInfo::subset)).contains(CgmesSubset.EQUIPMENT);
+            assertThat(provenance.graphs().stream().map(GraphInfo::profile)).contains(Profiles.EQ);
 
             // Not serialised: the XIIDM of this network must not mention it
             assertThat(Networks.xiidmString(network)).doesNotContain(RdfDbProvenance.NAME);
@@ -63,13 +63,13 @@ class RdfDbProvenanceTest {
 
     @Test
     void theSubsetOfAContextNameIsReadTheWayTheConversionReadsIt() {
-        assertEquals(CgmesSubset.EQUIPMENT, GraphInfo.subsetOf("contexts:X_EQ_001.xml"));
-        assertEquals(CgmesSubset.EQUIPMENT_BOUNDARY, GraphInfo.subsetOf("contexts:X_EQ_BD_001.xml"));
-        assertEquals(CgmesSubset.TOPOLOGY, GraphInfo.subsetOf("contexts:X_TP_001.xml"));
-        assertEquals(CgmesSubset.TOPOLOGY_BOUNDARY, GraphInfo.subsetOf("contexts:X_TP_BD_001.xml"));
-        assertEquals(CgmesSubset.STEADY_STATE_HYPOTHESIS, GraphInfo.subsetOf("contexts:X_SSH_001.xml"));
-        assertEquals(CgmesSubset.STATE_VARIABLES, GraphInfo.subsetOf("contexts:X_SV_001.xml"));
-        assertEquals(CgmesSubset.DIAGRAM_LAYOUT, GraphInfo.subsetOf("contexts:X_DL_001.xml"));
-        assertEquals(CgmesSubset.UNKNOWN, GraphInfo.subsetOf("contexts:something-else.xml"));
+        assertEquals(Profiles.EQ, Profiles.ofContextName("contexts:X_EQ_001.xml"));
+        assertEquals(Profiles.EQ_BD, Profiles.ofContextName("contexts:X_EQ_BD_001.xml"));
+        assertEquals(Profiles.TP, Profiles.ofContextName("contexts:X_TP_001.xml"));
+        assertEquals(Profiles.TP_BD, Profiles.ofContextName("contexts:X_TP_BD_001.xml"));
+        assertEquals(Profiles.SSH, Profiles.ofContextName("contexts:X_SSH_001.xml"));
+        assertEquals(Profiles.SV, Profiles.ofContextName("contexts:X_SV_001.xml"));
+        assertEquals(Profiles.DL, Profiles.ofContextName("contexts:X_DL_001.xml"));
+        assertTrue(Profiles.find("contexts:something-else.xml").isEmpty());
     }
 }

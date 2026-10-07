@@ -10,7 +10,6 @@ package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.cgmes.conversion.TripleStoreNetworkLoader;
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
@@ -36,8 +35,6 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
-import java.util.EnumMap;
-import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -100,12 +97,12 @@ public final class SnapshotCatalog {
     private static final int REGISTRY_RETRIES = 3;
 
     /** The profiles whose stated modelling authority decides the authority of a snapshot that names none. */
-    private static final Set<CgmesSubset> DECIDING_PROFILES =
-            EnumSet.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS);
+    private static final Set<String> DECIDING_PROFILES =
+            Set.of(Profiles.EQ, Profiles.SSH);
 
     /** What {@link #putAsDiff} compares when the caller names no profile: the two that carry a schedule. */
-    private static final Set<CgmesSubset> DEFAULT_COMPARED =
-            Set.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS);
+    private static final Set<String> DEFAULT_COMPARED =
+            Set.of(Profiles.EQ, Profiles.SSH);
 
     private final RdfDbConnection connection;
     private final String scenario;
@@ -516,7 +513,7 @@ public final class SnapshotCatalog {
         if (provenance != null && provenance.snapshot().isPresent()) {
             return info(provenance.snapshot().get());
         }
-        Map<CgmesSubset, String> ids = NetworkIdentity.modelIds(network);
+        Map<String, String> ids = NetworkIdentity.modelIds(network);
         return byState(ids);
     }
 
@@ -526,8 +523,8 @@ public final class SnapshotCatalog {
      * @param ids the model identifier per profile a network holds
      * @return the snapshot, or empty
      */
-    Optional<SnapshotInfo> byState(Map<CgmesSubset, String> ids) {
-        List<String> stateIds = Stream.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS)
+    Optional<SnapshotInfo> byState(Map<String, String> ids) {
+        List<String> stateIds = Stream.of(Profiles.EQ, Profiles.SSH)
                 .map(ids::get).filter(Objects::nonNull).toList();
         if (stateIds.isEmpty()) {
             return Optional.empty();
@@ -690,7 +687,7 @@ public final class SnapshotCatalog {
      *                                the scenario shares, or if the scenario already holds one of the models
      */
     public SnapshotInfo putFull(ReadOnlyDataSource ds, ReadOnlyDataSource boundary, SnapshotRef ref,
-                                Set<CgmesSubset> profiles, Properties importParams, ReportNode rn) {
+                                Set<String> profiles, Properties importParams, ReportNode rn) {
         check(ref);
         Objects.requireNonNull(ds);
         // One request, before the parse: an authority that already has a root will refuse this write whatever the
@@ -720,8 +717,8 @@ public final class SnapshotCatalog {
             refuseKnownModels(own.values().stream().map(h -> h.id).toList());
 
             List<String> uploaded = new GraphUploader(connection, scenario).upload(repository, localToRemote);
-            Map<CgmesSubset, String> state = new EnumMap<>(CgmesSubset.class);
-            headers.forEach((context, header) -> state.put(GraphInfo.subsetOf(context), header.id));
+            Map<String, String> state = Profiles.map();
+            headers.values().forEach(header -> state.put(header.subset, header.id));
             Map<String, Long> counts = counts(repository, own.keySet());
             if (beforeRootWrite != null) {
                 beforeRootWrite.run();
@@ -778,22 +775,19 @@ public final class SnapshotCatalog {
     }
 
     /** The headers of the projected profiles, the boundary always included. */
-    private static Map<String, Header> project(Map<String, Header> headers, Set<CgmesSubset> profiles) {
+    private static Map<String, Header> project(Map<String, Header> headers, Set<String> profiles) {
         if (profiles == null || profiles.isEmpty()) {
             return headers;
         }
-        Set<CgmesSubset> carried = headers.keySet().stream().map(GraphInfo::subsetOf).collect(Collectors.toSet());
-        Set<CgmesSubset> missing = EnumSet.copyOf(profiles);
+        Set<String> carried = headers.values().stream().map(Header::subset).collect(Collectors.toSet());
+        Set<String> missing = Profiles.set(profiles);
         missing.removeAll(carried);
         if (!missing.isEmpty()) {
             throw new RdfDbException("the profiles " + missing + " are to be stored but the files do not carry them;"
                     + " they carry " + new TreeSet<>(carried));
         }
         Map<String, Header> projected = new LinkedHashMap<>(headers);
-        projected.keySet().removeIf(context -> {
-            CgmesSubset subset = GraphInfo.subsetOf(context);
-            return !profiles.contains(subset) && !StoredModel.isBoundaryProfile(subset);
-        });
+        projected.values().removeIf(header -> !profiles.contains(header.subset) && !Profiles.isBoundary(header.subset));
         return projected;
     }
 
@@ -808,7 +802,7 @@ public final class SnapshotCatalog {
         if (roots.isEmpty()) {
             return Set.of();
         }
-        Map<CgmesSubset, String> stored = boundaryOf(roots.values().iterator().next().state());
+        Map<String, String> stored = boundaryOf(roots.values().iterator().next().state());
         requireSharedBoundary(boundaryOfHeaders(headers), stored, authority);
         return Set.copyOf(stored.values());
     }
@@ -825,7 +819,7 @@ public final class SnapshotCatalog {
      * @param shared the boundary models the scenario shares, by profile (restricted by the caller to what it asks)
      * @throws RdfDbConflictException if the two differ
      */
-    private void requireSharedBoundary(Map<CgmesSubset, String> files, Map<CgmesSubset, String> shared,
+    private void requireSharedBoundary(Map<String, String> files, Map<String, String> shared,
                                        String authority) {
         if (!files.equals(shared)) {
             throw new RdfDbConflictException("the files of modelling authority '" + authority + "' carry the boundary "
@@ -834,20 +828,20 @@ public final class SnapshotCatalog {
         }
     }
 
-    private static Map<CgmesSubset, String> boundaryOfHeaders(Map<String, Header> headers) {
-        Map<CgmesSubset, String> files = new EnumMap<>(CgmesSubset.class);
+    private static Map<String, String> boundaryOfHeaders(Map<String, Header> headers) {
+        Map<String, String> files = Profiles.map();
         headers.values().forEach(header -> {
-            if (StoredModel.isBoundaryProfile(header.subset)) {
+            if (Profiles.isBoundary(header.subset)) {
                 files.put(header.subset, header.id);
             }
         });
         return files;
     }
 
-    private static Map<CgmesSubset, String> boundaryOf(Map<CgmesSubset, String> state) {
-        Map<CgmesSubset, String> boundary = new EnumMap<>(CgmesSubset.class);
+    private static Map<String, String> boundaryOf(Map<String, String> state) {
+        Map<String, String> boundary = Profiles.map();
         state.forEach((subset, id) -> {
-            if (StoredModel.isBoundaryProfile(subset)) {
+            if (Profiles.isBoundary(subset)) {
                 boundary.put(subset, id);
             }
         });
@@ -889,12 +883,12 @@ public final class SnapshotCatalog {
      *                        several where the scenario holds no single tree, or agree on another authority than
      *                        the single tree it holds
      */
-    private String authorityOf(Map<CgmesSubset, String> stated, String given,
+    private String authorityOf(Map<String, String> stated, String given,
                                Supplier<? extends Collection<String>> trees, String what) {
         if (given != null) {
             return given;
         }
-        Map<CgmesSubset, String> deciding = new EnumMap<>(CgmesSubset.class);
+        Map<String, String> deciding = Profiles.map();
         deciding.putAll(stated);
         deciding.keySet().retainAll(DECIDING_PROFILES);
         if (deciding.isEmpty() && !stated.isEmpty()) {
@@ -927,17 +921,17 @@ public final class SnapshotCatalog {
                     + " the files it carries may come from several)");
     }
 
-    private static Map<String, String> byIdentifier(Map<CgmesSubset, String> stated) {
+    private static Map<String, String> byIdentifier(Map<String, String> stated) {
         Map<String, String> named = new LinkedHashMap<>();
-        stated.forEach((subset, authority) -> named.put(subset.getIdentifier(), authority));
+        stated.forEach((subset, authority) -> named.put(subset, authority));
         return named;
     }
 
     /** The {@code md:Model.modelingAuthoritySet} each non-boundary file states, by profile. */
-    private static Map<CgmesSubset, String> statedAuthorities(Collection<Header> headers) {
-        Map<CgmesSubset, String> stated = new EnumMap<>(CgmesSubset.class);
+    private static Map<String, String> statedAuthorities(Collection<Header> headers) {
+        Map<String, String> stated = Profiles.map();
         headers.stream()
-                .filter(header -> !StoredModel.isBoundaryProfile(header.subset))
+                .filter(header -> !Profiles.isBoundary(header.subset))
                 .forEach(header -> {
                     String authority = header.term(RdfDbVocabulary.MODEL_MODELING_AUTHORITY_SET);
                     if (authority != null) {
@@ -986,9 +980,10 @@ public final class SnapshotCatalog {
         if (models.isEmpty()) {
             throw new RdfDbException("no difference to store as " + target + " of scenario '" + scenario + "'");
         }
-        Map<CgmesSubset, String> stated = new EnumMap<>(CgmesSubset.class);
+        Map<String, String> stated = Profiles.map();
         models.stream().filter(model -> model.header().modelingAuthoritySet() != null)
-                .forEach(model -> stated.put(model.header().subset(), model.header().modelingAuthoritySet()));
+                .forEach(model -> stated.put(Profiles.of(model.header().subset()),
+                        model.header().modelingAuthoritySet()));
         String authority = authorityOf(stated, target.modellingAuthority(), this::modellingAuthorities,
                 "the difference models");
         // One request: an open timestamp is the base one, resolved inside the head lookup. A timestamp this tree
@@ -1007,10 +1002,10 @@ public final class SnapshotCatalog {
         }
         checkSupersedes(models, parent);
 
-        Map<CgmesSubset, String> state = new EnumMap<>(parent.state());
-        Map<CgmesSubset, String> parentStates = new EnumMap<>(CgmesSubset.class);
+        Map<String, String> state = Profiles.map(parent.state());
+        Map<String, String> parentStates = Profiles.map();
         for (DifferenceModel model : models) {
-            CgmesSubset subset = model.header().subset();
+            String subset = Profiles.of(model.header().subset());
             parentStates.put(subset, parent.state().get(subset));
             state.put(subset, model.header().id());
         }
@@ -1124,9 +1119,9 @@ public final class SnapshotCatalog {
      * @param ignored           the profiles whose files were present and left alone
      */
     public record IngestStatistics(Duration parse, Duration materializeParent, Duration diff, Duration write,
-                                   Map<CgmesSubset, Integer> forwardStatements,
-                                   Map<CgmesSubset, Integer> reverseStatements, Map<CgmesSubset, Boolean> fast,
-                                   Set<CgmesSubset> ignored) {
+                                   Map<String, Integer> forwardStatements,
+                                   Map<String, Integer> reverseStatements, Map<String, Boolean> fast,
+                                   Set<String> ignored) {
     }
 
     /**
@@ -1182,11 +1177,11 @@ public final class SnapshotCatalog {
      * @throws RdfDbException         if the scenario has no root, or if nothing changed
      */
     public SnapshotInfo putAsDiff(ReadOnlyDataSource ds, ReadOnlyDataSource boundary, SnapshotRef target,
-                                  Set<CgmesSubset> profiles, Properties importParams, ReportNode rn) {
+                                  Set<String> profiles, Properties importParams, ReportNode rn) {
         check(target);
         Objects.requireNonNull(ds);
         ReportNode report = rn == null ? ReportNode.NO_OP : rn;
-        Set<CgmesSubset> compared = comparedProfiles(profiles);
+        Set<String> compared = comparedProfiles(profiles);
         // The authority decides which tree the files are compared against, so an open one is read off the headers
         // first: a header-only pass, which stops at every md:FullModel
         String authority = target.modellingAuthority() != null ? target.modellingAuthority()
@@ -1209,14 +1204,13 @@ public final class SnapshotCatalog {
         Map<String, Header> headers = headersOf(parsed);
         Duration parse = Duration.ofNanos(System.nanoTime() - t0);
         // A timestamp's files need not carry the boundary; the ones they carry must be the scenario's
-        Map<CgmesSubset, String> carried = boundaryOfHeaders(headers);
-        Map<CgmesSubset, String> shared = boundaryOf(root.state());
+        Map<String, String> carried = boundaryOfHeaders(headers);
+        Map<String, String> shared = boundaryOf(root.state());
         shared.keySet().retainAll(carried.keySet());
         requireSharedBoundary(carried, shared, authority);
         // A listed profile has to be there; the default pair is compared where it is shipped
-        Set<CgmesSubset> missing = profiles == null || profiles.isEmpty() ? EnumSet.noneOf(CgmesSubset.class)
-                : EnumSet.copyOf(compared);
-        parsed.files().forEach(file -> missing.remove(file.subset()));
+        Set<String> missing = Profiles.set(profiles == null || profiles.isEmpty() ? Set.of() : compared);
+        parsed.files().forEach(file -> missing.remove(file.profile()));
         if (!missing.isEmpty()) {
             throw new RdfDbException("the profiles " + missing + " are to be compared, but the files of "
                     + target + " do not carry them");
@@ -1224,18 +1218,18 @@ public final class SnapshotCatalog {
 
         long t1 = System.nanoTime();
         String cimNamespace = parsed.cimNamespace();
-        Map<CgmesSubset, String> parentKeys = parentIndexKeys(parsed, plan, stateModels, cimNamespace);
-        Map<CgmesSubset, StatementDiff.Index> parentSides =
+        Map<String, String> parentKeys = parentIndexKeys(parsed, plan, stateModels, cimNamespace);
+        Map<String, StatementDiff.Index> parentSides =
                 parentIndexesOf(parentKeys, plan, stateModels, cimNamespace, importParams);
         Duration materialize = planning.plus(Duration.ofNanos(System.nanoTime() - t1));
 
         List<DifferenceModel> models = new ArrayList<>();
-        Set<CgmesSubset> ignored = new LinkedHashSet<>();
-        Map<CgmesSubset, Integer> forward = new EnumMap<>(CgmesSubset.class);
-        Map<CgmesSubset, Integer> reverse = new EnumMap<>(CgmesSubset.class);
+        Set<String> ignored = new LinkedHashSet<>();
+        Map<String, Integer> forward = Profiles.map();
+        Map<String, Integer> reverse = Profiles.map();
         long t2 = System.nanoTime();
         for (IngestParser.ParsedFile file : parsed.files()) {
-            CgmesSubset subset = file.subset();
+            String subset = file.profile();
             if (!compared.contains(subset)) {
                 ignored.add(subset);
                 continue;
@@ -1258,7 +1252,7 @@ public final class SnapshotCatalog {
         Duration diffTime = Duration.ofNanos(System.nanoTime() - t2);
 
         ignored.forEach(subset -> RdfDbReports.ingestedProfileIgnoredReport(report,
-                subset.getIdentifier(), scenario));
+                subset, scenario));
         if (models.isEmpty()) {
             throw new RdfDbException("no difference to the parent " + parent + " of scenario '" + scenario
                     + "': the files of " + target + " describe the state the database already holds");
@@ -1266,8 +1260,8 @@ public final class SnapshotCatalog {
         long t3 = System.nanoTime();
         SnapshotInfo written = putDiff(new DifferenceModelSet(models),
                 SnapshotRef.of(scenario, authority, timestamp, target.version()), report);
-        Map<CgmesSubset, Boolean> fast = new EnumMap<>(CgmesSubset.class);
-        models.forEach(model -> fast.put(model.header().subset(), RdfDbDifferenceSink.isFast(model)));
+        Map<String, Boolean> fast = Profiles.map();
+        models.forEach(model -> fast.put(Profiles.of(model.header().subset()), RdfDbDifferenceSink.isFast(model)));
         lastIngest = new IngestStatistics(parse, materialize, diffTime,
                 Duration.ofNanos(System.nanoTime() - t3), forward, reverse, fast, ignored);
         LOGGER.info("Ingested {} of scenario '{}' from files: {} difference(s), {} profile(s) inherited",
@@ -1276,12 +1270,12 @@ public final class SnapshotCatalog {
     }
 
     /** The profiles an ingestion compares: the projection, or {@code EQ} and {@code SSH}; never the boundary. */
-    private static Set<CgmesSubset> comparedProfiles(Set<CgmesSubset> profiles) {
+    private static Set<String> comparedProfiles(Set<String> profiles) {
         if (profiles == null || profiles.isEmpty()) {
             return DEFAULT_COMPARED;
         }
-        profiles.stream().filter(StoredModel::isBoundaryProfile).findFirst().ifPresent(subset -> {
-            throw new RdfDbException("the boundary profile " + subset.getIdentifier() + " cannot be compared: the"
+        profiles.stream().filter(Profiles::isBoundary).findFirst().ifPresent(subset -> {
+            throw new RdfDbException("the boundary profile " + subset + " cannot be compared: the"
                     + " boundary of a scenario never changes, a new boundary is a new scenario");
         });
         return Set.copyOf(profiles);
@@ -1295,7 +1289,7 @@ public final class SnapshotCatalog {
                 throw new RdfDbException("the instance file " + file.context() + " carries no md:FullModel header,"
                         + " so it cannot be a member of a snapshot of scenario '" + scenario + "'");
             }
-            headers.put(file.context(), new Header(file.headerId(), file.subset(), file.terms()));
+            headers.put(file.context(), new Header(file.headerId(), file.profile(), file.terms()));
         });
         return headers;
     }
@@ -1308,12 +1302,12 @@ public final class SnapshotCatalog {
      * than discovered to be uncomparable halfway through the diff, which is what lets the whole materialisation
      * be skipped when every key is already known.</p>
      */
-    private Map<CgmesSubset, String> parentIndexKeys(IngestParser.Result parsed, MaterializationPlan plan,
+    private Map<String, String> parentIndexKeys(IngestParser.Result parsed, MaterializationPlan plan,
                                                      Map<String, StoredModel> stateModels, String cimNamespace) {
         String fallbackBase = RdfDbMaterializer.subjectBase(plan, stateModels);
-        Map<CgmesSubset, String> keys = new EnumMap<>(CgmesSubset.class);
+        Map<String, String> keys = Profiles.map();
         for (IngestParser.ParsedFile file : parsed.files()) {
-            CgmesSubset subset = file.subset();
+            String subset = file.profile();
             if (file.index() == null) {
                 // Not compared, or the state the database already holds
                 continue;
@@ -1345,12 +1339,12 @@ public final class SnapshotCatalog {
      * materialisation happens exactly as it always did and only the missing profiles are read out of it, so the
      * statements and their order are the ones the comparison has always seen.</p>
      */
-    private Map<CgmesSubset, StatementDiff.Index> parentIndexesOf(Map<CgmesSubset, String> keys,
+    private Map<String, StatementDiff.Index> parentIndexesOf(Map<String, String> keys,
                                                                         MaterializationPlan plan,
                                                                         Map<String, StoredModel> stateModels,
                                                                         String cimNamespace,
                                                                         Properties importParams) {
-        Map<CgmesSubset, StatementDiff.Index> indexes = new EnumMap<>(CgmesSubset.class);
+        Map<String, StatementDiff.Index> indexes = Profiles.map();
         keys.forEach((subset, key) -> {
             StatementDiff.Index cached = connection.parentIndex(key);
             if (cached != null) {
@@ -1369,12 +1363,12 @@ public final class SnapshotCatalog {
         }
         String fallbackBase = RdfDbMaterializer.subjectBase(plan, stateModels);
         // Only the profiles still to be indexed; the projection keeps the boundary, which is never compared
-        Set<CgmesSubset> toIndex = EnumSet.copyOf(keys.keySet());
+        Set<String> toIndex = Profiles.set(keys.keySet());
         toIndex.removeAll(indexes.keySet());
         try (RdfDbMaterializer.MaterialisedStore parentState = RdfDbMaterializer.materializeStore(
                 connection, scenario, plan.project(toIndex), stateModels, importParams)) {
-            for (Map.Entry<CgmesSubset, String> entry : keys.entrySet()) {
-                CgmesSubset subset = entry.getKey();
+            for (Map.Entry<String, String> entry : keys.entrySet()) {
+                String subset = entry.getKey();
                 if (indexes.containsKey(subset)) {
                     continue;
                 }
@@ -1386,7 +1380,7 @@ public final class SnapshotCatalog {
                 indexes.put(subset, index);
                 connection.rememberParentIndex(entry.getValue(), index);
                 LOGGER.debug("Indexed the parent {} state {} of scenario '{}': {} statement(s)",
-                        subset.getIdentifier(), stateId, scenario, index.size());
+                        subset, stateId, scenario, index.size());
             }
         }
         return indexes;
@@ -1410,9 +1404,10 @@ public final class SnapshotCatalog {
      * @return the difference
      */
     private DifferenceModel diffOf(StatementDiff.Index parentSide, StatementDiff.Index nextSide,
-                                   String parentStateId, CgmesSubset subset, Header header, String cimNamespace,
+                                   String parentStateId, String subset, Header header, String cimNamespace,
                                    Instant timestamp) {
-        DifferenceModelHeader diffHeader = DifferenceModelHeader.builder(header.id, subset, cimNamespace)
+        DifferenceModelHeader diffHeader = DifferenceModelHeader.builder(header.id,
+                        Profiles.subset(subset).orElseThrow(), cimNamespace)
                 .version(intOf(header.term(RdfDbVocabulary.MODEL_VERSION), 1))
                 .description(header.term(RdfDbVocabulary.MODEL_DESCRIPTION))
                 .modelingAuthoritySet(header.term(RdfDbVocabulary.MODEL_MODELING_AUTHORITY_SET))
@@ -1450,7 +1445,7 @@ public final class SnapshotCatalog {
         boolean againstTheBase = models.stream().allMatch(model -> {
             List<String> supersedes = model.header().supersedes();
             return supersedes.size() == 1
-                    && supersedes.get(0).equals(root.state().get(model.header().subset()));
+                    && supersedes.get(0).equals(root.state().get(Profiles.of(model.header().subset())));
         });
         if (againstTheBase) {
             throw new RdfDbConflictException("timestamp " + timestamp + " of modelling authority '" + authority
@@ -1462,7 +1457,7 @@ public final class SnapshotCatalog {
 
     private void checkSupersedes(List<DifferenceModel> models, SnapshotInfo parent) {
         for (DifferenceModel model : models) {
-            CgmesSubset subset = model.header().subset();
+            String subset = Profiles.of(model.header().subset());
             List<String> supersedes = model.header().supersedes();
             String expected = parent.state().get(subset);
             if (supersedes.size() != 1 || !supersedes.get(0).equals(expected)) {
@@ -1475,7 +1470,7 @@ public final class SnapshotCatalog {
                                 + "'; diffs never cross scenarios)";
                     }
                 }
-                throw new RdfDbConflictException("difference model of subset " + subset.getIdentifier()
+                throw new RdfDbConflictException("difference model of subset " + subset
                         + " supersedes " + found + " but the head " + parent.ref() + " is at " + expected
                         + ": update the network to the head and re-record" + elsewhere);
             }
@@ -1657,9 +1652,9 @@ public final class SnapshotCatalog {
 
     /** Every tree of the scenario states the same boundary models. */
     private void verifySharedBoundary(Map<String, SnapshotInfo> roots) {
-        Map<CgmesSubset, String> first = null;
+        Map<String, String> first = null;
         for (SnapshotInfo root : roots.values()) {
-            Map<CgmesSubset, String> boundary = boundaryOf(root.state());
+            Map<String, String> boundary = boundaryOf(root.state());
             if (first != null && !first.equals(boundary)) {
                 throw new RdfDbException("the roots of scenario '" + scenario + "' do not share one boundary: "
                         + root + " states " + boundary + ", another root " + first);
@@ -1706,7 +1701,7 @@ public final class SnapshotCatalog {
     }
 
     private void verifyState(SnapshotInfo info, SnapshotInfo parent) {
-        Map<CgmesSubset, String> expected = new EnumMap<>(parent.state());
+        Map<String, String> expected = Profiles.map(parent.state());
         Set<String> members = new LinkedHashSet<>(info.members());
         info.state().forEach((subset, id) -> {
             if (members.contains(id)) {
@@ -1723,7 +1718,7 @@ public final class SnapshotCatalog {
     // ------------------------------------------------------------------ SPARQL fragments
 
     private String rootWrite(Map<String, Header> own, Map<String, String> graphs,
-                             CgmesTripleStoreLoader.Result parsed, Map<CgmesSubset, String> state,
+                             CgmesTripleStoreLoader.Result parsed, Map<String, String> state,
                              boolean first, RdfDbDifferenceSink.SnapshotWrite root, Map<String, Long> counts) {
         String subjectBase = ModelCatalog.subjectBaseOf(parsed.baseName());
         ZonedDateTime now = ZonedDateTime.now();
@@ -1760,7 +1755,7 @@ public final class SnapshotCatalog {
     }
 
     /** Where one parsed instance file of a root went, and what its statements look like. */
-    private record FullGraph(CgmesSubset subset, String graphIri, long tripleCount, String subjectBase,
+    private record FullGraph(String subset, String graphIri, long tripleCount, String subjectBase,
                              String cimNamespace) {
     }
 
@@ -1772,7 +1767,7 @@ public final class SnapshotCatalog {
                 .append(SparqlText.iri(RdfDbVocabulary.KIND)).append(' ')
                 .append(SparqlText.iri(RdfDbVocabulary.FULL)).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.SUBSET)).append(' ')
-                .append(SparqlText.str(graph.subset().getIdentifier())).append(" ; ")
+                .append(SparqlText.str(graph.subset())).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.SCENARIO)).append(' ')
                 .append(SparqlText.str(scenario)).append(" ; ")
                 // A string, like every other pdb:graph of this layer: the in-process backend names graphs by the
@@ -1801,7 +1796,7 @@ public final class SnapshotCatalog {
     // ------------------------------------------------------------------ scratch store helpers
 
     /** The {@code md:FullModel} header of one parsed instance file, and the profile the file carries. */
-    private record Header(String id, CgmesSubset subset, Map<String, List<Value>> terms) {
+    private record Header(String id, String subset, Map<String, List<Value>> terms) {
 
         String term(String predicate) {
             List<Value> values = terms.get(predicate);
@@ -1841,7 +1836,7 @@ public final class SnapshotCatalog {
                     terms.put(predicate, values);
                 }
             });
-            headers.put(context, new Header(id, GraphInfo.subsetOf(context), terms));
+            headers.put(context, new Header(id, Profiles.ofContextName(context), terms));
         }
         return headers;
     }
@@ -1857,7 +1852,7 @@ public final class SnapshotCatalog {
     /** The scenario time of the steady state file, or of the first file that states one. */
     private Instant scenarioTimeOf(Map<String, Header> headers) {
         return headers.values().stream()
-                .sorted(Comparator.comparingInt(h -> h.subset == CgmesSubset.STEADY_STATE_HYPOTHESIS ? 0 : 1))
+                .sorted(Comparator.comparingInt(h -> Profiles.SSH.equals(h.subset) ? 0 : 1))
                 .map(h -> h.term(RdfDbVocabulary.MODEL_SCENARIO_TIME))
                 .filter(Objects::nonNull)
                 .findFirst()

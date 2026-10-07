@@ -8,7 +8,6 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.report.ReportNode;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -35,7 +34,7 @@ class VersionRegistryTest {
 
     private static final String S = "registry";
     private static final String OTHER = "registry-other";
-    private static final CgmesSubset SSH = CgmesSubset.STEADY_STATE_HYPOTHESIS;
+    private static final String SSH = Profiles.SSH;
     private static final Instant NOON = Instant.parse("2014-06-01T12:30:00Z");
 
     private static RdfDbConnection open(String backend) {

@@ -10,7 +10,6 @@ package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
 import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Line;
 import com.powsybl.iidm.network.Network;
@@ -103,9 +102,9 @@ class RdfDbRequestCountTest {
             // Reading the catalogue is one request, whatever is asked of it afterwards
             mark = BenchMeters.FusekiMeter.mark();
             CatalogSnapshot snapshot = db.catalog(S).snapshot();
-            List<StoredModel> chain = snapshot.chainDown(snapshot.head(CgmesSubset.STEADY_STATE_HYPOTHESIS)
+            List<StoredModel> chain = snapshot.chainDown(snapshot.head(Profiles.SSH)
                     .orElseThrow().id());
-            snapshot.full(CgmesSubset.EQUIPMENT).orElseThrow();
+            snapshot.full(Profiles.EQ).orElseThrow();
             snapshot.heads();
             assertAtMost("reading the catalogue and asking it " + chain.size() + " questions", since(mark), 1);
 

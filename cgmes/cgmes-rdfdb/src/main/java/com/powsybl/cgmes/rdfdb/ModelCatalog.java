@@ -9,7 +9,6 @@
 package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.model.CgmesNamespace;
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.triplestore.CgmesTripleStoreLoader;
 import org.eclipse.rdf4j.model.IRI;
 import org.eclipse.rdf4j.model.Literal;
@@ -34,7 +33,7 @@ import java.util.TreeSet;
 
 import static com.powsybl.cgmes.rdfdb.SnapshotRows.dateOf;
 import static com.powsybl.cgmes.rdfdb.SnapshotRows.longOf;
-import static com.powsybl.cgmes.rdfdb.SnapshotRows.subsetOf;
+import static com.powsybl.cgmes.rdfdb.SnapshotRows.profileOf;
 
 /**
  * The stored models of one scenario: reading the metadata graph, and writing full model nodes into it.
@@ -177,7 +176,7 @@ public final class ModelCatalog {
      * @return the head model, or empty when the scenario holds no model of that profile
      * @throws RdfDbException if the profile has several heads, which means the chain forked
      */
-    public Optional<StoredModel> head(CgmesSubset subset) {
+    public Optional<StoredModel> head(String subset) {
         return snapshot().head(subset);
     }
 
@@ -189,7 +188,7 @@ public final class ModelCatalog {
      * @return the full model, or empty
      * @throws RdfDbException if the scenario holds several full models of that profile
      */
-    public Optional<StoredModel> full(CgmesSubset subset) {
+    public Optional<StoredModel> full(String subset) {
         return snapshot().full(subset);
     }
 
@@ -258,7 +257,7 @@ public final class ModelCatalog {
             Value succ = row.get("succ");
             if (succ != null) {
                 successors.computeIfAbsent(m.stringValue(), k -> new ArrayList<>())
-                        .add(new Successor(succ.stringValue(), subsetOf(row.get("succSubset"))));
+                        .add(new Successor(succ.stringValue(), profileOf(row.get("succSubset"))));
             } else {
                 nodes.computeIfAbsent(m.stringValue(), Node::new).add(row.get("p"), row.get("o"));
             }
@@ -283,7 +282,7 @@ public final class ModelCatalog {
      * @param id     the identifier of the successor
      * @param subset the profile it describes, {@code null} when it names one this release does not know
      */
-    record Successor(String id, CgmesSubset subset) {
+    record Successor(String id, String subset) {
     }
 
     private static String values(Collection<String> ids) {
@@ -437,7 +436,14 @@ public final class ModelCatalog {
                         contextName, scenario);
                 continue;
             }
-            CgmesSubset subset = GraphInfo.subsetOf(contextName);
+            String subset = Profiles.find(contextName).orElse(null);
+            if (subset == null) {
+                // Same reasoning: the graph is uploaded, but a model whose profile its name does not say cannot be
+                // told apart from the others of its snapshot
+                LOGGER.warn("Graph {} of scenario '{}' is named after no profile and is not registered as a stored"
+                        + " model; name the file <base>_<PROFILE>.xml to version it", contextName, scenario);
+                continue;
+            }
             long count = counts.getOrDefault(graphIri, -1L);
             appendFullModelNode(update, header, subset, graphIri, count, subjectBase, cimNamespace, now);
             registered++;
@@ -447,7 +453,7 @@ public final class ModelCatalog {
         }
     }
 
-    private void appendFullModelNode(StringBuilder update, Node header, CgmesSubset subset, String graphIri,
+    private void appendFullModelNode(StringBuilder update, Node header, String subset, String graphIri,
                                      long tripleCount, String subjectBase, String cimNamespace, ZonedDateTime now) {
         String id = SparqlText.iri(header.id);
         String meta = SparqlText.iri(metaGraph);
@@ -465,7 +471,7 @@ public final class ModelCatalog {
                 .append(SparqlText.iri(RdfDbVocabulary.KIND)).append(' ')
                 .append(SparqlText.iri(RdfDbVocabulary.FULL)).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.SUBSET)).append(' ')
-                .append(SparqlText.str(subset.getIdentifier())).append(" ; ")
+                .append(SparqlText.str(subset)).append(" ; ")
                 .append(SparqlText.iri(RdfDbVocabulary.SCENARIO)).append(' ')
                 .append(SparqlText.str(scenario)).append(" ; ")
                 // A string rather than an IRI: the graph name of the in-process backend is the plain instance file
@@ -623,7 +629,7 @@ public final class ModelCatalog {
     private List<StoredModel> sorted(Collection<Node> nodes) {
         List<StoredModel> models = new ArrayList<>();
         nodes.forEach(node -> node.build(scenario).ifPresent(models::add));
-        models.sort(Comparator.comparing((StoredModel m) -> m.subset().getIdentifier())
+        models.sort(Comparator.comparing((StoredModel m) -> m.subset())
                 .thenComparingInt(StoredModel::chainDepth)
                 .thenComparing(StoredModel::id));
         return List.copyOf(models);
@@ -685,7 +691,7 @@ public final class ModelCatalog {
             }
             StoredModel.Kind kind = RdfDbVocabulary.DIFF.equals(kindIri)
                     ? StoredModel.Kind.DIFF : StoredModel.Kind.FULL;
-            CgmesSubset subset = subsetOf(one(RdfDbVocabulary.SUBSET));
+            String subset = profileOf(one(RdfDbVocabulary.SUBSET));
             if (subset == null) {
                 return Optional.empty();
             }

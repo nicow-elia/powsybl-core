@@ -8,12 +8,9 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
-
 import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.util.Collections;
-import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -61,8 +58,8 @@ import java.util.Set;
  */
 public record SnapshotInfo(String scenario, String iri, String modellingAuthority, Instant timestamp, String version,
                            int rank, Kind kind, String parent, EdgeKind edge, int depth, boolean fast,
-                           Map<CgmesSubset, String> state, List<String> members,
-                           Map<CgmesSubset, String> fullModels, String timestampRoot, ZonedDateTime created,
+                           Map<String, String> state, List<String> members,
+                           Map<String, String> fullModels, String timestampRoot, ZonedDateTime created,
                            String description) {
 
     /** What a snapshot holds. */
@@ -100,10 +97,10 @@ public record SnapshotInfo(String scenario, String iri, String modellingAuthorit
      * <p>Not part of the address: it is what the snapshot <em>holds</em>, derived from its {@code pdb:state}. A
      * caller that wants fewer passes a projection to the operation instead.</p>
      *
-     * @return the profiles, in the order of {@link CgmesSubset}
+     * @return the profiles, in {@link Profiles#ORDER}
      */
-    public Set<CgmesSubset> profiles() {
-        return state.isEmpty() ? Set.of() : Collections.unmodifiableSet(EnumSet.copyOf(state.keySet()));
+    public Set<String> profiles() {
+        return state.isEmpty() ? Set.of() : Collections.unmodifiableSet(Profiles.set(state.keySet()));
     }
 
     /**

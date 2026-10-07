@@ -8,11 +8,8 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
-
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -99,8 +96,8 @@ public final class CatalogSnapshot {
     }
 
     /** The profiles the scenario holds a model of, in the order the models are sorted in. */
-    private Set<CgmesSubset> subsets() {
-        Set<CgmesSubset> subsets = new LinkedHashSet<>();
+    private Set<String> subsets() {
+        Set<String> subsets = new LinkedHashSet<>();
         models.forEach(model -> subsets.add(model.subset()));
         return subsets;
     }
@@ -122,10 +119,10 @@ public final class CatalogSnapshot {
      * @return the head model, or empty when the scenario holds no model of that profile
      * @throws RdfDbException if the profile has several heads, which means the chain forked
      */
-    public Optional<StoredModel> head(CgmesSubset subset) {
+    public Optional<StoredModel> head(String subset) {
         Objects.requireNonNull(subset);
         List<String> heads = models.stream()
-                .filter(model -> model.subset() == subset)
+                .filter(model -> model.subset().equals(subset))
                 .filter(model -> !isSuperseded(model))
                 .map(StoredModel::id)
                 .distinct()
@@ -135,7 +132,7 @@ public final class CatalogSnapshot {
             return Optional.empty();
         }
         if (heads.size() > 1) {
-            throw new RdfDbException("The " + subset.getIdentifier() + " chain of scenario '" + scenario
+            throw new RdfDbException("The " + subset + " chain of scenario '" + scenario
                     + "' has " + heads.size() + " heads " + heads + ": it forked, and this release stores one"
                     + " linear chain per profile");
         }
@@ -148,15 +145,15 @@ public final class CatalogSnapshot {
      * @return the head per profile
      * @throws RdfDbException if a profile has several heads
      */
-    public Map<CgmesSubset, StoredModel> heads() {
-        Map<CgmesSubset, StoredModel> heads = new EnumMap<>(CgmesSubset.class);
+    public Map<String, StoredModel> heads() {
+        Map<String, StoredModel> heads = Profiles.map();
         subsets().forEach(subset -> head(subset).ifPresent(model -> heads.put(subset, model)));
         return heads;
     }
 
     private boolean isSuperseded(StoredModel model) {
         return successors.getOrDefault(model.id(), List.of()).stream()
-                .anyMatch(successor -> successor.subset() == model.subset());
+                .anyMatch(successor -> model.subset().equals(successor.subset()));
     }
 
     /**
@@ -167,17 +164,17 @@ public final class CatalogSnapshot {
      * @return the full model, or empty
      * @throws RdfDbException if the scenario holds several full models of that profile
      */
-    public Optional<StoredModel> full(CgmesSubset subset) {
+    public Optional<StoredModel> full(String subset) {
         Objects.requireNonNull(subset);
         List<StoredModel> full = models.stream()
-                .filter(model -> model.subset() == subset && model.kind() == StoredModel.Kind.FULL)
+                .filter(model -> model.subset().equals(subset) && model.kind() == StoredModel.Kind.FULL)
                 .toList();
         if (full.isEmpty()) {
             return Optional.empty();
         }
         if (full.size() > 1) {
             throw new RdfDbException("Scenario '" + scenario + "' holds " + full.size() + " full "
-                    + subset.getIdentifier() + " models "
+                    + subset + " models "
                     + full.stream().map(StoredModel::id).sorted().toList()
                     + ": one scenario describes one base grid model");
         }
@@ -220,8 +217,8 @@ public final class CatalogSnapshot {
      * @param targets the model to start from, per profile
      * @return the chain per profile, head first
      */
-    public Map<CgmesSubset, List<StoredModel>> chainsDown(Map<CgmesSubset, String> targets) {
-        Map<CgmesSubset, List<StoredModel>> chains = new EnumMap<>(CgmesSubset.class);
+    public Map<String, List<StoredModel>> chainsDown(Map<String, String> targets) {
+        Map<String, List<StoredModel>> chains = Profiles.map();
         targets.forEach((subset, id) -> chains.put(subset, chainDown(id)));
         return chains;
     }

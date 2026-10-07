@@ -8,14 +8,12 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.iidm.network.Network;
 import org.eclipse.rdf4j.model.Value;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -102,7 +100,7 @@ public final class VersionGraph {
             return crossScenario(provenance.scenario());
         }
         String from = provenance == null ? null : provenance.snapshot().orElse(null);
-        Map<CgmesSubset, String> identity = from == null
+        Map<String, String> identity = from == null
                 ? NetworkIdentity.modelIds(network) : Map.of();
         return plan(from, identity, target, options);
     }
@@ -134,7 +132,7 @@ public final class VersionGraph {
      * @param options         how far the caller allows the plan to go
      * @return the plan
      */
-    public UpdatePlan plan(String fromSnapshotIri, Map<CgmesSubset, String> identity, SnapshotRef target,
+    public UpdatePlan plan(String fromSnapshotIri, Map<String, String> identity, SnapshotRef target,
                            RdfDbUpdateOptions options) {
         catalog.readable(target);
         RdfDbUpdateOptions effective = options == null ? new RdfDbUpdateOptions() : options;
@@ -210,9 +208,9 @@ public final class VersionGraph {
     MaterializationPlan materialization(List<SnapshotInfo> chain, Map<String, String> fullGraphs,
                                         Map<String, StoredModel> models) {
         SnapshotInfo target = chain.get(0);
-        Map<CgmesSubset, MaterializationPlan.FullSource> start = new EnumMap<>(CgmesSubset.class);
-        Map<CgmesSubset, Integer> startIndex = new EnumMap<>(CgmesSubset.class);
-        for (CgmesSubset subset : target.state().keySet()) {
+        Map<String, MaterializationPlan.FullSource> start = Profiles.map();
+        Map<String, Integer> startIndex = Profiles.map();
+        for (String subset : target.state().keySet()) {
             for (int i = 0; i < chain.size(); i++) {
                 String modelId = chain.get(i).fullModels().get(subset);
                 if (modelId != null) {
@@ -224,14 +222,14 @@ public final class VersionGraph {
             }
             if (!start.containsKey(subset)) {
                 throw new RdfDbException("no snapshot on the chain of " + target + " of scenario '" + scenario
-                        + "' holds a full " + subset.getIdentifier() + " model to start a materialisation from");
+                        + "' holds a full " + subset + " model to start a materialisation from");
             }
         }
         // Down the chain, oldest first, taking the difference members of each profile below its start snapshot
         List<Hop> steps = new ArrayList<>();
         for (int i = chain.size() - 1; i >= 0; i--) {
             SnapshotInfo snapshot = chain.get(i);
-            for (Map.Entry<CgmesSubset, Integer> entry : startIndex.entrySet()) {
+            for (Map.Entry<String, Integer> entry : startIndex.entrySet()) {
                 if (i >= entry.getValue()) {
                     continue;
                 }
@@ -261,7 +259,7 @@ public final class VersionGraph {
     UpdatePlan path(List<SnapshotInfo> from, List<SnapshotInfo> to, Map<String, StoredModel> models,
                     RdfDbUpdateOptions options) {
         SnapshotInfo b = to.get(0);
-        Map<CgmesSubset, String> targetState = b.state();
+        Map<String, String> targetState = b.state();
         if (from.isEmpty()) {
             return new UpdatePlan(UpdatePlan.Kind.FULL, null, b.iri(), List.of(),
                     List.of("the network is at no snapshot of scenario '" + scenario + "': it has to be rebuilt"),
@@ -319,7 +317,7 @@ public final class VersionGraph {
                 checkpointRecommended(to, options), distanceToFull(to), targetState);
     }
 
-    private static Optional<String> memberOf(SnapshotInfo snapshot, CgmesSubset subset) {
+    private static Optional<String> memberOf(SnapshotInfo snapshot, String subset) {
         String state = snapshot.state().get(subset);
         return state != null && snapshot.members().contains(state) ? Optional.of(state) : Optional.empty();
     }
@@ -338,7 +336,7 @@ public final class VersionGraph {
      * what made the plan query expensive.</p>
      */
     private StoredModel storedModel(String id, Map<String, Value> row) {
-        return new StoredModel(scenario, id, SnapshotRows.subsetOf(row.get("sub")), StoredModel.Kind.DIFF, null,
+        return new StoredModel(scenario, id, SnapshotRows.profileOf(row.get("sub")), StoredModel.Kind.DIFF, null,
                 text(row, "fwd"), text(row, "rev"), 1, null, null, null, null, List.of(), List.of(), List.of(),
                 row.get("mfast") != null && SnapshotRows.booleanOf(row.get("mfast")),
                 longOf(row.get("n"), -1L), text(row, "sbase"), text(row, "cim"),

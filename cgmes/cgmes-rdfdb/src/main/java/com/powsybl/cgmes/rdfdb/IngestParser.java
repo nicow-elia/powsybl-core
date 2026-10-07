@@ -11,7 +11,6 @@ package com.powsybl.cgmes.rdfdb;
 import com.powsybl.cgmes.model.CgmesModelException;
 import com.powsybl.cgmes.model.CgmesModelReports;
 import com.powsybl.cgmes.model.CgmesOnDataSource;
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.StatementDiff;
 import com.powsybl.cgmes.model.triplestore.CgmesTripleStoreLoader;
@@ -79,12 +78,12 @@ final class IngestParser {
      *
      * @param name    the file name inside the data source
      * @param context the {@code contexts:}-prefixed graph name it would have had in a triple store
-     * @param subset  the CGMES profile the file carries
+     * @param profile the profile the file carries, read off its name ({@link Profiles#ofContextName})
      * @param headerId the identifier of its {@code md:FullModel}
      * @param terms   the {@code md:} terms of that header, in document order, {@code rdf:type} excluded
      * @param index   the statements of the file, header excluded, or {@code null} for a header-only read
      */
-    record ParsedFile(String name, String context, CgmesSubset subset, String headerId,
+    record ParsedFile(String name, String context, String profile, String headerId,
                       Map<String, List<Value>> terms, StatementDiff.Index index) {
     }
 
@@ -98,8 +97,8 @@ final class IngestParser {
     record Result(String cimNamespace, String baseName, List<ParsedFile> files) {
 
         /** @return the file of one profile, or {@code null} when the timestamp does not ship it */
-        ParsedFile of(CgmesSubset subset) {
-            return files.stream().filter(file -> file.subset() == subset).findFirst().orElse(null);
+        ParsedFile of(String profile) {
+            return files.stream().filter(file -> file.profile().equals(profile)).findFirst().orElse(null);
         }
     }
 
@@ -122,7 +121,7 @@ final class IngestParser {
      * @throws CgmesModelException if a file cannot be read, naming the file
      */
     static Result read(ReadOnlyDataSource main, ReadOnlyDataSource boundary, ReportNode reportNode,
-                       Map<CgmesSubset, String> unchanged, Set<CgmesSubset> compared) {
+                       Map<String, String> unchanged, Set<String> compared) {
         Objects.requireNonNull(main);
         Objects.requireNonNull(reportNode);
         CgmesOnDataSource cds = new CgmesOnDataSource(main);
@@ -159,7 +158,7 @@ final class IngestParser {
 
     private static List<ParsedFile> readAll(CgmesOnDataSource cds, String baseName, String subjectBase,
                                             String cimNamespace, ReportNode reportNode,
-                                            Map<CgmesSubset, String> unchanged, Set<CgmesSubset> compared) {
+                                            Map<String, String> unchanged, Set<String> compared) {
         // Deliberately the data source's iteration order: it decides the order the profiles are compared in and
         // therefore the order of the snapshot's members, exactly as it does for a load
         List<String> names = new ArrayList<>(cds.names());
@@ -167,17 +166,17 @@ final class IngestParser {
         List<ParsedFile> files = new ArrayList<>(names.size());
         for (String name : names) {
             files.add(readOne(cds.dataSource(), baseName, subjectBase, cimNamespace, name, unchanged,
-                    compared.contains(GraphInfo.subsetOf(CgmesTripleStoreLoader.contextName(name)))));
+                    compared.contains(Profiles.ofContextName(CgmesTripleStoreLoader.contextName(name)))));
         }
         return files;
     }
 
     private static ParsedFile readOne(ReadOnlyDataSource ds, String baseName, String subjectBase,
-                                      String cimNamespace, String name, Map<CgmesSubset, String> unchanged,
+                                      String cimNamespace, String name, Map<String, String> unchanged,
                                       boolean compared) {
         String context = CgmesTripleStoreLoader.contextName(name);
-        CgmesSubset subset = GraphInfo.subsetOf(context);
-        Handler handler = new Handler(subjectBase, cimNamespace, compared, compared ? unchanged.get(subset) : null);
+        String profile = Profiles.ofContextName(context);
+        Handler handler = new Handler(subjectBase, cimNamespace, compared, compared ? unchanged.get(profile) : null);
         RDFParser parser = parser();
         parser.setRDFHandler(handler);
         try (InputStream is = ds.newInputStream(name)) {
@@ -188,7 +187,7 @@ final class IngestParser {
             throw new CgmesModelException("Reading [" + name + "]", e);
         }
         LOGGER.debug("Read [{}]{}", name, handler.indexed() ? "" : " (header only)");
-        return new ParsedFile(name, context, subset, handler.headerId(), handler.headerTerms(),
+        return new ParsedFile(name, context, profile, handler.headerId(), handler.headerTerms(),
                 handler.indexed() ? handler.index() : null);
     }
 

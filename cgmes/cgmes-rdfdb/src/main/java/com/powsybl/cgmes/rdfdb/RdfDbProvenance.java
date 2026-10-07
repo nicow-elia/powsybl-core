@@ -8,7 +8,6 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.extensions.Extension;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.VariantManager;
@@ -71,7 +70,7 @@ public interface RdfDbProvenance extends Extension<Network> {
      *
      * @return the stored model identifiers, profiles without one absent
      */
-    Map<CgmesSubset, String> modelIds();
+    Map<String, String> modelIds();
 
     /**
      * The snapshot the network is at.

@@ -9,7 +9,6 @@
 package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.events.NetworkEvent;
@@ -24,7 +23,6 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 import java.time.Instant;
 import java.time.OffsetDateTime;
-import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -57,7 +55,7 @@ class RdfDbVersionedFlowTest {
 
     private static final String S = "2016-01-01";
     private static final String OTHER = "other";
-    private static final CgmesSubset SSH = CgmesSubset.STEADY_STATE_HYPOTHESIS;
+    private static final String SSH = Profiles.SSH;
 
     /** The identity of a network is its own assertion, so it is kept out of the network comparison. */
     private static final Set<String> IDENTITY = Set.of("cgmesMetadataModels", "rdfDbProvenance");
@@ -144,8 +142,8 @@ class RdfDbVersionedFlowTest {
             assertThat(to).isNotEqualTo(from);
             UnaryOperator<Statement> rebase = GraphFetcher.rebase(from, to);
 
-            Map<CgmesSubset, Integer> sizes = new EnumMap<>(CgmesSubset.class);
-            Map<CgmesSubset, Integer> rewritten = new EnumMap<>(CgmesSubset.class);
+            Map<String, Integer> sizes = Profiles.map();
+            Map<String, Integer> rewritten = Profiles.map();
             for (StoredModel model : boundary) {
                 TripleStoreRDF4J local = new TripleStoreRDF4J();
                 List<Statement> stored;
@@ -173,9 +171,9 @@ class RdfDbVersionedFlowTest {
             // Every statement of the MicroGrid boundary but the eight of its md:FullModel header (an urn:uuid
             // subject) has a subject of the first root's base
             assertThat(sizes).containsExactlyInAnyOrderEntriesOf(Map.of(
-                    CgmesSubset.EQUIPMENT_BOUNDARY, 184, CgmesSubset.TOPOLOGY_BOUNDARY, 104));
+                    Profiles.EQ_BD, 184, Profiles.TP_BD, 104));
             assertThat(rewritten).containsExactlyInAnyOrderEntriesOf(Map.of(
-                    CgmesSubset.EQUIPMENT_BOUNDARY, 176, CgmesSubset.TOPOLOGY_BOUNDARY, 96));
+                    Profiles.EQ_BD, 176, Profiles.TP_BD, 96));
         }
     }
 
@@ -185,8 +183,8 @@ class RdfDbVersionedFlowTest {
         try (RdfDbConnection db = twoScenarios(backend)) {
             db.snapshots(S).putFull(microGridNl(), null, SnapshotRef.latest(S, NL), null, params(),
                     ReportNode.NO_OP);
-            Set<CgmesSubset> projection = Set.of(CgmesSubset.EQUIPMENT, CgmesSubset.TOPOLOGY, SSH,
-                    CgmesSubset.STATE_VARIABLES);
+            Set<String> projection = Set.of(Profiles.EQ, Profiles.TP, SSH,
+                    Profiles.SV);
 
             // The boundary belongs to the scenario, not to the projection: the first root and the second
             for (String authority : List.of(BE, NL)) {
@@ -197,7 +195,7 @@ class RdfDbVersionedFlowTest {
                 Networks.assertSameNetwork(full, projected, IDENTITY);
             }
             // Equipment and steady state hypothesis alone: the boundary's base voltages are there
-            Network eqSsh = RdfDbNetworkLoader.load(db, SnapshotRef.latest(S, NL), Set.of(CgmesSubset.EQUIPMENT, SSH),
+            Network eqSsh = RdfDbNetworkLoader.load(db, SnapshotRef.latest(S, NL), Set.of(Profiles.EQ, SSH),
                     null, params(), ReportNode.NO_OP);
             assertThat(eqSsh.getVoltageLevelCount())
                     .isEqualTo(Network.read(microGridNl(), params()).getVoltageLevelCount());
@@ -512,7 +510,7 @@ class RdfDbVersionedFlowTest {
             assertThat(result.route()).isEqualTo(UpdateResult.Route.DIFF_APPLIED);
             Networks.assertSameNetworkIgnoringStateVariables(
                     load(db, S, 2), receiver, IDENTITY, Set.of(Changes.LOAD_ID));
-            assertThat(SSH).isEqualTo(CgmesSubset.STEADY_STATE_HYPOTHESIS);
+            assertThat(SSH).isEqualTo(Profiles.SSH);
         }
     }
 }

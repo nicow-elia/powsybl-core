@@ -10,7 +10,6 @@ package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
 import com.powsybl.cgmes.conversion.export.PartialSshExport;
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.events.NetworkEvent;
@@ -20,7 +19,6 @@ import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -62,8 +60,8 @@ import java.util.function.Function;
 public final class RdfDbExport {
 
     /** What a difference can describe; each of them has to be one model to be superseded. */
-    private static final Set<CgmesSubset> DIFF_SUBSETS =
-            Set.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS);
+    private static final Set<String> DIFF_SUBSETS =
+            Set.of(Profiles.EQ, Profiles.SSH);
 
     /**
      * What an export produced.
@@ -86,8 +84,8 @@ public final class RdfDbExport {
          * @param subset the CGMES profile
          * @return the stored difference of a profile, or empty
          */
-        public Optional<StoredModel> get(CgmesSubset subset) {
-            return stored.stream().filter(model -> model.subset() == subset).findFirst();
+        public Optional<StoredModel> get(String subset) {
+            return stored.stream().filter(model -> model.subset().equals(subset)).findFirst();
         }
     }
 
@@ -312,8 +310,8 @@ public final class RdfDbExport {
          * @param subset the CGMES profile
          * @return the stored difference of a profile, or empty
          */
-        public Optional<StoredModel> get(CgmesSubset subset) {
-            return stored.stream().filter(model -> model.subset() == subset).findFirst();
+        public Optional<StoredModel> get(String subset) {
+            return stored.stream().filter(model -> model.subset().equals(subset)).findFirst();
         }
     }
 
@@ -608,11 +606,11 @@ public final class RdfDbExport {
         if (stored.isEmpty()) {
             return;
         }
-        Map<CgmesSubset, StoredModel> bySubset = new EnumMap<>(CgmesSubset.class);
+        Map<String, StoredModel> bySubset = Profiles.map();
         stored.forEach(model -> bySubset.put(model.subset(), model));
         NetworkIdentity.advance(network, bySubset);
 
-        Map<CgmesSubset, String> ids = NetworkIdentity.modelIds(network);
+        Map<String, String> ids = NetworkIdentity.modelIds(network);
         RdfDbProvenance provenance = network.getExtension(RdfDbProvenance.class);
         if (provenance instanceof RdfDbProvenanceImpl impl && provenance.scenario().equals(scenario)) {
             impl.setModelIds(ids);

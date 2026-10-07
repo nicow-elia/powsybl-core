@@ -8,7 +8,6 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.commons.report.TypedValue;
 
@@ -73,7 +72,7 @@ public final class RdfDbReports {
      * @param subset     the profile it describes
      * @param scenario   the scenario it was written into
      */
-    public static void storedDifferenceReport(ReportNode reportNode, String modelId, CgmesSubset subset,
+    public static void storedDifferenceReport(ReportNode reportNode, String modelId, String subset,
                                               String scenario) {
         if (reportNode == null) {
             return;
@@ -81,7 +80,7 @@ public final class RdfDbReports {
         reportNode.newReportNode()
                 .withMessageTemplate("core.cgmes.rdfdb.storedDifference")
                 .withUntypedValue(MODEL_ID, modelId)
-                .withUntypedValue(CGMES_SUBSET, subset.getIdentifier())
+                .withUntypedValue(CGMES_SUBSET, subset)
                 .withUntypedValue(SCENARIO, scenario)
                 .withSeverity(TypedValue.INFO_SEVERITY)
                 .add();

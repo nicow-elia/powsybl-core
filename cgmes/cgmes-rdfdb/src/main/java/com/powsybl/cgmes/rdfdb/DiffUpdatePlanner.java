@@ -8,11 +8,8 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
-
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 
@@ -53,8 +50,8 @@ final class DiffUpdatePlanner {
      * @param inverted the profiles whose path is walked backwards, that is towards an older model
      * @param reasons  why the fast route is impossible, empty when it is not
      */
-    record Plan(Route route, Map<CgmesSubset, List<StoredModel>> paths, Map<CgmesSubset, StoredModel> targets,
-                Map<CgmesSubset, Boolean> inverted, List<String> reasons) {
+    record Plan(Route route, Map<String, List<StoredModel>> paths, Map<String, StoredModel> targets,
+                Map<String, Boolean> inverted, List<String> reasons) {
 
         Plan {
             paths = Map.copyOf(paths);
@@ -103,19 +100,19 @@ final class DiffUpdatePlanner {
      * @param maxDiffChain how many differences may be composed
      * @return the plan
      */
-    static Plan plan(String scenario, Map<CgmesSubset, String> currentIds,
-                     Map<CgmesSubset, List<StoredModel>> chains,
-                     Map<CgmesSubset, List<StoredModel>> currentChains, int maxDiffChain) {
-        Map<CgmesSubset, List<StoredModel>> paths = new EnumMap<>(CgmesSubset.class);
-        Map<CgmesSubset, StoredModel> targets = new EnumMap<>(CgmesSubset.class);
-        Map<CgmesSubset, Boolean> inverted = new EnumMap<>(CgmesSubset.class);
+    static Plan plan(String scenario, Map<String, String> currentIds,
+                     Map<String, List<StoredModel>> chains,
+                     Map<String, List<StoredModel>> currentChains, int maxDiffChain) {
+        Map<String, List<StoredModel>> paths = Profiles.map();
+        Map<String, StoredModel> targets = Profiles.map();
+        Map<String, Boolean> inverted = Profiles.map();
         List<String> reasons = new ArrayList<>();
 
-        for (Map.Entry<CgmesSubset, List<StoredModel>> entry : chains.entrySet()) {
-            CgmesSubset subset = entry.getKey();
+        for (Map.Entry<String, List<StoredModel>> entry : chains.entrySet()) {
+            String subset = entry.getKey();
             List<StoredModel> chain = entry.getValue();
             if (chain.isEmpty()) {
-                reasons.add("scenario '" + scenario + "' holds no " + subset.getIdentifier() + " model of the"
+                reasons.add("scenario '" + scenario + "' holds no " + subset + " model of the"
                         + " target");
                 continue;
             }
@@ -123,7 +120,7 @@ final class DiffUpdatePlanner {
             targets.put(subset, target);
             String currentId = currentIds.get(subset);
             if (currentId == null) {
-                reasons.add("the network holds no " + subset.getIdentifier() + " model identity");
+                reasons.add("the network holds no " + subset + " model identity");
                 continue;
             }
             if (currentId.equals(target.id())) {
@@ -151,7 +148,7 @@ final class DiffUpdatePlanner {
                 inverted.put(subset, Boolean.TRUE);
                 continue;
             }
-            reasons.add("model " + currentId + " of subset " + subset.getIdentifier() + " is neither an ancestor"
+            reasons.add("model " + currentId + " of subset " + subset + " is neither an ancestor"
                     + " nor a descendant of " + target.id() + " in scenario '" + scenario + "'");
         }
 
@@ -171,7 +168,7 @@ final class DiffUpdatePlanner {
         paths.forEach((subset, path) -> path.stream()
                 .filter(model -> !model.fastPredicatesOnly())
                 .forEach(model -> slow.add("difference model " + model.id() + " of subset "
-                        + subset.getIdentifier() + " states a property no update query reads, so it cannot be"
+                        + subset + " states a property no update query reads, so it cannot be"
                         + " applied to a live network")));
         if (!slow.isEmpty()) {
             return new Plan(Route.FULL, Map.of(), targets, Map.of(), slow);

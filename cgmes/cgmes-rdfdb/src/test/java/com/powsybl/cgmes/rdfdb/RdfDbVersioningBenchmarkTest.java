@@ -8,7 +8,6 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
@@ -63,14 +62,14 @@ class RdfDbVersioningBenchmarkTest {
 
     private static final String S = "2016-01-01";
     private static final String CIM16 = "http://iec.ch/TC57/2013/CIM-schema-cim16#";
-    private static final CgmesSubset SSH = CgmesSubset.STEADY_STATE_HYPOTHESIS;
+    private static final String SSH = Profiles.SSH;
     private static final int DEPTH = 50;
     private static final int OTHER_SCENARIOS = 9;
     private static final int WARMUPS = 3;
     private static final int RUNS = 10;
 
     private static DifferenceModelSet step(SnapshotInfo parent, int index) {
-        DifferenceModelHeader header = DifferenceModelHeader.builder("urn:uuid:bench-ssh-" + index, SSH, CIM16)
+        DifferenceModelHeader header = DifferenceModelHeader.builder("urn:uuid:bench-ssh-" + index, Profiles.subset(SSH).orElseThrow(), CIM16)
                 .supersedes(List.of(parent.state().get(SSH)))
                 .profiles(List.of("http://entsoe.eu/CIM/SteadyStateHypothesis/1/1"))
                 .build();
@@ -235,7 +234,7 @@ class RdfDbVersioningBenchmarkTest {
                 // reader keys those links by profile, so the object needs a pdb:subset to be one
                 update.append(" ; pdb:full ").append(SparqlText.iri(iri + "/full"));
                 filler.append(SparqlText.iri(iri + "/full")).append(" pdb:subset ")
-                        .append(SparqlText.str(SSH.getIdentifier())).append(" . ");
+                        .append(SparqlText.str(SSH)).append(" . ");
             }
             if (i > 0) {
                 update.append(" ; pdb:parent ")

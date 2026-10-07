@@ -8,7 +8,6 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.rdfdb.SvedalaTimestampFixtures.Shape;
 import com.powsybl.cgmes.rdfdb.SvedalaTimestampFixtures.TimestampFiles;
 import com.powsybl.commons.report.ReportNode;
@@ -448,7 +447,7 @@ class RdfDbIngestionBenchmarkTest {
         return String.format(Locale.ROOT, "%02d:%02d", quarterHour * 15 / 60, quarterHour * 15 % 60);
     }
 
-    private static int statements(Map<CgmesSubset, Integer> perProfile) {
+    private static int statements(Map<String, Integer> perProfile) {
         return perProfile.values().stream().mapToInt(Integer::intValue).sum();
     }
 

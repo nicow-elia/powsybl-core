@@ -8,13 +8,13 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.computation.ComputationManager;
 
 import java.util.ArrayList;
-import java.util.EnumSet;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * What to read out of a scenario, and what to do with the network afterwards.
@@ -26,10 +26,10 @@ import java.util.Objects;
 public final class RdfDbLoadOptions {
 
     /** The profiles an update reads when nothing else is said: the two that carry a steady state. */
-    public static final EnumSet<CgmesSubset> DEFAULT_UPDATE_PROFILES =
-            EnumSet.of(CgmesSubset.STEADY_STATE_HYPOTHESIS, CgmesSubset.STATE_VARIABLES);
+    public static final Set<String> DEFAULT_UPDATE_PROFILES =
+            Collections.unmodifiableSortedSet(Profiles.set(List.of(Profiles.SSH, Profiles.SV)));
 
-    private EnumSet<CgmesSubset> profiles;
+    private Set<String> profiles;
     private boolean applyImportPostProcessors = true;
     private List<String> postProcessors = new ArrayList<>();
     private ComputationManager computationManager;
@@ -46,25 +46,29 @@ public final class RdfDbLoadOptions {
      * @return the options
      */
     public static RdfDbLoadOptions forUpdate() {
-        return new RdfDbLoadOptions().setProfiles(EnumSet.copyOf(DEFAULT_UPDATE_PROFILES));
+        return new RdfDbLoadOptions().setProfiles(DEFAULT_UPDATE_PROFILES);
     }
 
     /**
      * Restrict the load to the graphs of the given profiles: the profile projection of a scenario-addressed load.
      *
      * @param newProfiles the profiles to read, or {@code null} for every graph of the scenario
+     * @throws RdfDbException if a name is not a profile name ({@link Profiles#check})
      * @return these options
      */
-    public RdfDbLoadOptions setProfiles(EnumSet<CgmesSubset> newProfiles) {
-        this.profiles = newProfiles == null ? null : EnumSet.copyOf(newProfiles);
+    public RdfDbLoadOptions setProfiles(Set<String> newProfiles) {
+        if (newProfiles != null) {
+            newProfiles.forEach(Profiles::check);
+        }
+        this.profiles = newProfiles == null ? null : Profiles.set(newProfiles);
         return this;
     }
 
     /**
      * @return the profiles to read, or {@code null} for every graph of the scenario
      */
-    public EnumSet<CgmesSubset> getProfiles() {
-        return profiles == null ? null : EnumSet.copyOf(profiles);
+    public Set<String> getProfiles() {
+        return profiles == null ? null : Profiles.set(profiles);
     }
 
     /**

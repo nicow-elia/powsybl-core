@@ -7,7 +7,6 @@
  */
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.rdfdb.SvedalaTimestampFixtures.Shape;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
@@ -235,7 +234,7 @@ class ScaleIngestBenchmarkTest {
         return rows.isEmpty() ? 0L : Long.parseLong(rows.get(0).get("n").stringValue());
     }
 
-    private static int statements(Map<CgmesSubset, Integer> perProfile) {
+    private static int statements(Map<String, Integer> perProfile) {
         return perProfile.values().stream().mapToInt(Integer::intValue).sum();
     }
 }

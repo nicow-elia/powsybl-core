@@ -13,7 +13,6 @@ import com.powsybl.cgmes.conversion.Conversion;
 import com.powsybl.cgmes.conversion.TripleStoreNetworkLoader;
 import com.powsybl.cgmes.conversion.diff.CgmesDiffImport;
 import com.powsybl.cgmes.conversion.diff.CgmesDiffNotApplicableException;
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
@@ -38,8 +37,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.EnumMap;
-import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -192,9 +189,9 @@ public final class RdfDbNetworkLoader {
 
     private static List<GraphInfo> graphsToRead(RdfDbConnection db, String scenario, RdfDbLoadOptions options) {
         List<GraphInfo> all = db.graphs(scenario);
-        EnumSet<CgmesSubset> subsets = options.getProfiles();
+        Set<String> subsets = options.getProfiles();
         List<GraphInfo> graphs = subsets == null ? all
-                : all.stream().filter(g -> subsets.contains(g.subset())).toList();
+                : all.stream().filter(g -> g.profile() != null && subsets.contains(g.profile())).toList();
         if (graphs.isEmpty()) {
             throw new RdfDbException("No CGMES graphs in " + db.database() + " for scenario '" + scenario + "'"
                     + (subsets == null ? "" : " and subsets " + subsets)
@@ -426,48 +423,48 @@ public final class RdfDbNetworkLoader {
     private static DiffUpdatePlanner.Plan planUpdate(Network network, RdfDbProvenance provenance,
                                                      CatalogSnapshot snapshot, String scenario, DiffTarget target,
                                                      RdfDbUpdateOptions options) {
-        Map<CgmesSubset, String> identity = provenance != null && !provenance.modelIds().isEmpty()
+        Map<String, String> identity = provenance != null && !provenance.modelIds().isEmpty()
                 ? provenance.modelIds() : NetworkIdentity.modelIds(network, options.getProfiles());
-        Map<CgmesSubset, String> currentIds = new EnumMap<>(CgmesSubset.class);
+        Map<String, String> currentIds = Profiles.map();
         currentIds.putAll(identity);
         currentIds.keySet().retainAll(options.getProfiles());
         if (currentIds.isEmpty()) {
             throw new RdfDbException("The network carries no CGMES model identity for the profiles "
                     + options.getProfiles() + ", so there is nothing to bring forward from");
         }
-        Map<CgmesSubset, String> targetIds = targetIds(snapshot, target, currentIds.keySet());
+        Map<String, String> targetIds = targetIds(snapshot, target, currentIds.keySet());
         if (targetIds.isEmpty()) {
             return new DiffUpdatePlanner.Plan(DiffUpdatePlanner.Route.FULL, Map.of(), Map.of(), Map.of(),
                     List.of("scenario '" + scenario + "' holds no model of the profiles " + currentIds.keySet()));
         }
-        Map<CgmesSubset, List<StoredModel>> targetChains = snapshot.chainsDown(targetIds);
-        Map<CgmesSubset, List<StoredModel>> currentChains = snapshot.chainsDown(currentIds);
+        Map<String, List<StoredModel>> targetChains = snapshot.chainsDown(targetIds);
+        Map<String, List<StoredModel>> currentChains = snapshot.chainsDown(currentIds);
         return DiffUpdatePlanner.plan(scenario, currentIds, targetChains, currentChains,
                 options.getMaxDiffChain());
     }
 
-    private static Map<CgmesSubset, String> targetIds(CatalogSnapshot snapshot, DiffTarget target,
-                                                      Set<CgmesSubset> subsets) {
+    private static Map<String, String> targetIds(CatalogSnapshot snapshot, DiffTarget target,
+                                                      Set<String> subsets) {
         if (!target.isHead()) {
-            return new EnumMap<>(target.modelIds());
+            return Profiles.map(target.modelIds());
         }
-        Map<CgmesSubset, String> heads = new EnumMap<>(CgmesSubset.class);
+        Map<String, String> heads = Profiles.map();
         subsets.forEach(subset -> snapshot.head(subset).ifPresent(model -> heads.put(subset, model.id())));
         return heads;
     }
 
     /** Every profile the scenario holds, at the state the target names. */
-    private static Map<CgmesSubset, StoredModel> targetsOf(CatalogSnapshot snapshot, DiffTarget target) {
+    private static Map<String, StoredModel> targetsOf(CatalogSnapshot snapshot, DiffTarget target) {
         if (target.isHead()) {
             return snapshot.heads();
         }
-        Map<CgmesSubset, StoredModel> targets = new EnumMap<>(CgmesSubset.class);
+        Map<String, StoredModel> targets = Profiles.map();
         target.modelIds().forEach((subset, id) -> {
             StoredModel model = snapshot.model(id).orElseThrow(() -> new RdfDbException("Scenario '"
                     + snapshot.scenario() + "' holds no model " + id));
-            if (model.subset() != subset) {
+            if (!model.subset().equals(subset)) {
                 throw new RdfDbException("Model " + id + " of scenario '" + snapshot.scenario() + "' describes the "
-                        + model.subset().getIdentifier() + " profile, not " + subset.getIdentifier());
+                        + model.subset() + " profile, not " + subset);
             }
             targets.put(subset, model);
         });
@@ -494,9 +491,9 @@ public final class RdfDbNetworkLoader {
         Duration fetch = Duration.ofNanos(System.nanoTime() - fetchStart);
 
         long composeStart = System.nanoTime();
-        Map<CgmesSubset, List<DifferenceModel>> chains = new EnumMap<>(CgmesSubset.class);
-        Map<CgmesSubset, DifferenceModelHeader> headers = new EnumMap<>(CgmesSubset.class);
-        Map<CgmesSubset, List<String>> appliedIds = new EnumMap<>(CgmesSubset.class);
+        Map<String, List<DifferenceModel>> chains = Profiles.map();
+        Map<String, DifferenceModelHeader> headers = Profiles.map();
+        Map<String, List<String>> appliedIds = Profiles.map();
         plan.paths().forEach((subset, path) -> {
             if (path.isEmpty()) {
                 return;
@@ -539,7 +536,7 @@ public final class RdfDbNetworkLoader {
      * composed difference is the one being undone, so it carries the identity of the model the network holds and
      * supersedes the target, which is where the network ends up.</p>
      */
-    private static DifferenceModelHeader composedHeader(DiffUpdatePlanner.Plan plan, CgmesSubset subset,
+    private static DifferenceModelHeader composedHeader(DiffUpdatePlanner.Plan plan, String subset,
                                                         List<StoredModel> path) {
         boolean inverted = Boolean.TRUE.equals(plan.inverted().get(subset));
         StoredModel target = plan.targets().get(subset);
@@ -606,7 +603,7 @@ public final class RdfDbNetworkLoader {
     }
 
     private static void recordIdentity(Network network, RdfDbConnection db, String scenario,
-                                       Map<CgmesSubset, StoredModel> targets) {
+                                       Map<String, StoredModel> targets) {
         NetworkIdentity.advance(network, targets);
         provenanceAt(network, db, scenario);
         classicOperationDone(network);
@@ -614,7 +611,7 @@ public final class RdfDbNetworkLoader {
 
     /** The provenance of a network that was just advanced, now stating the models it holds. */
     private static RdfDbProvenanceImpl provenanceAt(Network network, RdfDbConnection db, String scenario) {
-        Map<CgmesSubset, String> ids = NetworkIdentity.modelIds(network);
+        Map<String, String> ids = NetworkIdentity.modelIds(network);
         RdfDbProvenance provenance = network.getExtension(RdfDbProvenance.class);
         if (provenance instanceof RdfDbProvenanceImpl impl && provenance.scenario().equals(scenario)) {
             impl.setModelIds(ids);
@@ -664,7 +661,7 @@ public final class RdfDbNetworkLoader {
      * @return the network, at that snapshot
      * @throws RdfDbException if the snapshot does not hold one of the profiles
      */
-    public static Network load(RdfDbConnection db, SnapshotRef ref, Set<CgmesSubset> profiles,
+    public static Network load(RdfDbConnection db, SnapshotRef ref, Set<String> profiles,
                                NetworkFactory networkFactory, Properties params, ReportNode reportNode) {
         return loadWithStatistics(db, ref, profiles, networkFactory, params, reportNode).network();
     }
@@ -695,7 +692,7 @@ public final class RdfDbNetworkLoader {
      * @param reportNode     where the load reports
      * @return the network and the timings
      */
-    public static LoadResult loadWithStatistics(RdfDbConnection db, SnapshotRef ref, Set<CgmesSubset> profiles,
+    public static LoadResult loadWithStatistics(RdfDbConnection db, SnapshotRef ref, Set<String> profiles,
                                                 NetworkFactory networkFactory, Properties params,
                                                 ReportNode reportNode) {
         Objects.requireNonNull(db);
@@ -713,12 +710,12 @@ public final class RdfDbNetworkLoader {
         return new LoadResult(materialised.network(), statistics);
     }
 
-    private static LoadResult materialize(RdfDbConnection db, SnapshotRef ref, Set<CgmesSubset> profiles,
+    private static LoadResult materialize(RdfDbConnection db, SnapshotRef ref, Set<String> profiles,
                                           NetworkFactory factory, Properties params, ReportNode rn) {
         return materialize(db, db.snapshots(ref.scenario()).require(ref), profiles, factory, params, rn);
     }
 
-    private static LoadResult materialize(RdfDbConnection db, SnapshotInfo info, Set<CgmesSubset> profiles,
+    private static LoadResult materialize(RdfDbConnection db, SnapshotInfo info, Set<String> profiles,
                                           NetworkFactory factory, Properties params, ReportNode rn) {
         MaterializationPlan plan = db.versionGraph(info.scenario()).materialization(info.iri()).project(profiles);
         Map<String, StoredModel> stateModels =
@@ -927,7 +924,7 @@ public final class RdfDbNetworkLoader {
      * @param compose         how long composing them took
      * @param apply           how long applying them took
      */
-    record AppliedDiffs(Map<CgmesSubset, List<String>> appliedModelIds, Duration compose, Duration apply) {
+    record AppliedDiffs(Map<String, List<String>> appliedModelIds, Duration compose, Duration apply) {
     }
 
     /**
@@ -960,9 +957,9 @@ public final class RdfDbNetworkLoader {
         Map<String, StoredModel> stateModels = fetched.stateModels();
 
         long composeStart = System.nanoTime();
-        Map<CgmesSubset, List<DifferenceModel>> chains = new EnumMap<>(CgmesSubset.class);
-        Map<CgmesSubset, DifferenceModelHeader> headers = new EnumMap<>(CgmesSubset.class);
-        Map<CgmesSubset, List<String>> appliedIds = new EnumMap<>(CgmesSubset.class);
+        Map<String, List<DifferenceModel>> chains = Profiles.map();
+        Map<String, DifferenceModelHeader> headers = Profiles.map();
+        Map<String, List<String>> appliedIds = Profiles.map();
         plan.stepsBySubset().forEach((subset, steps) -> {
             // The path is in application order; composing wants it oldest first, which for an undo is the
             // reverse of the order the steps are undone in
@@ -1098,7 +1095,7 @@ public final class RdfDbNetworkLoader {
      * @return the model identifiers
      */
     static Set<String> endModelIds(UpdatePlan plan) {
-        Set<CgmesSubset> touched = plan.stepsBySubset().keySet();
+        Set<String> touched = plan.stepsBySubset().keySet();
         Set<String> needed = new LinkedHashSet<>();
         plan.stepsBySubset().forEach((subset, steps) -> {
             needed.add(steps.get(0).model().id());
@@ -1174,9 +1171,9 @@ public final class RdfDbNetworkLoader {
         // forward that model is the last step of that profile; walking backwards it is an ancestor the path
         // undid its way to, which is not among the steps and is then read in one request
         Map<String, StoredModel> stepModels = new LinkedHashMap<>();
-        Set<CgmesSubset> touched = plan.stepsBySubset().keySet();
+        Set<String> touched = plan.stepsBySubset().keySet();
         plan.steps().forEach(step -> stepModels.put(step.model().id(), step.model()));
-        Map<CgmesSubset, StoredModel> ends = new EnumMap<>(CgmesSubset.class);
+        Map<String, StoredModel> ends = Profiles.map();
         plan.targetState().forEach((subset, id) -> {
             if (!touched.contains(subset)) {
                 return;

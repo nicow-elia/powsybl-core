@@ -8,7 +8,6 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
 
 import java.time.ZonedDateTime;
@@ -29,7 +28,8 @@ import java.util.Objects;
  *
  * @param scenario             the raw name of the scenario the model belongs to
  * @param id                   the CGMES model identifier, typically a {@code urn:uuid:} URI
- * @param subset               the CGMES profile the model describes
+ * @param subset               the profile the model describes ({@link Profiles}); a custom one is always a
+ *                             {@link Kind#FULL} model
  * @param kind                 whether it is an uploaded instance file or a recorded difference
  * @param graph                the named graph of a {@link Kind#FULL} model, {@code null} for a difference
  * @param forwardGraph         the named graph holding the forward statements of a difference, {@code null} for a
@@ -60,7 +60,7 @@ import java.util.Objects;
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
-public record StoredModel(String scenario, String id, CgmesSubset subset, StoredModel.Kind kind, String graph,
+public record StoredModel(String scenario, String id, String subset, StoredModel.Kind kind, String graph,
                           String forwardGraph, String reverseGraph, int version, String description,
                           ZonedDateTime scenarioTime, ZonedDateTime created, String modelingAuthoritySet,
                           List<String> profiles, List<String> dependentOn, List<String> supersedes,
@@ -106,7 +106,9 @@ public record StoredModel(String scenario, String id, CgmesSubset subset, Stored
      * @return the header
      */
     public DifferenceModelHeader toHeader() {
-        return DifferenceModelHeader.builder(id, subset, cimNamespace == null ? "" : cimNamespace)
+        return DifferenceModelHeader.builder(id, Profiles.subset(subset).orElseThrow(() -> new RdfDbException(
+                "model " + id + " of the custom profile " + subset + " is stored whole and has no difference header")),
+                cimNamespace == null ? "" : cimNamespace)
                 .version(version)
                 .description(description)
                 .scenarioTime(scenarioTime)
@@ -127,15 +129,7 @@ public record StoredModel(String scenario, String id, CgmesSubset subset, Stored
      * @return whether the model is a full model of {@code EQ_BD} or {@code TP_BD}
      */
     public boolean isBoundary() {
-        return kind == Kind.FULL && isBoundaryProfile(subset);
-    }
-
-    /**
-     * @param subset a CGMES profile
-     * @return whether it is one of the two boundary profiles
-     */
-    static boolean isBoundaryProfile(CgmesSubset subset) {
-        return subset == CgmesSubset.EQUIPMENT_BOUNDARY || subset == CgmesSubset.TOPOLOGY_BOUNDARY;
+        return kind == Kind.FULL && Profiles.isBoundary(subset);
     }
 
     /**

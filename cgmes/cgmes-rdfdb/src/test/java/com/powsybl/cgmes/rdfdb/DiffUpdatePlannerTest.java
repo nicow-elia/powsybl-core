@@ -8,7 +8,6 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -34,8 +33,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DiffUpdatePlannerTest {
 
     private static final String S = "2016-01-01";
-    private static final CgmesSubset SSH = CgmesSubset.STEADY_STATE_HYPOTHESIS;
-    private static final CgmesSubset EQ = CgmesSubset.EQUIPMENT;
+    private static final String SSH = Profiles.SSH;
+    private static final String EQ = Profiles.EQ;
 
     // ------------------------------------------------------------------ nothing to do
 
@@ -188,8 +187,8 @@ class DiffUpdatePlannerTest {
      * A chain of {@code diffs} differences on top of a full model, head first, exactly as
      * {@link ModelCatalog#chainsDown} answers it.
      */
-    private static List<StoredModel> chain(CgmesSubset subset, int diffs, boolean fast) {
-        String prefix = subset.getIdentifier() + "-";
+    private static List<StoredModel> chain(String subset, int diffs, boolean fast) {
+        String prefix = subset + "-";
         List<StoredModel> chain = new ArrayList<>();
         for (int depth = diffs; depth >= 1; depth--) {
             chain.add(new StoredModel(S, prefix + depth, subset, StoredModel.Kind.DIFF, null,

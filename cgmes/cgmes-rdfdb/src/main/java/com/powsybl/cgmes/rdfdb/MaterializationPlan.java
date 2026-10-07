@@ -8,10 +8,6 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
-
-import java.util.EnumMap;
-import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -34,8 +30,8 @@ import java.util.TreeSet;
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
-public record MaterializationPlan(String target, Map<CgmesSubset, FullSource> startModel,
-                                  List<UpdatePlan.DiffStep> steps, Map<CgmesSubset, String> targetState) {
+public record MaterializationPlan(String target, Map<String, FullSource> startModel,
+                                  List<UpdatePlan.DiffStep> steps, Map<String, String> targetState) {
 
     /**
      * The full graph one profile starts from.
@@ -69,20 +65,20 @@ public record MaterializationPlan(String target, Map<CgmesSubset, FullSource> st
      * @return the plan, restricted to those profiles and the boundary
      * @throws RdfDbException if a profile is not part of the snapshot's state
      */
-    public MaterializationPlan project(Set<CgmesSubset> profiles) {
+    public MaterializationPlan project(Set<String> profiles) {
         if (profiles == null || profiles.isEmpty()) {
             return this;
         }
-        Set<CgmesSubset> missing = EnumSet.copyOf(profiles);
+        Set<String> missing = Profiles.set(profiles);
         missing.removeAll(targetState.keySet());
         if (!missing.isEmpty()) {
             throw new RdfDbException("the snapshot " + target + " holds no " + missing + "; it holds "
                     + new TreeSet<>(targetState.keySet()));
         }
-        Map<CgmesSubset, FullSource> start = new EnumMap<>(CgmesSubset.class);
-        Map<CgmesSubset, String> state = new EnumMap<>(CgmesSubset.class);
+        Map<String, FullSource> start = Profiles.map();
+        Map<String, String> state = Profiles.map();
         targetState.keySet().stream()
-                .filter(subset -> profiles.contains(subset) || StoredModel.isBoundaryProfile(subset))
+                .filter(subset -> profiles.contains(subset) || Profiles.isBoundary(subset))
                 .forEach(subset -> {
                     start.put(subset, startModel.get(subset));
                     state.put(subset, targetState.get(subset));

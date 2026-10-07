@@ -8,10 +8,7 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
-
 import java.util.ArrayList;
-import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 
@@ -44,7 +41,7 @@ import java.util.Map;
  */
 public record UpdatePlan(Kind kind, String from, String to, List<DiffStep> steps, List<String> reasons,
                          int chainLength, boolean checkpointRecommended, int distanceToFullSnapshot,
-                         Map<CgmesSubset, String> targetState) {
+                         Map<String, String> targetState) {
 
     /** What the caller has to do to reach the target. */
     public enum Kind {
@@ -89,8 +86,8 @@ public record UpdatePlan(Kind kind, String from, String to, List<DiffStep> steps
      *
      * @return the steps per profile
      */
-    public Map<CgmesSubset, List<DiffStep>> stepsBySubset() {
-        Map<CgmesSubset, List<DiffStep>> bySubset = new EnumMap<>(CgmesSubset.class);
+    public Map<String, List<DiffStep>> stepsBySubset() {
+        Map<String, List<DiffStep>> bySubset = Profiles.map();
         steps.forEach(step -> bySubset.computeIfAbsent(step.model().subset(), k -> new ArrayList<>()).add(step));
         return bySubset;
     }

@@ -53,7 +53,7 @@ class RdfDbProvenanceVariantTest {
         Network network = Network.create("variant-fixture", "manual");
         network.setCaseDate(PRIMARY_CASE_DATE);
         RdfDbProvenanceImpl provenance = new RdfDbProvenanceImpl(RdfDatabase.inMemory("prov-variants"), SCENARIO,
-                List.of(), Instant.now(), Map.of(CgmesSubset.STEADY_STATE_HYPOTHESIS, "urn:uuid:ssh-1." + (version - 1)));
+                List.of(), Instant.now(), Map.of(Profiles.SSH, "urn:uuid:ssh-1." + (version - 1)));
         network.addExtension(RdfDbProvenance.class, provenance);
         provenance.setSnapshot(RdfDbNames.snapshot(SCENARIO, BE, TIMESTAMP, String.valueOf(version)));
         return new Fixture(network, provenance);
@@ -63,7 +63,7 @@ class RdfDbProvenanceVariantTest {
         RdfDbProvenanceImpl.BoundState bound = new RdfDbProvenanceImpl.BoundState();
         bound.ref = new SnapshotRef(SCENARIO, BE, TIMESTAMP, String.valueOf(version));
         bound.snapshotIri = RdfDbNames.snapshot(SCENARIO, BE, TIMESTAMP, String.valueOf(version));
-        bound.modelIds.put(CgmesSubset.STEADY_STATE_HYPOTHESIS, modelId);
+        bound.modelIds.put(Profiles.SSH, modelId);
         bound.caseDate = BOUND_CASE_DATE;
         return bound;
     }
@@ -91,7 +91,7 @@ class RdfDbProvenanceVariantTest {
         VariantBinding binding = fixture.provenance().variantBinding("v2").orElseThrow();
         assertEquals(RdfDbNames.snapshot(SCENARIO, BE, TIMESTAMP, "2"), binding.snapshotIri());
         assertEquals("v1", binding.clonedFrom());
-        assertEquals(Map.of(CgmesSubset.STEADY_STATE_HYPOTHESIS, "urn:uuid:ssh-1.1"), binding.modelIds());
+        assertEquals(Map.of(Profiles.SSH, "urn:uuid:ssh-1.1"), binding.modelIds());
     }
 
     @Test
@@ -123,7 +123,7 @@ class RdfDbProvenanceVariantTest {
         Network network = Network.create("variant-fixture", "manual");
         network.getVariantManager().cloneVariant(VariantManagerConstants.INITIAL_VARIANT_ID, "older");
         RdfDbProvenanceImpl provenance = new RdfDbProvenanceImpl(RdfDatabase.inMemory("prov-older"), SCENARIO,
-                List.of(), Instant.now(), Map.of(CgmesSubset.STEADY_STATE_HYPOTHESIS, "urn:uuid:ssh"));
+                List.of(), Instant.now(), Map.of(Profiles.SSH, "urn:uuid:ssh"));
         network.addExtension(RdfDbProvenance.class, provenance);
 
         assertTrue(provenance.variantBinding("older").isEmpty());
@@ -139,7 +139,7 @@ class RdfDbProvenanceVariantTest {
         Network network = Network.create("variant-fixture", "manual");
         network.getVariantManager().cloneVariant(VariantManagerConstants.INITIAL_VARIANT_ID, "unbound");
         RdfDbProvenanceImpl provenance = new RdfDbProvenanceImpl(RdfDatabase.inMemory("prov-recreate"), SCENARIO,
-                List.of(), Instant.now(), Map.of(CgmesSubset.STEADY_STATE_HYPOTHESIS, "urn:uuid:ssh"));
+                List.of(), Instant.now(), Map.of(Profiles.SSH, "urn:uuid:ssh"));
         network.addExtension(RdfDbProvenance.class, provenance);
         provenance.setSnapshot(RdfDbNames.snapshot(SCENARIO, BE, TIMESTAMP, "1"));
         network.getVariantManager().cloneVariant(VariantManagerConstants.INITIAL_VARIANT_ID, "v1");
@@ -178,7 +178,7 @@ class RdfDbProvenanceVariantTest {
         try (VariantScope scope = VariantScope.enter(network, provenance, "v1")) {
             assertEquals("v1", scope.variantId());
             assertEquals("v1", network.getVariantManager().getWorkingVariantId());
-            assertEquals(Map.of(CgmesSubset.STEADY_STATE_HYPOTHESIS, "urn:uuid:ssh-1.1"), provenance.modelIds());
+            assertEquals(Map.of(Profiles.SSH, "urn:uuid:ssh-1.1"), provenance.modelIds());
             assertEquals(RdfDbNames.snapshot(SCENARIO, BE, TIMESTAMP, "2"), provenance.snapshot().orElseThrow());
             assertEquals("urn:uuid:ssh-1.1", modelIdOf(network));
             assertEquals(BOUND_CASE_DATE, network.getCaseDate());
@@ -186,7 +186,7 @@ class RdfDbProvenanceVariantTest {
 
         assertEquals(VariantManagerConstants.INITIAL_VARIANT_ID,
                 network.getVariantManager().getWorkingVariantId());
-        assertEquals(Map.of(CgmesSubset.STEADY_STATE_HYPOTHESIS, "urn:uuid:ssh-1.0"), provenance.modelIds());
+        assertEquals(Map.of(Profiles.SSH, "urn:uuid:ssh-1.0"), provenance.modelIds());
         assertEquals(RdfDbNames.snapshot(SCENARIO, BE, TIMESTAMP, "1"), provenance.snapshot().orElseThrow());
         assertEquals("urn:uuid:ssh-1.0", modelIdOf(network));
         assertEquals(PRIMARY_CASE_DATE, network.getCaseDate());
@@ -203,16 +203,16 @@ class RdfDbProvenanceVariantTest {
         installModel(network, "urn:uuid:ssh-1.0");
 
         try (VariantScope scope = VariantScope.enter(network, provenance, "v1")) {
-            provenance.setModelIds(Map.of(CgmesSubset.STEADY_STATE_HYPOTHESIS, "urn:uuid:ssh-1.2"));
+            provenance.setModelIds(Map.of(Profiles.SSH, "urn:uuid:ssh-1.2"));
             provenance.setSnapshot(RdfDbNames.snapshot(SCENARIO, BE, TIMESTAMP, "3"));
             installModel(network, "urn:uuid:ssh-1.2");
         }
 
-        assertEquals(Map.of(CgmesSubset.STEADY_STATE_HYPOTHESIS, "urn:uuid:ssh-1.0"), provenance.modelIds());
+        assertEquals(Map.of(Profiles.SSH, "urn:uuid:ssh-1.0"), provenance.modelIds());
         assertEquals("urn:uuid:ssh-1.0", modelIdOf(network));
         VariantBinding binding = provenance.variantBinding("v1").orElseThrow();
         assertEquals(RdfDbNames.snapshot(SCENARIO, BE, TIMESTAMP, "3"), binding.snapshotIri());
-        assertEquals(Map.of(CgmesSubset.STEADY_STATE_HYPOTHESIS, "urn:uuid:ssh-1.2"), binding.modelIds());
+        assertEquals(Map.of(Profiles.SSH, "urn:uuid:ssh-1.2"), binding.modelIds());
     }
 
     @Test
@@ -294,7 +294,7 @@ class RdfDbProvenanceVariantTest {
         network.getVariantManager().cloneVariant("v1", VariantManagerConstants.INITIAL_VARIANT_ID, true);
 
         assertEquals("urn:uuid:ssh-1.1", modelIdOf(network));
-        assertEquals(Map.of(CgmesSubset.STEADY_STATE_HYPOTHESIS, "urn:uuid:ssh-1.1"), provenance.modelIds());
+        assertEquals(Map.of(Profiles.SSH, "urn:uuid:ssh-1.1"), provenance.modelIds());
         assertEquals(RdfDbNames.snapshot(SCENARIO, BE, TIMESTAMP, "2"), provenance.snapshot().orElseThrow());
         assertEquals(BOUND_CASE_DATE, network.getCaseDate());
         assertEquals("2", provenance.variantBinding(VariantManagerConstants.INITIAL_VARIANT_ID)
@@ -331,7 +331,7 @@ class RdfDbProvenanceVariantTest {
         }
 
         assertEquals("urn:uuid:ssh-1.1", modelIdOf(network));
-        assertEquals(Map.of(CgmesSubset.STEADY_STATE_HYPOTHESIS, "urn:uuid:ssh-1.1"), provenance.modelIds());
+        assertEquals(Map.of(Profiles.SSH, "urn:uuid:ssh-1.1"), provenance.modelIds());
         assertEquals(RdfDbNames.snapshot(SCENARIO, BE, TIMESTAMP, "2"), provenance.snapshot().orElseThrow());
         assertEquals("2", provenance.variantBinding(VariantManagerConstants.INITIAL_VARIANT_ID)
                 .orElseThrow().version());
@@ -346,7 +346,7 @@ class RdfDbProvenanceVariantTest {
         Network network = Network.create("variant-fixture", "manual");
         network.getVariantManager().cloneVariant(VariantManagerConstants.INITIAL_VARIANT_ID, "unbound");
         RdfDbProvenanceImpl provenance = new RdfDbProvenanceImpl(RdfDatabase.inMemory("prov-overwrite"), SCENARIO,
-                List.of(), Instant.now(), Map.of(CgmesSubset.STEADY_STATE_HYPOTHESIS, "urn:uuid:ssh-1.0"));
+                List.of(), Instant.now(), Map.of(Profiles.SSH, "urn:uuid:ssh-1.0"));
         network.addExtension(RdfDbProvenance.class, provenance);
         provenance.setSnapshot(RdfDbNames.snapshot(SCENARIO, BE, TIMESTAMP, "1"));
         installModel(network, "urn:uuid:ssh-1.0");

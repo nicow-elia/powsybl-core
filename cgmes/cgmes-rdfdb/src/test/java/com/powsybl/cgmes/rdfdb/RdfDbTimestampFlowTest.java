@@ -9,7 +9,6 @@
 package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Network;
@@ -51,8 +50,8 @@ class RdfDbTimestampFlowTest {
     private static final Instant T1 = Instant.parse("2014-06-01T11:00:00Z");
     private static final Instant T2 = Instant.parse("2014-06-01T11:15:00Z");
     private static final Instant T3 = Instant.parse("2014-06-01T11:30:00Z");
-    private static final CgmesSubset SSH = CgmesSubset.STEADY_STATE_HYPOTHESIS;
-    private static final CgmesSubset EQ = CgmesSubset.EQUIPMENT;
+    private static final String SSH = Profiles.SSH;
+    private static final String EQ = Profiles.EQ;
     private static final Set<String> IDENTITY = Set.of("cgmesMetadataModels", "rdfDbProvenance");
 
     private static RdfDbConnection twoDays(String backend) {
@@ -323,14 +322,14 @@ class RdfDbTimestampFlowTest {
             assertThat(written.members()).containsExactly("urn:uuid:ssh-1100");
             assertThat(written.fast()).isTrue();
             // Only the steady state moved; every other profile is the one the root holds
-            assertThat(written.state().get(CgmesSubset.EQUIPMENT))
-                    .isEqualTo(db.snapshots(S).root(BE).orElseThrow().state().get(CgmesSubset.EQUIPMENT));
+            assertThat(written.state().get(Profiles.EQ))
+                    .isEqualTo(db.snapshots(S).root(BE).orElseThrow().state().get(Profiles.EQ));
 
             SnapshotCatalog.IngestStatistics statistics = catalog.lastIngestStatistics();
             assertThat(statistics.forwardStatements().get(SSH)).isEqualTo(3);
             assertThat(statistics.reverseStatements().get(SSH)).isEqualTo(3);
             assertThat(statistics.fast().get(SSH)).isTrue();
-            assertThat(statistics.ignored()).contains(CgmesSubset.STATE_VARIABLES, CgmesSubset.TOPOLOGY);
+            assertThat(statistics.ignored()).contains(Profiles.SV, Profiles.TP);
             catalog.verify();
         }
     }
@@ -380,7 +379,7 @@ class RdfDbTimestampFlowTest {
             assertThatThrownBy(() -> db.snapshots(S).putAsDiff(TimestampFixtures.changedBoundary(T1, "bd"), null,
                     ref(S, 1, T1), null, params(), ReportNode.NO_OP))
                     .isInstanceOf(RdfDbConflictException.class)
-                    .hasMessageContaining("carry the boundary {EQUIPMENT_BOUNDARY=urn:uuid:")
+                    .hasMessageContaining("carry the boundary {EQ_BD=urn:uuid:")
                     .hasMessageContaining("a new boundary is a new scenario");
         }
     }

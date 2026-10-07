@@ -8,7 +8,6 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
@@ -43,7 +42,7 @@ class VersionGraphTest {
     private static final String S = "2016-01-01";
     private static final String OTHER = "other";
     private static final String CIM16 = "http://iec.ch/TC57/2013/CIM-schema-cim16#";
-    private static final CgmesSubset SSH = CgmesSubset.STEADY_STATE_HYPOTHESIS;
+    private static final String SSH = Profiles.SSH;
 
     /** A fast difference: a property the steady-state update queries read. */
     private static DifferenceModelSet fast(SnapshotInfo parent, String id, String value) {
@@ -60,7 +59,7 @@ class VersionGraphTest {
 
     private static DifferenceModelSet one(SnapshotInfo parent, String id, CgmesStatement forward,
                                           CgmesStatement reverse) {
-        DifferenceModelHeader header = DifferenceModelHeader.builder(id, SSH, CIM16)
+        DifferenceModelHeader header = DifferenceModelHeader.builder(id, Profiles.subset(SSH).orElseThrow(), CIM16)
                 .supersedes(List.of(parent.state().get(SSH)))
                 .profiles(List.of("http://entsoe.eu/CIM/SteadyStateHypothesis/1/1"))
                 .build();
@@ -201,8 +200,8 @@ class VersionGraphTest {
             assertThat(after.startModel().get(SSH).snapshot()).isEqualTo(chain.c.iri());
             // The profiles the chain never touched are inherited by the checkpoint, so the walk stops there too
             // but the graph it names is still the root's instance file
-            assertThat(after.startModel().get(CgmesSubset.TOPOLOGY).modelId())
-                    .isEqualTo(chain.a.fullModels().get(CgmesSubset.TOPOLOGY));
+            assertThat(after.startModel().get(Profiles.TP).modelId())
+                    .isEqualTo(chain.a.fullModels().get(Profiles.TP));
         }
     }
 

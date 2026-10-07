@@ -8,8 +8,6 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
-
 import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.util.Map;
@@ -39,7 +37,7 @@ import java.util.Map;
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 public record VariantBinding(String variantId, String scenario, SnapshotRef ref, String snapshotIri,
-                             Map<CgmesSubset, String> modelIds, ZonedDateTime caseDate, String clonedFrom,
+                             Map<String, String> modelIds, ZonedDateTime caseDate, String clonedFrom,
                              Instant boundAt) {
 
     /**

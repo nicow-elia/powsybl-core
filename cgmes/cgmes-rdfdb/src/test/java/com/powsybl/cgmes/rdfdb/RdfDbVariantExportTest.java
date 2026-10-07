@@ -270,9 +270,9 @@ class RdfDbVariantExportTest {
             Network sender = day(db).network();
             RdfDbProvenance provenance = sender.getExtension(RdfDbProvenance.class);
             String primaryBefore = provenance.variantBinding(VariantManagerConstants.INITIAL_VARIANT_ID)
-                    .orElseThrow().modelIds().get(com.powsybl.cgmes.model.CgmesSubset.STEADY_STATE_HYPOTHESIS);
+                    .orElseThrow().modelIds().get(Profiles.SSH);
             String variantBefore = provenance.variantBinding("11:00").orElseThrow().modelIds()
-                    .get(com.powsybl.cgmes.model.CgmesSubset.STEADY_STATE_HYPOTHESIS);
+                    .get(Profiles.SSH);
 
             List<NetworkEvent> events = recordOn(sender, "11:00", n -> n.getLoad(Changes.LOAD_ID).setP0(88.0));
             sender.getVariantManager().setWorkingVariant("11:00");
@@ -283,10 +283,10 @@ class RdfDbVariantExportTest {
             }
 
             assertThat(provenance.variantBinding("11:00").orElseThrow().modelIds()
-                    .get(com.powsybl.cgmes.model.CgmesSubset.STEADY_STATE_HYPOTHESIS))
+                    .get(Profiles.SSH))
                     .as("the variant that holds the new state has to advance").isNotEqualTo(variantBefore);
             assertThat(provenance.variantBinding(VariantManagerConstants.INITIAL_VARIANT_ID).orElseThrow()
-                    .modelIds().get(com.powsybl.cgmes.model.CgmesSubset.STEADY_STATE_HYPOTHESIS))
+                    .modelIds().get(Profiles.SSH))
                     .as("the primary still holds its own state, so it must not advance")
                     .isEqualTo(primaryBefore);
         }
@@ -355,7 +355,7 @@ class RdfDbVariantExportTest {
                         ReportNode.NO_OP);
                 assertThat(written.stored()).hasSize(1);
                 assertThat(written.stored().get(0).subset())
-                        .isEqualTo(com.powsybl.cgmes.model.CgmesSubset.STEADY_STATE_HYPOTHESIS);
+                        .isEqualTo(Profiles.SSH);
             } finally {
                 sender.getVariantManager().setWorkingVariant(VariantManagerConstants.INITIAL_VARIANT_ID);
             }
@@ -392,7 +392,7 @@ class RdfDbVariantExportTest {
             Network sender = day(db).network();
             RdfDbProvenance provenance = sender.getExtension(RdfDbProvenance.class);
             String sshOfT1 = provenance.variantBinding("11:00").orElseThrow()
-                    .modelIds().get(com.powsybl.cgmes.model.CgmesSubset.STEADY_STATE_HYPOTHESIS);
+                    .modelIds().get(Profiles.SSH);
             List<NetworkEvent> events = recordOn(sender, "11:00", n -> n.getLoad(Changes.LOAD_ID).setP0(44.0));
 
             // Only the public API: inVariant swaps the identity in, setVariant selects the values
@@ -417,10 +417,10 @@ class RdfDbVariantExportTest {
             assertThat(sender.getVariantManager().getWorkingVariantId())
                     .isEqualTo(VariantManagerConstants.INITIAL_VARIANT_ID);
             // And the network says it is the primary again afterwards
-            assertThat(provenance.modelIds().get(com.powsybl.cgmes.model.CgmesSubset.STEADY_STATE_HYPOTHESIS))
+            assertThat(provenance.modelIds().get(Profiles.SSH))
                     .isEqualTo(provenance.variantBinding(VariantManagerConstants.INITIAL_VARIANT_ID)
                             .orElseThrow().modelIds()
-                            .get(com.powsybl.cgmes.model.CgmesSubset.STEADY_STATE_HYPOTHESIS));
+                            .get(Profiles.SSH));
         }
     }
 }

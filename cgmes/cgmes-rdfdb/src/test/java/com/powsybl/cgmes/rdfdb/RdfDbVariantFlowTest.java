@@ -673,7 +673,7 @@ class RdfDbVariantFlowTest {
             bring(network, db, 2, null, "A");
 
             assertThatThrownBy(() -> RdfDbNetworkLoader.update(network, db, S,
-                    DiffTarget.models(Map.of(com.powsybl.cgmes.model.CgmesSubset.STEADY_STATE_HYPOTHESIS,
+                    DiffTarget.models(Map.of(Profiles.SSH,
                             "urn:uuid:whatever")), new RdfDbUpdateOptions(), params(), ReportNode.NO_OP))
                     .isInstanceOf(RdfDbException.class)
                     .hasMessageContaining("variant mode addresses snapshots");
@@ -737,13 +737,13 @@ class RdfDbVariantFlowTest {
             Network sender = load(db, S, 1, null);
             sender.getVariantManager().cloneVariant(VariantManagerConstants.INITIAL_VARIANT_ID, "contingency-1");
             String sshBefore = sender.getExtension(RdfDbProvenance.class).modelIds()
-                    .get(com.powsybl.cgmes.model.CgmesSubset.STEADY_STATE_HYPOTHESIS);
+                    .get(Profiles.SSH);
 
             Changes.export(sender, db, ref(S, 2), n -> Changes.moveLoad(n, 9.0));
 
             // The primary advanced, exactly as it always did
             assertThat(sender.getExtension(RdfDbProvenance.class).modelIds()
-                    .get(com.powsybl.cgmes.model.CgmesSubset.STEADY_STATE_HYPOTHESIS))
+                    .get(Profiles.SSH))
                     .isNotEqualTo(sshBefore);
             assertThat(db.snapshots(S).find(ref(S, 2))).isPresent();
         }

@@ -8,7 +8,6 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
 import org.eclipse.rdf4j.model.Value;
 import org.eclipse.rdf4j.model.ValueFactory;
 import org.eclipse.rdf4j.model.impl.SimpleValueFactory;
@@ -65,8 +64,24 @@ class SnapshotRowsTest {
         assertThat(info.timestamp()).isEqualTo(T);
         assertThat(info.version()).isEqualTo("2");
         assertThat(info.ref()).isEqualTo(SnapshotRef.of(S, MAS, T, "2"));
-        assertThat(info.profiles()).isEqualTo(Set.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS));
+        assertThat(info.profiles()).isEqualTo(Set.of(Profiles.EQ, Profiles.SSH));
         assertThat(info.edge()).isEqualTo(SnapshotInfo.EdgeKind.NONE);
+    }
+
+    @Test
+    void aCustomProfileIsKeptAndAnUnrecognisedOneIsNot() {
+        List<Map<String, Value>> rows = node();
+        rows.add(Map.of("s", VF.createIRI(IRI), "p", VF.createIRI(RdfDbVocabulary.STATE),
+                "o", VF.createIRI("urn:uuid:cfg-1"), "sub", VF.createLiteral("CFG")));
+        rows.add(Map.of("s", VF.createIRI(IRI), "p", VF.createIRI(RdfDbVocabulary.FULL_MODELS),
+                "o", VF.createIRI("urn:uuid:cfg-1"), "sub", VF.createLiteral("CFG")));
+        // What an earlier writer recorded for a file whose name said no profile
+        rows.add(Map.of("s", VF.createIRI(IRI), "p", VF.createIRI(RdfDbVocabulary.STATE),
+                "o", VF.createIRI("urn:uuid:other"), "sub", VF.createLiteral("unknown")));
+        SnapshotInfo info = SnapshotRows.group(S, rows, "s").get(IRI);
+        assertThat(info.state()).containsEntry("CFG", "urn:uuid:cfg-1").doesNotContainKey("unknown");
+        assertThat(info.fullModels()).containsEntry("CFG", "urn:uuid:cfg-1");
+        assertThat(info.profiles()).containsExactly(Profiles.EQ, Profiles.SSH, "CFG");
     }
 
     @Test

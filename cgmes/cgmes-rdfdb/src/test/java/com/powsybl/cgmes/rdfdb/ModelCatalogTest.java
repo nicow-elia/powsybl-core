@@ -13,6 +13,7 @@ import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
 import com.powsybl.cgmes.model.diff.DifferenceModelSet;
+import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -67,8 +68,8 @@ class ModelCatalogTest {
             assertThat(catalog.isEmpty()).isTrue();
             assertThat(catalog.models()).isEmpty();
             assertThat(catalog.hasDifferences()).isFalse();
-            assertThat(catalog.head(CgmesSubset.STEADY_STATE_HYPOTHESIS)).isEmpty();
-            assertThat(catalog.full(CgmesSubset.STEADY_STATE_HYPOTHESIS)).isEmpty();
+            assertThat(catalog.head(Profiles.SSH)).isEmpty();
+            assertThat(catalog.full(Profiles.SSH)).isEmpty();
             assertThat(catalog.chainDown("urn:uuid:nothing")).isEmpty();
             assertThat(catalog.model("urn:uuid:nothing")).isEmpty();
             assertThat(catalog.orphanGraphs()).isEmpty();
@@ -95,7 +96,7 @@ class ModelCatalogTest {
                 assertThat(model.reverseGraph()).isNull();
             });
             // The header of the steady state file, as the file itself carries it
-            StoredModel ssh = catalog.full(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow();
+            StoredModel ssh = catalog.full(Profiles.SSH).orElseThrow();
             assertThat(ssh.profiles()).isNotEmpty();
             assertThat(ssh.modelingAuthoritySet()).isNotBlank();
             assertThat(ssh.dependentOn()).isNotEmpty();
@@ -106,19 +107,43 @@ class ModelCatalogTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void anUploadRegistersACustomProfileFileUnderTheNameItsFileGives(String backend) {
+        try (RdfDbConnection db = RdfDbConnection.open(Backends.database(backend, "catalog-custom"))) {
+            String scenario = "custom";
+            db.clear(scenario);
+            ReadOnlyDataSource files = TimestampFixtures.with(TimestampFixtures.with(microGridBe(),
+                    TimestampFixtures.CFG, TimestampFixtures.cfg("urn:uuid:cfg-1", Backends.BASE, "40")),
+                    "Notes.xml", TimestampFixtures.cfg("urn:uuid:notes", Backends.BASE, "1"));
+            db.loadCgmes(scenario, files, null, params(), ReportNode.NO_OP);
+            ModelCatalog catalog = db.catalog(scenario);
+            // A file whose name says no profile is uploaded, and not registered
+            assertThat(catalog.models()).hasSize(db.contextNames(scenario).size() - 1);
+            assertThat(catalog.model("urn:uuid:notes")).isEmpty();
+            StoredModel cfg = catalog.full("CFG").orElseThrow();
+            assertThat(cfg.id()).isEqualTo("urn:uuid:cfg-1");
+            assertThat(cfg.kind()).isEqualTo(StoredModel.Kind.FULL);
+            assertThat(cfg.profiles()).containsExactly("http://example.org/Configuration/1");
+            assertThat(cfg.tripleCount()).isPositive();
+            assertThat(db.graphs(scenario)).extracting(GraphInfo::profile).contains("CFG", Profiles.EQ);
+            db.clear(scenario);
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void modelsAreSortedByProfileThenByDepth(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             ModelCatalog catalog = db.catalog(S);
-            StoredModel base = catalog.full(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow();
+            StoredModel base = catalog.full(Profiles.SSH).orElseThrow();
             new RdfDbDifferenceSink(db, S).accept(diff("urn:uuid:c-1", base.id()));
             new RdfDbDifferenceSink(db, S).accept(diff("urn:uuid:c-2", "urn:uuid:c-1"));
 
             List<StoredModel> ssh = catalog.models().stream()
-                    .filter(model -> model.subset() == CgmesSubset.STEADY_STATE_HYPOTHESIS).toList();
+                    .filter(model -> Profiles.SSH.equals(model.subset())).toList();
             assertThat(ssh.stream().map(StoredModel::chainDepth).toList()).isSorted();
             assertThat(ssh.stream().map(StoredModel::id).toList())
                     .containsExactly(base.id(), "urn:uuid:c-1", "urn:uuid:c-2");
-            assertThat(catalog.models().stream().map(model -> model.subset().getIdentifier()).toList()).isSorted();
+            assertThat(catalog.models().stream().map(StoredModel::subset).toList()).isSorted();
         }
     }
 
@@ -127,10 +152,10 @@ class ModelCatalogTest {
     void reRegisteringAGraphReplacesItsNodeRatherThanMergingIntoIt(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             ModelCatalog catalog = db.catalog(S);
-            StoredModel before = catalog.full(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow();
+            StoredModel before = catalog.full(Profiles.SSH).orElseThrow();
             // The overload that probes the data rather than being told what the upload used
             catalog.registerFullModels(db.contextNames(S));
-            StoredModel after = catalog.full(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow();
+            StoredModel after = catalog.full(Profiles.SSH).orElseThrow();
             assertThat(after.id()).isEqualTo(before.id());
             assertThat(after.subset()).isEqualTo(before.subset());
             assertThat(after.graph()).isEqualTo(before.graph());
@@ -148,14 +173,14 @@ class ModelCatalogTest {
     void headAndChainDownFollowTheSupersedesChain(String backend) {
         try (RdfDbConnection db = twoScenarios(backend)) {
             ModelCatalog catalog = db.catalog(S);
-            StoredModel base = catalog.full(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow();
-            assertThat(catalog.head(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow().id()).isEqualTo(base.id());
+            StoredModel base = catalog.full(Profiles.SSH).orElseThrow();
+            assertThat(catalog.head(Profiles.SSH).orElseThrow().id()).isEqualTo(base.id());
 
             new RdfDbDifferenceSink(db, S).accept(diff("urn:uuid:h-1", base.id()));
             new RdfDbDifferenceSink(db, S).accept(diff("urn:uuid:h-2", "urn:uuid:h-1"));
             new RdfDbDifferenceSink(db, S).accept(diff("urn:uuid:h-3", "urn:uuid:h-2"));
 
-            assertThat(catalog.head(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow().id())
+            assertThat(catalog.head(Profiles.SSH).orElseThrow().id())
                     .isEqualTo("urn:uuid:h-3");
             assertThat(catalog.hasDifferences()).isTrue();
             // Head first, down to the instance file
@@ -167,10 +192,10 @@ class ModelCatalogTest {
             assertThat(catalog.chainDown("urn:uuid:h-2").stream().map(StoredModel::id).toList())
                     .containsExactly("urn:uuid:h-2", "urn:uuid:h-1", base.id());
             // The full model of the profile is still the instance file, however long the chain gets
-            assertThat(catalog.full(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow().id()).isEqualTo(base.id());
+            assertThat(catalog.full(Profiles.SSH).orElseThrow().id()).isEqualTo(base.id());
             // Another profile is untouched by all of this
-            assertThat(catalog.head(CgmesSubset.EQUIPMENT).orElseThrow().id())
-                    .isEqualTo(catalog.full(CgmesSubset.EQUIPMENT).orElseThrow().id());
+            assertThat(catalog.head(Profiles.EQ).orElseThrow().id())
+                    .isEqualTo(catalog.full(Profiles.EQ).orElseThrow().id());
         }
     }
 
@@ -194,7 +219,7 @@ class ModelCatalogTest {
             assertThat(here.metaGraph()).isEqualTo(RdfDbNames.metaGraph(S));
             assertThat(db.catalog(S)).isSameAs(here);
 
-            StoredModel base = here.full(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow();
+            StoredModel base = here.full(Profiles.SSH).orElseThrow();
             // The same files in both scenarios, so the same identifiers: two independent nodes
             assertThat(there.model(base.id())).isPresent();
             assertThat(there.model(base.id()).orElseThrow().scenario()).isEqualTo(OTHER);
@@ -202,9 +227,9 @@ class ModelCatalogTest {
             assertThat(there.scenarioOf(base.id())).contains(S);
 
             new RdfDbDifferenceSink(db, S).accept(diff("urn:uuid:only-here", base.id()));
-            assertThat(here.head(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow().id())
+            assertThat(here.head(Profiles.SSH).orElseThrow().id())
                     .isEqualTo("urn:uuid:only-here");
-            assertThat(there.head(CgmesSubset.STEADY_STATE_HYPOTHESIS).orElseThrow().id()).isEqualTo(base.id());
+            assertThat(there.head(Profiles.SSH).orElseThrow().id()).isEqualTo(base.id());
             assertThat(there.hasDifferences()).isFalse();
             assertThat(there.model("urn:uuid:only-here")).isEmpty();
             assertThat(there.chainDown(base.id()).stream().map(StoredModel::id).toList())

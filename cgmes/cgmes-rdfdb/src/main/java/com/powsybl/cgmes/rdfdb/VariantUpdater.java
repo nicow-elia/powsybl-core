@@ -11,7 +11,6 @@ package com.powsybl.cgmes.rdfdb;
 import com.powsybl.cgmes.conversion.Conversion;
 import com.powsybl.cgmes.conversion.TripleStoreNetworkLoader;
 import com.powsybl.cgmes.conversion.diff.CgmesDiffNotApplicableException;
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.PowsyblException;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Network;
@@ -363,7 +362,7 @@ final class VariantUpdater {
         if (existing != null) {
             return (RdfDbProvenanceImpl) existing;
         }
-        Map<CgmesSubset, String> identity = NetworkIdentity.modelIds(network, options.getProfiles());
+        Map<String, String> identity = NetworkIdentity.modelIds(network, options.getProfiles());
         RdfDbProvenanceImpl created = new RdfDbProvenanceImpl(db.database(), scenario, List.of(), Instant.now(),
                 identity);
         network.addExtension(RdfDbProvenance.class, created);

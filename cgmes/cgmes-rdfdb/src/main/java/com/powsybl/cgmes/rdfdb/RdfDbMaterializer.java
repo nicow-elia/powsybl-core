@@ -11,7 +11,6 @@ package com.powsybl.cgmes.rdfdb;
 import com.powsybl.cgmes.conversion.CgmesImport;
 import com.powsybl.cgmes.conversion.TripleStoreNetworkLoader;
 import com.powsybl.cgmes.conversion.diff.CgmesDiffImport;
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Network;
@@ -31,7 +30,6 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -83,7 +81,7 @@ final class RdfDbMaterializer {
      * @return the network and the timings
      */
     static RdfDbNetworkLoader.LoadResult materialize(RdfDbConnection db, String scenario, CatalogSnapshot snapshot,
-                                    Map<CgmesSubset, StoredModel> targets, NetworkFactory factory,
+                                    Map<String, StoredModel> targets, NetworkFactory factory,
                                     Properties params, ReportNode rn) {
         Objects.requireNonNull(db);
         Objects.requireNonNull(snapshot);
@@ -100,8 +98,8 @@ final class RdfDbMaterializer {
             throw new RdfDbException("Scenario '" + scenario + "' of " + db.database() + " holds no full model to"
                     + " build a network from");
         }
-        Map<CgmesSubset, StoredModel> chainTargets = new EnumMap<>(targets);
-        Map<CgmesSubset, List<StoredModel>> paths = pathsTo(snapshot, chainTargets);
+        Map<String, StoredModel> chainTargets = Profiles.map(targets);
+        Map<String, List<StoredModel>> paths = pathsTo(snapshot, chainTargets);
 
         CgmesImport importer = TripleStoreNetworkLoader.importer();
         TripleStoreOptions options = importer.tripleStoreOptions(params);
@@ -109,7 +107,7 @@ final class RdfDbMaterializer {
         boolean handedOver = false;
         try {
             Map<String, String> localToRemote = new LinkedHashMap<>();
-            Map<CgmesSubset, String> contextOfSubset = new EnumMap<>(CgmesSubset.class);
+            Map<String, String> contextOfSubset = Profiles.map();
             List<GraphInfo> graphs = new ArrayList<>();
             for (StoredModel model : fullModels) {
                 String contextName = db.localContextName(scenario, model.graph());
@@ -141,7 +139,7 @@ final class RdfDbMaterializer {
                 String contextName = contextOfSubset.get(subset);
                 if (contextName == null) {
                     throw new RdfDbException("Scenario '" + scenario + "' holds " + path.size() + " difference(s)"
-                            + " of the " + subset.getIdentifier() + " profile but no full model of it");
+                            + " of the " + subset + " profile but no full model of it");
                 }
                 // Folded into one difference first, and applied once. Replacing a property by its final value is
                 // the same thing as replacing it once per step of the chain, and it turns a chain of ten into two
@@ -207,19 +205,19 @@ final class RdfDbMaterializer {
         boolean handedOver = false;
         try {
             Map<String, String> localToRemote = new LinkedHashMap<>();
-            Map<CgmesSubset, String> contextOfSubset = new EnumMap<>(CgmesSubset.class);
+            Map<String, String> contextOfSubset = Profiles.map();
             List<GraphInfo> graphs = new ArrayList<>();
             int index = 0;
-            for (Map.Entry<CgmesSubset, MaterializationPlan.FullSource> entry : plan.startModel().entrySet()) {
-                CgmesSubset subset = entry.getKey();
+            for (Map.Entry<String, MaterializationPlan.FullSource> entry : plan.startModel().entrySet()) {
+                String subset = entry.getKey();
                 String graph = entry.getValue().graph();
                 if (graph == null) {
-                    throw new RdfDbException("the full " + subset.getIdentifier() + " model "
+                    throw new RdfDbException("the full " + subset + " model "
                             + entry.getValue().modelId() + " of scenario '" + scenario + "' names no graph");
                 }
                 // A name the CGMES conversion reads the profile off, and one SPARQL can write as an IRI
                 String localName = ScenarioGraphNames.CONTEXTS + "model" + index++ + "_"
-                        + subset.getIdentifier() + ".xml";
+                        + subset + ".xml";
                 localToRemote.put(localName, graph);
                 contextOfSubset.put(subset, localName);
                 graphs.add(new GraphInfo(scenario, localName, subset, graph));
@@ -261,7 +259,7 @@ final class RdfDbMaterializer {
      * @param contexts   the local context name per profile
      * @param subjectBase the IRI prefix the subjects in that store carry
      */
-    record MaterialisedStore(TripleStoreRDF4J store, Map<CgmesSubset, String> contexts, String subjectBase)
+    record MaterialisedStore(TripleStoreRDF4J store, Map<String, String> contexts, String subjectBase)
             implements AutoCloseable {
 
         @Override
@@ -289,11 +287,11 @@ final class RdfDbMaterializer {
         boolean handedOver = false;
         try {
             Map<String, String> localToRemote = new LinkedHashMap<>();
-            Map<CgmesSubset, String> contexts = new EnumMap<>(CgmesSubset.class);
+            Map<String, String> contexts = Profiles.map();
             int index = 0;
-            for (Map.Entry<CgmesSubset, MaterializationPlan.FullSource> entry : plan.startModel().entrySet()) {
+            for (Map.Entry<String, MaterializationPlan.FullSource> entry : plan.startModel().entrySet()) {
                 String localName = ScenarioGraphNames.CONTEXTS + "model" + index++ + "_"
-                        + entry.getKey().getIdentifier() + ".xml";
+                        + entry.getKey() + ".xml";
                 localToRemote.put(localName, entry.getValue().graph());
                 contexts.put(entry.getKey(), localName);
             }
@@ -349,7 +347,7 @@ final class RdfDbMaterializer {
      */
     private static Map<String, UnaryOperator<Statement>> rebasedBoundary(MaterializationPlan plan,
                                                                          Map<String, StoredModel> models,
-                                                                         Map<CgmesSubset, String> contexts) {
+                                                                         Map<String, String> contexts) {
         String base = subjectBase(plan, models);
         Map<String, UnaryOperator<Statement>> mappings = new LinkedHashMap<>();
         plan.startModel().forEach((subset, source) -> {
@@ -364,7 +362,7 @@ final class RdfDbMaterializer {
 
     /** Fetch every difference of the plan in one request and apply them, folded, one profile at a time. */
     private static void applySteps(RdfDbConnection db, TripleStoreRDF4J local, MaterializationPlan plan,
-                                   Map<CgmesSubset, String> contextOfSubset) {
+                                   Map<String, String> contextOfSubset) {
         if (plan.steps().isEmpty()) {
             return;
         }
@@ -374,7 +372,7 @@ final class RdfDbMaterializer {
             String contextName = contextOfSubset.get(subset);
             if (contextName == null) {
                 throw new RdfDbException("the plan applies " + steps.size() + " difference(s) of the "
-                        + subset.getIdentifier() + " profile but names no graph to start from");
+                        + subset + " profile but names no graph to start from");
             }
             StoredModel target = steps.get(steps.size() - 1).model();
             List<DifferenceModel> models = steps.stream().map(step -> byId.get(step.model().id())).toList();
@@ -385,8 +383,8 @@ final class RdfDbMaterializer {
     }
 
     /** The steps of a materialisation grouped by profile, keeping their order. */
-    private static Map<CgmesSubset, List<UpdatePlan.DiffStep>> stepsBySubset(MaterializationPlan plan) {
-        Map<CgmesSubset, List<UpdatePlan.DiffStep>> bySubset = new EnumMap<>(CgmesSubset.class);
+    private static Map<String, List<UpdatePlan.DiffStep>> stepsBySubset(MaterializationPlan plan) {
+        Map<String, List<UpdatePlan.DiffStep>> bySubset = Profiles.map();
         plan.steps().forEach(step -> bySubset
                 .computeIfAbsent(step.model().subset(), k -> new ArrayList<>()).add(step));
         return bySubset;
@@ -395,7 +393,7 @@ final class RdfDbMaterializer {
     private static void registerSnapshot(Network network, RdfDbConnection db, String scenario,
                                          SnapshotInfo snapshot, MaterializationPlan plan,
                                          Map<String, StoredModel> stateModels, List<GraphInfo> graphs) {
-        Map<CgmesSubset, StoredModel> targets = new EnumMap<>(CgmesSubset.class);
+        Map<String, StoredModel> targets = Profiles.map();
         plan.targetState().forEach((subset, id) -> {
             StoredModel model = stateModels.get(id);
             if (model != null) {
@@ -434,12 +432,12 @@ final class RdfDbMaterializer {
      * else stays. The caller that means "the newest state of everything" resolves the heads first and names them,
      * which is what {@code DiffTarget.head()} does.</p>
      */
-    private static Map<CgmesSubset, List<StoredModel>> pathsTo(CatalogSnapshot snapshot,
-                                                               Map<CgmesSubset, StoredModel> targets) {
-        Map<CgmesSubset, String> targetIds = new EnumMap<>(CgmesSubset.class);
+    private static Map<String, List<StoredModel>> pathsTo(CatalogSnapshot snapshot,
+                                                               Map<String, StoredModel> targets) {
+        Map<String, String> targetIds = Profiles.map();
         targets.forEach((subset, model) -> targetIds.put(subset, model.id()));
-        Map<CgmesSubset, List<StoredModel>> chains = snapshot.chainsDown(targetIds);
-        Map<CgmesSubset, List<StoredModel>> paths = new EnumMap<>(CgmesSubset.class);
+        Map<String, List<StoredModel>> chains = snapshot.chainsDown(targetIds);
+        Map<String, List<StoredModel>> paths = Profiles.map();
         chains.forEach((subset, chain) -> {
             List<StoredModel> path = new ArrayList<>(chain.stream()
                     .filter(StoredModel::isDiff).toList());
@@ -450,9 +448,9 @@ final class RdfDbMaterializer {
     }
 
     private static void register(Network network, RdfDbConnection db, String scenario,
-                                 Map<CgmesSubset, StoredModel> targets, List<GraphInfo> graphs) {
+                                 Map<String, StoredModel> targets, List<GraphInfo> graphs) {
         NetworkIdentity.advance(network, targets);
-        StoredModel ssh = targets.get(CgmesSubset.STEADY_STATE_HYPOTHESIS);
+        StoredModel ssh = targets.get(Profiles.SSH);
         if (ssh != null && ssh.scenarioTime() != null) {
             network.setCaseDate(ssh.scenarioTime());
         }

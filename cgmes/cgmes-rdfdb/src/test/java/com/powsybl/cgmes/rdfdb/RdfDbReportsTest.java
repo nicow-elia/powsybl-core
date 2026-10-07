@@ -8,7 +8,6 @@
 
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.report.ReportNode;
 import org.junit.jupiter.api.Test;
 
@@ -40,7 +39,7 @@ class RdfDbReportsTest {
     void theMessagesRenderInEnglish() {
         ReportNode root = root(Locale.ENGLISH);
         RdfDbReports.updateRouteReport(root, "s1", UpdateResult.Route.FULL_RELOAD, 0, List.of("no common ancestor"));
-        RdfDbReports.storedDifferenceReport(root, "urn:uuid:d1", CgmesSubset.STEADY_STATE_HYPOTHESIS, "s1");
+        RdfDbReports.storedDifferenceReport(root, "urn:uuid:d1", Profiles.SSH, "s1");
         RdfDbReports.dependencyNotStoredReport(root, "urn:uuid:d1", "urn:uuid:eq", "s1");
         RdfDbReports.ingestedProfileIgnoredReport(root, "SV", "s1");
 

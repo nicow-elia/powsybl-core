@@ -7,7 +7,6 @@
  */
 package com.powsybl.cgmes.rdfdb;
 
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
 import com.powsybl.commons.report.ReportNode;
 import com.powsybl.iidm.network.Identifiable;
@@ -93,8 +92,8 @@ class ReplicatedSvedalaTest {
             catalog.putAsDiff(timestamp, null, svk(scenario, 1, instant), null, Backends.params(),
                     ReportNode.NO_OP);
             SnapshotCatalog.IngestStatistics statistics = catalog.lastIngestStatistics();
-            int forward = statistics.forwardStatements().getOrDefault(CgmesSubset.STEADY_STATE_HYPOTHESIS, 0);
-            int reverse = statistics.reverseStatements().getOrDefault(CgmesSubset.STEADY_STATE_HYPOTHESIS, 0);
+            int forward = statistics.forwardStatements().getOrDefault(Profiles.SSH, 0);
+            int reverse = statistics.reverseStatements().getOrDefault(Profiles.SSH, 0);
             LOGGER.info("replicated x2 rich timestamp: forward {} reverse {} statement(s)", forward, reverse);
             assertThat(forward).isEqualTo(2 * 311);
             assertThat(reverse).isEqualTo(2 * 311);

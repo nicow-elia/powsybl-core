@@ -347,7 +347,7 @@ public final class RdfDbConnection implements AutoCloseable {
      */
     public List<GraphInfo> graphs(String scenario) {
         return contextNames(scenario).stream()
-                .map(name -> new GraphInfo(scenario, name, GraphInfo.subsetOf(name),
+                .map(name -> new GraphInfo(scenario, name, Profiles.find(name).orElse(null),
                         ScenarioGraphNames.remoteGraph(scenario, name)))
                 .toList();
     }

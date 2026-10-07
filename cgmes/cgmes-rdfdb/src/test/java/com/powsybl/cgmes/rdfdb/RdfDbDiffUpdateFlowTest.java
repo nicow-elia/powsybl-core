@@ -9,7 +9,6 @@
 package com.powsybl.cgmes.rdfdb;
 
 import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
-import com.powsybl.cgmes.model.CgmesSubset;
 import com.powsybl.cgmes.model.diff.CgmesStatement;
 import com.powsybl.cgmes.model.diff.DifferenceModel;
 import com.powsybl.cgmes.model.diff.DifferenceModelHeader;
@@ -50,8 +49,8 @@ class RdfDbDiffUpdateFlowTest {
     private static final String S = "2016-01-01";
     private static final String OTHER = "2016-01-02";
     private static final String CIM16 = "http://iec.ch/TC57/2013/CIM-schema-cim16#";
-    private static final CgmesSubset SSH = CgmesSubset.STEADY_STATE_HYPOTHESIS;
-    private static final CgmesSubset EQ = CgmesSubset.EQUIPMENT;
+    private static final String SSH = Profiles.SSH;
+    private static final String EQ = Profiles.EQ;
 
     /** The identity of a network is its own assertion, so it is kept out of the network comparison. */
     private static final Set<String> IDENTITY = Set.of("cgmesMetadataModels");
@@ -420,7 +419,7 @@ class RdfDbDiffUpdateFlowTest {
             Network sender = load(db, S);
             StoredModel first = Changes.export(sender, db, S, n -> Changes.moveLoad(n, 3.0)).get(SSH).orElseThrow();
             StoredModel second = Changes.export(sender, db, S, Changes::moveTap).get(SSH).orElseThrow();
-            DifferenceModelHeader header = DifferenceModelHeader.builder("urn:uuid:diff-no-reverse", SSH, CIM16)
+            DifferenceModelHeader header = DifferenceModelHeader.builder("urn:uuid:diff-no-reverse", Profiles.subset(SSH).orElseThrow(), CIM16)
                     .version(second.version() + 1).supersedes(List.of(second.id())).build();
             RdfDbDifferenceSink sink = new RdfDbDifferenceSink(db, S);
             sink.accept(new DifferenceModelSet(List.of(new DifferenceModel(header,
@@ -449,7 +448,7 @@ class RdfDbDiffUpdateFlowTest {
      * applicable to a live network.
      */
     private static DifferenceModelSet renaming(String id, StoredModel base, String lineId, String oldName) {
-        DifferenceModelHeader header = DifferenceModelHeader.builder(id, EQ, CIM16)
+        DifferenceModelHeader header = DifferenceModelHeader.builder(id, Profiles.subset(EQ).orElseThrow(), CIM16)
                 .version(base.version() + 1).supersedes(List.of(base.id())).build();
         return new DifferenceModelSet(List.of(new DifferenceModel(header,
                 List.of(CgmesStatement.literal(lineId, null, "IdentifiedObject.name", "a new name")),

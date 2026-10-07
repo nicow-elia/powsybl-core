@@ -445,8 +445,8 @@ class ScaleLoadBenchmarkTest {
 
     /** One step of the chain: one load's {@code p}, as {@link RdfDbVersioningBenchmarkTest} does. */
     static DifferenceModelSet step(SnapshotInfo parent, int index, String loadId, String loadClass, boolean cim16) {
-        CgmesSubset ssh = CgmesSubset.STEADY_STATE_HYPOTHESIS;
-        DifferenceModelHeader header = DifferenceModelHeader.builder("urn:uuid:scale-ssh-" + index, ssh,
+        String ssh = Profiles.SSH;
+        DifferenceModelHeader header = DifferenceModelHeader.builder("urn:uuid:scale-ssh-" + index, CgmesSubset.STEADY_STATE_HYPOTHESIS,
                         cim16 ? CIM16 : CIM100)
                 .supersedes(List.of(parent.state().get(ssh)))
                 .profiles(List.of(cim16 ? SSH16 : SSH3))
