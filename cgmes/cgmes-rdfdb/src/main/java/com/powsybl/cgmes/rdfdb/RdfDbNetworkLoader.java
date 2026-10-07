@@ -68,12 +68,36 @@ import java.util.stream.Collectors;
 public final class RdfDbNetworkLoader {
 
     /**
-     * A loaded network and where the time went.
+     * A loaded network, where the time went, and what the network does not hold.
      *
-     * @param network    the network
-     * @param statistics the timings of the load
+     * @param network       the network
+     * @param statistics    the timings of the load
+     * @param extraProfiles the custom profiles of the snapshot ({@link Profiles}) and the graph holding each of
+     *                      them, as the metadata graph records it: the conversion reads only the nine standard
+     *                      profiles, so these are handed to the caller instead, to be read with
+     *                      {@link RdfDbConnection#fetchGraph}. Empty for a scenario-addressed load and for a
+     *                      projection that names none
      */
-    public record LoadResult(Network network, LoadStatistics statistics) {
+    public record LoadResult(Network network, LoadStatistics statistics, Map<String, String> extraProfiles) {
+
+        /**
+         * @param network       see {@link #network()}
+         * @param statistics    see {@link #statistics()}
+         * @param extraProfiles see {@link #extraProfiles()}
+         */
+        public LoadResult {
+            extraProfiles = Collections.unmodifiableSortedMap(Profiles.map(extraProfiles));
+        }
+
+        /**
+         * A load without custom profiles.
+         *
+         * @param network    the network
+         * @param statistics the timings of the load
+         */
+        public LoadResult(Network network, LoadStatistics statistics) {
+            this(network, statistics, Map.of());
+        }
     }
 
     private RdfDbNetworkLoader() {
@@ -654,7 +678,9 @@ public final class RdfDbNetworkLoader {
      *
      * @param db             the open connection
      * @param ref            the address of the snapshot
-     * @param profiles       the profiles to read, or {@code null} or empty for every profile of the snapshot
+     * @param profiles       the profiles to read, or {@code null} or empty for every profile of the snapshot. A
+     *                       custom profile ({@link Profiles}) is never read into the network: a load with statistics
+     *                       names its graph in {@link LoadResult#extraProfiles()}
      * @param networkFactory the factory the network is created with
      * @param params         the CGMES import parameters
      * @param reportNode     where the load reports
@@ -686,7 +712,9 @@ public final class RdfDbNetworkLoader {
      *
      * @param db             the open connection
      * @param ref            the address of the snapshot
-     * @param profiles       the profiles to read, or {@code null} or empty for every profile of the snapshot
+     * @param profiles       the profiles to read, or {@code null} or empty for every profile of the snapshot. A
+     *                       custom profile ({@link Profiles}) is never read into the network: a load with statistics
+     *                       names its graph in {@link LoadResult#extraProfiles()}
      * @param networkFactory the factory the network is created with
      * @param params         the CGMES import parameters
      * @param reportNode     where the load reports
@@ -707,7 +735,7 @@ public final class RdfDbNetworkLoader {
                 .withListGraphs(readCatalog.isNegative() ? Duration.ZERO : readCatalog);
         LOGGER.info("Loaded network {} from snapshot {} of {}: {}", materialised.network().getId(), ref,
                 db.database(), statistics.summary());
-        return new LoadResult(materialised.network(), statistics);
+        return new LoadResult(materialised.network(), statistics, materialised.extraProfiles());
     }
 
     private static LoadResult materialize(RdfDbConnection db, SnapshotRef ref, Set<String> profiles,

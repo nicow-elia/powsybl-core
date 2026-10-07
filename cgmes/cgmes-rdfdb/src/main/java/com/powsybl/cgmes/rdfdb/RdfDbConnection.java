@@ -552,6 +552,26 @@ public final class RdfDbConnection implements AutoCloseable {
     }
 
     /**
+     * The statements of one graph of a scenario: what a caller reads a custom profile with.
+     *
+     * <p>A network holds only what the CGMES conversion reads, so the graph of a custom profile ({@link Profiles})
+     * is named by {@link RdfDbNetworkLoader.LoadResult#extraProfiles()} or {@link SnapshotCatalog#graphsOf} and
+     * read here: one Graph Store Protocol request on a server, a copy on the in-process backend, and no request
+     * at all when the graph cache holds it.</p>
+     *
+     * @param scenario the scenario the graph belongs to
+     * @param graphIri the graph IRI, as the metadata graph records it
+     * @return the statements
+     * @throws RdfDbException if a server does not hold the graph
+     */
+    public List<Statement> fetchGraph(String scenario, String graphIri) {
+        checkOpen();
+        RdfDbNames.checkScenario(scenario);
+        Objects.requireNonNull(graphIri);
+        return new GraphFetcher(this, scenario).fetch(graphIri);
+    }
+
+    /**
      * The Graph Store Protocol client of this connection, or {@code null} for the in-process backend.
      *
      * @return the client

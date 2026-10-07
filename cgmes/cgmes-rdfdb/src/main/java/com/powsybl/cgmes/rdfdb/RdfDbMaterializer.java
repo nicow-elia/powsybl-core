@@ -91,8 +91,9 @@ final class RdfDbMaterializer {
                     + " mode cannot read: the differences would have to be applied on the server. Load this"
                     + " scenario in LOCAL query mode (RdfDatabase.withQueryMode)");
         }
+        // Only what the conversion reads: a custom profile is never part of a network
         List<StoredModel> fullModels = snapshot.models().stream()
-                .filter(model -> model.kind() == StoredModel.Kind.FULL)
+                .filter(model -> model.kind() == StoredModel.Kind.FULL && Profiles.isStandard(model.subset()))
                 .toList();
         if (fullModels.isEmpty()) {
             throw new RdfDbException("Scenario '" + scenario + "' of " + db.database() + " holds no full model to"
@@ -186,7 +187,8 @@ final class RdfDbMaterializer {
      * @param factory    the factory the network is created with
      * @param params     the CGMES import parameters
      * @param rn         where the load reports
-     * @return the network and the timings
+     * @return the network, the timings, and the graph of every custom profile of the plan, which the network does
+     *         not hold
      */
     static RdfDbNetworkLoader.LoadResult materialize(RdfDbConnection db, String scenario, SnapshotInfo snapshot,
                                     MaterializationPlan plan, Map<String, StoredModel> stateModels,
@@ -207,6 +209,7 @@ final class RdfDbMaterializer {
             Map<String, String> localToRemote = new LinkedHashMap<>();
             Map<String, String> contextOfSubset = Profiles.map();
             List<GraphInfo> graphs = new ArrayList<>();
+            Map<String, String> extraProfiles = Profiles.map();
             int index = 0;
             for (Map.Entry<String, MaterializationPlan.FullSource> entry : plan.startModel().entrySet()) {
                 String subset = entry.getKey();
@@ -214,6 +217,12 @@ final class RdfDbMaterializer {
                 if (graph == null) {
                     throw new RdfDbException("the full " + subset + " model "
                             + entry.getValue().modelId() + " of scenario '" + scenario + "' names no graph");
+                }
+                if (!Profiles.isStandard(subset)) {
+                    // A custom profile is always stored whole, so its start model is its state: handed to the
+                    // caller as that graph, never fetched into the store the conversion reads every graph of
+                    extraProfiles.put(subset, graph);
+                    continue;
                 }
                 // A name the CGMES conversion reads the profile off, and one SPARQL can write as an IRI
                 String localName = ScenarioGraphNames.CONTEXTS + "model" + index++ + "_"
@@ -239,7 +248,7 @@ final class RdfDbMaterializer {
             LOGGER.info("Materialised snapshot {} of scenario '{}' from {} difference(s)", snapshot, scenario,
                     plan.steps().size());
             return new RdfDbNetworkLoader.LoadResult(network, LoadStatistics.of(Duration.ZERO, fetchWallClock,
-                    fetchStatistics, applyDiffs, Duration.ZERO, convert));
+                    fetchStatistics, applyDiffs, Duration.ZERO, convert), extraProfiles);
         } finally {
             if (!handedOver) {
                 local.close();
@@ -255,7 +264,8 @@ final class RdfDbMaterializer {
      * Building the network would be wasted work &mdash; and would lose the triples, which are the thing being
      * compared.</p>
      *
-     * @param store      the local store, holding one graph per profile of the snapshot. The caller closes it
+     * @param store      the local store, holding one graph per standard profile of the snapshot. The caller
+     *                   closes it
      * @param contexts   the local context name per profile
      * @param subjectBase the IRI prefix the subjects in that store carry
      */
@@ -290,6 +300,9 @@ final class RdfDbMaterializer {
             Map<String, String> contexts = Profiles.map();
             int index = 0;
             for (Map.Entry<String, MaterializationPlan.FullSource> entry : plan.startModel().entrySet()) {
+                if (!Profiles.isStandard(entry.getKey())) {
+                    continue;
+                }
                 String localName = ScenarioGraphNames.CONTEXTS + "model" + index++ + "_"
                         + entry.getKey() + ".xml";
                 localToRemote.put(localName, entry.getValue().graph());

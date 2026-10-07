@@ -282,6 +282,16 @@ public final class GraphFetcher {
         };
     }
 
+    /**
+     * The statements of one graph, as the database holds them, through the cache when there is one.
+     *
+     * @param remoteGraph the graph IRI in the database
+     * @return the statements
+     */
+    List<Statement> fetch(String remoteGraph) {
+        return fetchOne(remoteGraph, remoteGraph).statements();
+    }
+
     private FetchedGraph fetchOne(String contextName, String remoteGraph) {
         long start = System.nanoTime();
         GraphCache cache = connection.database().cache();

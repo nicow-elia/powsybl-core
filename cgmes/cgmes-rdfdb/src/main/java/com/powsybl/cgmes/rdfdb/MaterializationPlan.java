@@ -59,16 +59,19 @@ public record MaterializationPlan(String target, Map<String, FullSource> startMo
      * The same plan for fewer profiles: what a load with a profile projection materialises.
      *
      * <p>The boundary is always kept: it belongs to the scenario, not to the projection, and the equipment of every
-     * modelling authority refers to it &mdash; the same rule {@code putFull} applies to a projected write.</p>
+     * modelling authority refers to it &mdash; the same rule {@code putFull} applies to a projected write. A custom
+     * profile ({@link Profiles}) stays in the plan like any other; the load hands it to the caller instead of the
+     * conversion.</p>
      *
      * @param profiles the profiles to keep, or {@code null} or empty for all of them
      * @return the plan, restricted to those profiles and the boundary
-     * @throws RdfDbException if a profile is not part of the snapshot's state
+     * @throws RdfDbException if a profile is not part of the snapshot's state, or is not a profile name
      */
     public MaterializationPlan project(Set<String> profiles) {
         if (profiles == null || profiles.isEmpty()) {
             return this;
         }
+        profiles.forEach(Profiles::check);
         Set<String> missing = Profiles.set(profiles);
         missing.removeAll(targetState.keySet());
         if (!missing.isEmpty()) {

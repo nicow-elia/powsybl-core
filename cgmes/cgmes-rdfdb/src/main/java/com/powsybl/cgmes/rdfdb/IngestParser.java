@@ -23,6 +23,7 @@ import org.eclipse.rdf4j.rio.RDFParser;
 import org.eclipse.rdf4j.rio.Rio;
 import org.eclipse.rdf4j.rio.helpers.AbstractRDFHandler;
 import org.eclipse.rdf4j.rio.helpers.BasicParserSettings;
+import org.eclipse.rdf4j.rio.helpers.StatementCollector;
 import org.eclipse.rdf4j.rio.helpers.XMLParserSettings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -189,6 +190,31 @@ final class IngestParser {
         LOGGER.debug("Read [{}]{}", name, handler.indexed() ? "" : " (header only)");
         return new ParsedFile(name, context, profile, handler.headerId(), handler.headerTerms(),
                 handler.indexed() ? handler.index() : null);
+    }
+
+    /**
+     * Read one instance file as it is, statement for statement: the whole graph a custom profile is stored as.
+     *
+     * <p>The same parser and the same base as {@link #read}, so a file stored this way holds what a store filled
+     * from the same data source would hold for it; a statement the file repeats is kept once, as a store keeps
+     * it.</p>
+     *
+     * @param ds       the data source holding the file
+     * @param name     the file name inside it
+     * @param baseName the base URI relative identifiers are resolved against ({@link Result#baseName()})
+     * @return the statements, in document order
+     * @throws CgmesModelException if the file cannot be read, naming the file
+     */
+    static List<Statement> statements(ReadOnlyDataSource ds, String name, String baseName) {
+        Set<Statement> statements = new LinkedHashSet<>();
+        RDFParser parser = parser();
+        parser.setRDFHandler(new StatementCollector(statements));
+        try (InputStream is = ds.newInputStream(name)) {
+            parser.parse(is, baseName);
+        } catch (Exception e) {
+            throw new CgmesModelException("Reading [" + name + "]", e);
+        }
+        return List.copyOf(statements);
     }
 
     /**

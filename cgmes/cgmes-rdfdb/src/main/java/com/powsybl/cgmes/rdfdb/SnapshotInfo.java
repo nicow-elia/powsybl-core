@@ -106,15 +106,16 @@ public record SnapshotInfo(String scenario, String iri, String modellingAuthorit
     /**
      * Whether a materialisation can start at this snapshot instead of walking further up the chain.
      *
-     * <p><strong>Derived, never stored.</strong> It is exactly {@code !fullModels().isEmpty()}: a snapshot can
-     * start a materialisation when it names a full model, and naming one is what {@code pdb:full} does. A root
-     * names its instance files, a difference snapshot names nothing until a {@link Checkpoint} folds its chain
-     * into copies and adds the links.</p>
+     * <p><strong>Derived, never stored.</strong> A snapshot can start a materialisation when it names a full model
+     * of a standard profile, and naming one is what {@code pdb:full} does. A root names its instance files, a
+     * difference snapshot names nothing until a {@link Checkpoint} folds its chain into copies and adds the links.
+     * The whole graph of a custom profile ({@link Profiles}) that an ingestion stores on a difference snapshot does
+     * not count: it is the custom profile's state, not a starting point for the network.</p>
      *
-     * @return whether this snapshot names at least one full model
+     * @return whether this snapshot names at least one full model of a standard profile
      */
     public boolean hasFull() {
-        return !fullModels.isEmpty();
+        return fullModels.keySet().stream().anyMatch(Profiles::isStandard);
     }
 
     /**

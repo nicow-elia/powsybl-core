@@ -102,11 +102,16 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
      * @param state              the effective model per profile at the new snapshot
      * @param timestampRoot      the root snapshot of the new snapshot's timestamp
      * @param parentStates       the parent states the write is guarded against, per profile
+     * @param wholes             the custom profiles a difference snapshot stores whole, by profile: the model
+     *                           identifier of each becomes a member, a state and a {@code pdb:full} link of the
+     *                           snapshot ({@link Profiles}). Empty for a root, whose members are all whole anyway
+     * @param wholeNodes         the {@code md:FullModel} nodes of those models, as triples of an {@code INSERT}
+     *                           template; their graphs were uploaded before the write
      */
     record SnapshotWrite(String iri, String modellingAuthority, VersionRegistry.Resolved version, Instant timestamp,
                          String parent,
                          String edge, int depth, Map<String, String> state, String timestampRoot,
-                         Map<String, String> parentStates) {
+                         Map<String, String> parentStates, Map<String, String> wholes, String wholeNodes) {
 
         /**
          * A root snapshot: no parent, and full models of every profile.
@@ -121,7 +126,7 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
         static SnapshotWrite root(String iri, String modellingAuthority, VersionRegistry.Resolved version,
                                   Instant timestamp, Map<String, String> state) {
             return new SnapshotWrite(iri, modellingAuthority, version, timestamp, null, null, 0, state, iri,
-                    Map.of());
+                    Map.of(), Map.of(), "");
         }
 
         /** A new timestamp root, whose write must fail if the timestamp already exists in its tree. */
@@ -135,12 +140,13 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
          * <p>A snapshot without a parent is a root of full models: its members and its full models are its state.
          * A difference snapshot carries no boolean of its own beside its links:
          * {@link RdfDbVocabulary#FAST_PREDICATES_ONLY} is written on each member and a reader takes the conjunction
-         * ({@link SnapshotInfo#fast()}), and it has no {@link RdfDbVocabulary#FULL_MODELS} link at all until a
-         * {@link Checkpoint} gives it one, which is what {@link SnapshotInfo#hasFull()} reads.</p>
+         * ({@link SnapshotInfo#fast()}), and it has no {@link RdfDbVocabulary#FULL_MODELS} link of a standard profile
+         * until a {@link Checkpoint} gives it one, which is what {@link SnapshotInfo#hasFull()} reads; the one
+         * full link it may carry from the start is the whole graph of a custom profile.</p>
          *
          * @param query    where to write
          * @param scenario the scenario
-         * @param members  the models the snapshot adds
+         * @param members  the difference models the snapshot adds
          * @param now      the creation time
          */
         void appendTo(StringBuilder query, String scenario, Collection<String> members, ZonedDateTime now) {
@@ -171,11 +177,11 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
                     .append(SparqlText.iri(RdfDbVocabulary.CREATED)).append(' ')
                     .append(SparqlText.dateTime(now));
             members.forEach(id -> appendIri(query, RdfDbVocabulary.MEMBER, id));
+            wholes.values().forEach(id -> appendIri(query, RdfDbVocabulary.MEMBER, id));
             state.values().forEach(id -> appendIri(query, RdfDbVocabulary.STATE, id));
-            if (parent == null) {
-                state.values().forEach(id -> appendIri(query, RdfDbVocabulary.FULL_MODELS, id));
-            }
-            query.append(" .");
+            (parent == null ? state : wholes).values()
+                    .forEach(id -> appendIri(query, RdfDbVocabulary.FULL_MODELS, id));
+            query.append(" . ").append(wholeNodes);
         }
     }
 
@@ -268,7 +274,7 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
     public void accept(DifferenceModelSet set) {
         Objects.requireNonNull(set);
         List<DifferenceModel> models = set.models().values().stream().filter(m -> !m.isEmpty()).toList();
-        if (models.isEmpty()) {
+        if (models.isEmpty() && (snapshotWrite == null || snapshotWrite.wholes().isEmpty())) {
             return;
         }
         Plan plan = plan(models);
@@ -612,6 +618,9 @@ public final class RdfDbDifferenceSink implements DifferenceSink {
         }
         s.parentStates().values().forEach(id -> query.append(" FILTER EXISTS { GRAPH ").append(meta).append(" { ")
                 .append(parent).append(" pdb:state ").append(SparqlText.iri(id)).append(" } }"));
+        // A whole graph is a new model: written once, like the full model of a root
+        s.wholes().values().forEach(id -> query.append(" FILTER NOT EXISTS { GRAPH ").append(meta).append(" { ")
+                .append(SparqlText.iri(id)).append(" ?pw ?ow } }"));
         // The name is registered at the rank that was checked, and the registry did not change under the write
         connection.snapshots(scenario).registry().appendWriteGuards(query, s.version());
     }

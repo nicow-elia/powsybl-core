@@ -21,6 +21,7 @@ import com.powsybl.iidm.network.Network;
 import com.powsybl.triplestore.api.TripleStoreOptions;
 import com.powsybl.triplestore.impl.rdf4j.TripleStoreRDF4J;
 import org.eclipse.rdf4j.model.IRI;
+import org.eclipse.rdf4j.model.Statement;
 import org.eclipse.rdf4j.model.Value;
 import org.eclipse.rdf4j.repository.sail.SailRepository;
 import org.eclipse.rdf4j.sail.memory.MemoryStore;
@@ -34,6 +35,7 @@ import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -48,6 +50,7 @@ import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -315,6 +318,30 @@ public final class SnapshotCatalog {
                     + " timestamp is linear. No write of this release can produce that state");
         }
         return found.values().stream().findFirst();
+    }
+
+    /**
+     * The graph of every profile a snapshot holds as a whole graph: what a caller reads a custom profile with.
+     *
+     * <p>A custom profile ({@link Profiles}) is always stored whole, so every one the snapshot holds is here; so is
+     * a standard profile whose state is still the instance file it started from. A profile whose state is a
+     * difference has no single graph and is not. Read a graph with {@link RdfDbConnection#fetchGraph}.</p>
+     *
+     * @param ref the address of the snapshot
+     * @return the graph IRI per profile, as the metadata graph records it
+     * @throws RdfDbException if the scenario holds no snapshot at that address
+     */
+    public Map<String, String> graphsOf(SnapshotRef ref) {
+        SnapshotInfo info = require(ref);
+        Map<String, StoredModel> models = connection.catalog(scenario).models(info.state().values());
+        Map<String, String> graphs = Profiles.map();
+        info.state().forEach((profile, id) -> {
+            StoredModel model = models.get(id);
+            if (model != null && model.graph() != null) {
+                graphs.put(profile, model.graph());
+            }
+        });
+        return Collections.unmodifiableMap(graphs);
     }
 
     /**
@@ -779,6 +806,7 @@ public final class SnapshotCatalog {
         if (profiles == null || profiles.isEmpty()) {
             return headers;
         }
+        profiles.forEach(Profiles::check);
         Set<String> carried = headers.values().stream().map(Header::subset).collect(Collectors.toSet());
         Set<String> missing = Profiles.set(profiles);
         missing.removeAll(carried);
@@ -980,6 +1008,33 @@ public final class SnapshotCatalog {
         if (models.isEmpty()) {
             throw new RdfDbException("no difference to store as " + target + " of scenario '" + scenario + "'");
         }
+        return putDiff(models, Wholes.NONE, target, null, reportNode);
+    }
+
+    /**
+     * The custom profiles a difference snapshot stores whole ({@link Profiles}).
+     *
+     * @param ids   the model identifier per custom profile
+     * @param nodes the {@code md:FullModel} nodes of those models as {@code INSERT} triples, given the IRI of the
+     *              snapshot they belong to
+     */
+    private record Wholes(Map<String, String> ids, UnaryOperator<String> nodes) {
+        static final Wholes NONE = new Wholes(Map.of(), iri -> "");
+    }
+
+    /**
+     * Write differences, and the whole graphs of custom profiles, as a new snapshot.
+     *
+     * @param models         the differences, possibly none when {@code wholes} names a profile
+     * @param wholes         the custom profiles stored whole, whose graphs were uploaded already
+     * @param target         the address
+     * @param fallbackParent the snapshot a new timestamp hangs off when no difference says which, or {@code null}
+     * @param reportNode     where the write reports
+     */
+    private SnapshotInfo putDiff(List<DifferenceModel> models, Wholes wholes, SnapshotRef target,
+                                 SnapshotInfo fallbackParent, ReportNode reportNode) {
+        check(target);
+        checkSchema();
         Map<String, String> stated = Profiles.map();
         models.stream().filter(model -> model.header().modelingAuthoritySet() != null)
                 .forEach(model -> stated.put(Profiles.of(model.header().subset()),
@@ -996,8 +1051,13 @@ public final class SnapshotCatalog {
         Instant timestamp = existingHead.map(SnapshotInfo::timestamp).orElse(target.timestamp());
         checkScenarioTimes(models, timestamp);
         boolean newTimestamp = existingHead.isEmpty();
-        SnapshotInfo parent = newTimestamp ? pin(models, authority, timestamp) : existingHead.get();
-        if (!newTimestamp && target.timestamp() != null) {
+        SnapshotInfo parent;
+        if (!newTimestamp) {
+            parent = existingHead.get();
+        } else {
+            parent = models.isEmpty() && fallbackParent != null ? fallbackParent : pin(models, authority, timestamp);
+        }
+        if (!newTimestamp && target.timestamp() != null && !models.isEmpty()) {
             checkNotASecondRoot(models, parent, authority, timestamp);
         }
         checkSupersedes(models, parent);
@@ -1009,6 +1069,7 @@ public final class SnapshotCatalog {
             parentStates.put(subset, parent.state().get(subset));
             state.put(subset, model.header().id());
         }
+        state.putAll(wholes.ids());
         // The fast-route capability of the new snapshot is not computed here and not written: the sink records it
         // per difference model as pdb:fastPredicatesOnly, and SnapshotInfo.fast() is the conjunction of those
         for (int attempt = 1; ; attempt++) {
@@ -1021,7 +1082,8 @@ public final class SnapshotCatalog {
             RdfDbDifferenceSink.SnapshotWrite write = new RdfDbDifferenceSink.SnapshotWrite(snapshotIri, authority,
                     version, timestamp, parent.iri(),
                     newTimestamp ? RdfDbVocabulary.TIMESTAMP_EDGE : RdfDbVocabulary.VERSION_EDGE,
-                    parent.depth() + 1, state, newTimestamp ? snapshotIri : parent.timestampRoot(), parentStates);
+                    parent.depth() + 1, state, newTimestamp ? snapshotIri : parent.timestampRoot(), parentStates,
+                    wholes.ids(), wholes.nodes().apply(snapshotIri));
             RdfDbDifferenceSink sink = new RdfDbDifferenceSink(connection, scenario, reportNode);
             sink.writeInto(write);
             try {
@@ -1042,8 +1104,8 @@ public final class SnapshotCatalog {
             }
             SnapshotInfo written = info(snapshotIri).orElseThrow(() -> new RdfDbConflictException(
                     diagnose(address, parent, version, "the snapshot node was not written")));
-            LOGGER.info("Stored the snapshot {} of scenario '{}' with {} difference(s)", written, scenario,
-                    models.size());
+            LOGGER.info("Stored the snapshot {} of scenario '{}' with {} difference(s) and {} whole graph(s)",
+                    written, scenario, models.size(), wholes.ids().size());
             return written;
         }
     }
@@ -1169,7 +1231,10 @@ public final class SnapshotCatalog {
      *                     timestamp of that authority's tree, a
      *                     {@code null} version the lowest registered one ranking above the head's
      * @param profiles     the profiles to compare, or {@code null} or empty for {@code EQ} and {@code SSH}. A
-     *                     listed profile the files do not carry is refused
+     *                     listed profile the files do not carry is refused. A listed custom profile
+     *                     ({@link Profiles}) is not compared: its file is stored whole as a new member of the
+     *                     snapshot, with a {@code pdb:full} link, unless it is the model the parent already states;
+     *                     an unlisted one is inherited from the parent like every other profile not compared
      * @param importParams the CGMES import parameters
      * @param rn           where the ingestion reports
      * @return the new snapshot
@@ -1181,7 +1246,11 @@ public final class SnapshotCatalog {
         check(target);
         Objects.requireNonNull(ds);
         ReportNode report = rn == null ? ReportNode.NO_OP : rn;
-        Set<String> compared = comparedProfiles(profiles);
+        Set<String> listed = comparedProfiles(profiles);
+        // A custom profile is never compared: a listed one is stored whole, the conversion's nine are compared
+        Set<String> compared = listed.stream().filter(Profiles::isStandard).collect(Collectors.toSet());
+        Set<String> whole = listed.stream().filter(profile -> !Profiles.isStandard(profile))
+                .collect(Collectors.toSet());
         // The authority decides which tree the files are compared against, so an open one is read off the headers
         // first: a header-only pass, which stops at every md:FullModel
         String authority = target.modellingAuthority() != null ? target.modellingAuthority()
@@ -1209,7 +1278,7 @@ public final class SnapshotCatalog {
         shared.keySet().retainAll(carried.keySet());
         requireSharedBoundary(carried, shared, authority);
         // A listed profile has to be there; the default pair is compared where it is shipped
-        Set<String> missing = Profiles.set(profiles == null || profiles.isEmpty() ? Set.of() : compared);
+        Set<String> missing = Profiles.set(profiles == null || profiles.isEmpty() ? Set.of() : listed);
         parsed.files().forEach(file -> missing.remove(file.profile()));
         if (!missing.isEmpty()) {
             throw new RdfDbException("the profiles " + missing + " are to be compared, but the files of "
@@ -1231,7 +1300,9 @@ public final class SnapshotCatalog {
         for (IngestParser.ParsedFile file : parsed.files()) {
             String subset = file.profile();
             if (!compared.contains(subset)) {
-                ignored.add(subset);
+                if (!whole.contains(subset)) {
+                    ignored.add(subset);
+                }
                 continue;
             }
             StatementDiff.Index nextSide = file.index();
@@ -1253,20 +1324,69 @@ public final class SnapshotCatalog {
 
         ignored.forEach(subset -> RdfDbReports.ingestedProfileIgnoredReport(report,
                 subset, scenario));
-        if (models.isEmpty()) {
+        // A listed custom profile whose file is not the state the parent holds becomes a new whole graph
+        Map<String, IngestParser.ParsedFile> wholeFiles = Profiles.map();
+        parsed.files().stream()
+                .filter(file -> whole.contains(file.profile())
+                        && !file.headerId().equals(plan.targetState().get(file.profile())))
+                .forEach(file -> wholeFiles.put(file.profile(), file));
+        if (models.isEmpty() && wholeFiles.isEmpty()) {
             throw new RdfDbException("no difference to the parent " + parent + " of scenario '" + scenario
                     + "': the files of " + target + " describe the state the database already holds");
         }
         long t3 = System.nanoTime();
-        SnapshotInfo written = putDiff(new DifferenceModelSet(models),
-                SnapshotRef.of(scenario, authority, timestamp, target.version()), report);
+        List<String> uploaded = new ArrayList<>();
+        SnapshotInfo written = null;
+        try {
+            Wholes wholes = wholeFiles.isEmpty() ? Wholes.NONE
+                    : uploadWholes(ds, parsed, headers, wholeFiles, uploaded);
+            written = putDiff(models, wholes, SnapshotRef.of(scenario, authority, timestamp, target.version()),
+                    parent, report);
+        } finally {
+            if (written == null) {
+                // Unreferenced graphs are invisible to every reader; dropping them keeps a refusal traceless
+                connection.catalog(scenario).dropGraphs(uploaded);
+            }
+        }
         Map<String, Boolean> fast = Profiles.map();
         models.forEach(model -> fast.put(Profiles.of(model.header().subset()), RdfDbDifferenceSink.isFast(model)));
         lastIngest = new IngestStatistics(parse, materialize, diffTime,
                 Duration.ofNanos(System.nanoTime() - t3), forward, reverse, fast, ignored);
-        LOGGER.info("Ingested {} of scenario '{}' from files: {} difference(s), {} profile(s) inherited",
-                written, scenario, models.size(), ignored.size());
+        LOGGER.info("Ingested {} of scenario '{}' from files: {} difference(s), {} whole graph(s), {} profile(s)"
+                + " inherited", written, scenario, models.size(), wholeFiles.size(), ignored.size());
         return written;
+    }
+
+    /**
+     * Upload the files of the custom profiles an ingestion stores whole, and say what the snapshot names of them.
+     *
+     * <p>The graphs go first, through the bulk route a large difference takes, so that the guarded request carries
+     * the metadata alone; a model the scenario already holds is refused before anything is uploaded, because its
+     * graph would be the one to be overwritten.</p>
+     *
+     * @param uploaded where the uploaded graph IRIs are collected, for the caller to drop on a refusal
+     */
+    private Wholes uploadWholes(ReadOnlyDataSource ds, IngestParser.Result parsed, Map<String, Header> headers,
+                                Map<String, IngestParser.ParsedFile> files, List<String> uploaded) {
+        refuseKnownModels(files.values().stream().map(IngestParser.ParsedFile::headerId).toList());
+        String subjectBase = ModelCatalog.subjectBaseOf(parsed.baseName());
+        Map<String, String> ids = Profiles.map();
+        Map<String, FullGraph> graphs = Profiles.map();
+        files.forEach((profile, file) -> {
+            List<Statement> statements = IngestParser.statements(ds, file.name(), parsed.baseName());
+            String graph = RdfDbNames.fullGraph(scenario, file.headerId());
+            connection.writeGraph(scenario, graph, statements);
+            uploaded.add(graph);
+            ids.put(profile, file.headerId());
+            graphs.put(profile, new FullGraph(profile, graph, statements.size(), subjectBase, parsed.cimNamespace()));
+        });
+        ZonedDateTime now = ZonedDateTime.now();
+        return new Wholes(ids, snapshotIri -> {
+            StringBuilder nodes = new StringBuilder();
+            graphs.forEach((profile, graph) -> appendFullModelNode(nodes, headers.get(files.get(profile).context()),
+                    graph, snapshotIri, now));
+            return nodes.toString();
+        });
     }
 
     /** The profiles an ingestion compares: the projection, or {@code EQ} and {@code SSH}; never the boundary. */
@@ -1274,6 +1394,7 @@ public final class SnapshotCatalog {
         if (profiles == null || profiles.isEmpty()) {
             return DEFAULT_COMPARED;
         }
+        profiles.forEach(Profiles::check);
         profiles.stream().filter(Profiles::isBoundary).findFirst().ifPresent(subset -> {
             throw new RdfDbException("the boundary profile " + subset + " cannot be compared: the"
                     + " boundary of a scenario never changes, a new boundary is a new scenario");

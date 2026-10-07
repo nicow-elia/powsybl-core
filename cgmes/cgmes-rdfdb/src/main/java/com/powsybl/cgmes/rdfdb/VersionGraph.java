@@ -285,7 +285,7 @@ public final class VersionGraph {
             if (info.iri().equals(lca.iri())) {
                 break;
             }
-            info.members().forEach(id -> steps.add(new Hop(info.iri(), id, true)));
+            differences(info).forEach(id -> steps.add(new Hop(info.iri(), id, true)));
         }
         // Down to B, exclusive of the common ancestor, oldest first
         List<SnapshotInfo> down = new ArrayList<>();
@@ -296,7 +296,7 @@ public final class VersionGraph {
             down.add(info);
         }
         Collections.reverse(down);
-        down.forEach(info -> info.members()
+        down.forEach(info -> differences(info)
                 .forEach(id -> steps.add(new Hop(info.iri(), id, false))));
 
         List<UpdatePlan.DiffStep> resolved = resolve(steps, models);
@@ -315,6 +315,14 @@ public final class VersionGraph {
         UpdatePlan.Kind kind = reasons.isEmpty() ? UpdatePlan.Kind.DIFF : UpdatePlan.Kind.FULL;
         return new UpdatePlan(kind, from.get(0).iri(), b.iri(), resolved, reasons, resolved.size(),
                 checkpointRecommended(to, options), distanceToFull(to), targetState);
+    }
+
+    /**
+     * The members of a snapshot a walk applies: every one but a whole graph it stores, which is a custom profile's
+     * new state ({@link Profiles}) and never a step.
+     */
+    private static List<String> differences(SnapshotInfo snapshot) {
+        return snapshot.members().stream().filter(id -> !snapshot.fullModels().containsValue(id)).toList();
     }
 
     private static Optional<String> memberOf(SnapshotInfo snapshot, String subset) {
