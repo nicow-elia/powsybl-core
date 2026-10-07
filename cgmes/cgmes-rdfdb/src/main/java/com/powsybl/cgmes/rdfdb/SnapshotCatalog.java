@@ -1951,15 +1951,6 @@ public final class SnapshotCatalog {
                     + nowHead.get().version() + "' (rank " + nowHead.get().rank() + ") of " + nowHead.get().ref()
                     + ": a new version ranks above the head it is written on";
         }
-        if (nowHead.isEmpty()) {
-            // The head lookup filters archived moments: a cutoff set through another connection looks like no head
-            readSchema();
-            Optional<RdfDbException> archivedMoment = archived(RdfDbNames.snapshot(scenario,
-                    address.modellingAuthority(), address.timestamp(), version.name()));
-            if (archivedMoment.isPresent()) {
-                return archivedMoment.get().getMessage();
-            }
-        }
         return "the snapshot " + address + " was not written: " + detail;
     }
 
