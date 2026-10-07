@@ -722,9 +722,13 @@ public final class VersionRegistry {
         refresh();
         State after = state();
         if (after.rev() != before.rev() + 1 || !applied.test(after)) {
+            String outcome = after.rev() > before.rev() + 1
+                    ? "it moved on by more than one edit before the read-back, so whether this one is among them is"
+                    + " not known"
+                    : "nothing was changed by it";
             throw new RdfDbConflictException("the version registry of scenario '" + scenario + "' changed (rev "
-                    + before.rev() + " → " + after.rev() + ") while this connection tried to " + what + ": nothing"
-                    + " was changed by it; the registry is now " + this + ", retry");
+                    + before.rev() + " → " + after.rev() + ") while this connection tried to " + what + ": "
+                    + outcome + "; the registry is now " + this + ", retry");
         }
     }
 

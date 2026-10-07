@@ -150,6 +150,18 @@ class VersionRegistryTest {
             assertThat(mine.ranks()).containsExactly(Map.entry("DA", 10), Map.entry("ID", 20));
             mine.beforeRegistryWrite(null);
             assertThat(mine.add("RT")).isEqualTo(30);
+
+            // Two edits won: the message cannot know whether this one is among them, and does not claim it is not
+            theirs.refresh();
+            mine.beforeRegistryWrite(() -> {
+                theirs.add("A");
+                theirs.add("B");
+            });
+            assertThatThrownBy(() -> mine.add("C")).isInstanceOf(RdfDbConflictException.class)
+                    .hasMessageContaining("changed (rev 3 → 5)")
+                    .hasMessageContaining("moved on by more than one edit")
+                    .hasMessageNotContaining("nothing was changed");
+            mine.beforeRegistryWrite(null);
         }
     }
 
