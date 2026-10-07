@@ -309,6 +309,9 @@ public final class SnapshotCatalog {
     public Optional<SnapshotInfo> find(SnapshotRef ref) {
         readable(ref);
         Map<String, SnapshotInfo> found = snapshotsWhere(addressPattern("?s", ref), "");
+        if (found.isEmpty() && isNamed(ref) && registry.changedAfterMiss()) {
+            found = snapshotsWhere(addressPattern("?s", ref), "");
+        }
         if (found.size() > 1) {
             throw new RdfDbException("the metadata graph of scenario '" + scenario + "' is inconsistent: " + ref
                     + " names " + found.size() + " snapshots " + found.keySet() + ", and the version chain of a"
@@ -348,16 +351,19 @@ public final class SnapshotCatalog {
      * both. An open timestamp joins the root of the authority's tree, which is what "the base timestamp" is; an
      * open version excludes every snapshot that has a version successor, which on a linear chain is the head; an
      * exact version is the snapshot carrying that name. A named version is the snapshot of the moment whose
-     * version ranks highest at or below the name's rank: a sub-select over the {@link #versionCandidates candidates},
-     * ordered by rank, limited to one &mdash; which also makes the engine resolve the address before the plan query
-     * walks {@code pdb:parent*} from it, instead of walking from every snapshot of the moment.</p>
+     * version ranks highest at or below the name's rank: the {@linkplain VersionRegistry#candidates candidate
+     * names} come from the cached registry as {@code VALUES} with their ranks, so the query looks up a handful of
+     * names instead of joining a registry node per snapshot, and a sub-select ordered by that rank and limited to
+     * one resolves the address before the plan query walks {@code pdb:parent*} from it. The candidates are valid at
+     * one revision of the registry, which the pattern requires; a read that found nothing re-reads the registry
+     * and asks again when it was stale ({@link #isNamed}).</p>
      *
      * @param var the variable, with its {@code ?}; the pattern also uses {@code var} plus {@code Base},
-     *            {@code Root}, {@code Child} and the suffixes of {@link #versionCandidates}
+     *            {@code Root}, {@code Child}, {@code N} and {@code R}
      * @param ref the address, with a modelling authority
      * @return the pattern, ending with a space
      */
-    static String addressPattern(String var, SnapshotRef ref) {
+    String addressPattern(String var, SnapshotRef ref) {
         String authority = SparqlText.str(ref.modellingAuthority());
         StringBuilder pattern = new StringBuilder(var).append(" a pdb:Snapshot ; pdb:modellingAuthority ")
                 .append(authority).append(" ; pdb:timestamp ")
@@ -376,30 +382,20 @@ public final class SnapshotCatalog {
             return pattern.append(var).append(" pdb:version ").append(SparqlText.str(ref.version())).append(" . ")
                     .toString();
         }
-        return "{ SELECT " + var + " WHERE { " + pattern + versionCandidates(var, ref.version()) + "} ORDER BY DESC("
+        // The candidates first: a backend that joins in text order then looks up a handful of names
+        return "{ SELECT " + var + " WHERE { " + registry.candidates(var, ref.version()) + pattern + "} ORDER BY DESC("
                 + var + "R) LIMIT 1 } ";
     }
 
     /**
-     * The graph pattern that keeps a bound snapshot only when its version ranks at or below a named one.
+     * Whether an address is resolved from the cached registry, and a read of it that found nothing has to ask
+     * whether the registry changed meanwhile.
      *
-     * <p>The rank of the snapshot's version and the bound are both joined from the registry nodes, in the same
-     * query: a read never uses the cached registry. A name the registry does not hold binds nothing. The snapshot a
-     * named version means is the candidate ranking highest at its moment ({@link #addressPattern}), which on the
-     * linear chain of a moment &mdash; ranks grow along it, every write and every rerank keeps it so &mdash; is also
-     * the deepest one ({@link #assembly}).</p>
-     *
-     * @param var     the snapshot variable; the pattern also uses {@code var} plus {@code N}, {@code Vn},
-     *                {@code R}, {@code Named} and {@code Max}
-     * @param version the version name
-     * @return the pattern, ending with a space
+     * @param ref the address
+     * @return whether it names a version, not exactly
      */
-    static String versionCandidates(String var, String version) {
-        // No rdf:type on the registry nodes: only they carry pdb:name, and a type pattern made the in-process
-        // engine join every registry node before the name
-        return var + " pdb:version " + var + "N . " + var + "Vn pdb:name " + var + "N ; pdb:rank " + var + "R . "
-                + var + "Named pdb:name " + SparqlText.str(version) + " ; pdb:rank " + var + "Max . FILTER(" + var
-                + "R <= " + var + "Max) ";
+    static boolean isNamed(SnapshotRef ref) {
+        return ref.version() != null && !ref.exact();
     }
 
     /**
@@ -639,9 +635,17 @@ public final class SnapshotCatalog {
     public Map<String, SnapshotInfo> assembly(Instant timestamp, String version) {
         Objects.requireNonNull(timestamp);
         SnapshotRef moment = SnapshotRef.of(scenario, null, timestamp, version);
+        Map<String, SnapshotInfo> byAuthority = assemblyOf(moment);
+        if (byAuthority.isEmpty() && version != null && registry.changedAfterMiss()) {
+            byAuthority = assemblyOf(moment);
+        }
+        return byAuthority;
+    }
+
+    private Map<String, SnapshotInfo> assemblyOf(SnapshotRef moment) {
         // Every snapshot of the moment, or every one at or below the version; the deepest of each authority wins
         String restriction = "?s pdb:timestamp " + SparqlText.dateTime(moment.timestamp()) + " . "
-                + (version == null ? "" : versionCandidates("?s", version));
+                + (moment.version() == null ? "" : registry.candidates("?s", moment.version()));
         Map<String, SnapshotInfo> byAuthority = new TreeMap<>();
         snapshotsWhere(restriction, "").values().forEach(info -> byAuthority.merge(info.modellingAuthority(), info,
                 (a, b) -> a.depth() >= b.depth() ? a : b));

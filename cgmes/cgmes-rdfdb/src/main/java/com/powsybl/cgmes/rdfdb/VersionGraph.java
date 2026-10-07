@@ -418,6 +418,15 @@ public final class VersionGraph {
      * @return the chains
      */
     Chains chains(Map<String, Start> starts) {
+        Chains chains = chainsOnce(starts);
+        // A named start is resolved from the cached registry at one revision: a side it found nothing for is asked
+        // again once, when the registry changed meanwhile
+        boolean namedMiss = starts.entrySet().stream().anyMatch(e -> e.getValue().snapshotIri() == null
+                && SnapshotCatalog.isNamed(e.getValue().ref()) && chains.bySide().get(e.getKey()).isEmpty());
+        return namedMiss && catalog.registry().changedAfterMiss() ? chainsOnce(starts) : chains;
+    }
+
+    private Chains chainsOnce(Map<String, Start> starts) {
         Objects.requireNonNull(starts);
         if (starts.isEmpty()) {
             return new Chains(Map.of(), Map.of(), Map.of());
@@ -432,10 +441,13 @@ public final class VersionGraph {
         }
         String starting = startPattern.toString();
 
+        // The membership branch needs no rdf:type on ?snap: pdb:parent only links snapshots, and a member the detail
+        // branch does not describe is dropped below. The type made the in-process engine join it first and
+        // evaluate the start of every side once per snapshot of the scenario
         String query = RdfDbVocabulary.PREFIXES
                 + "SELECT ?side ?snap ?p ?o ?sub ?graph ?fwd ?rev ?mfast ?vsafe ?n ?sbase ?cim ?cdepth ?rank"
                 + " WHERE { GRAPH " + SparqlText.iri(metaGraph) + " {"
-                + " {" + starting + " ?start pdb:parent* ?snap . ?snap a pdb:Snapshot }"
+                + " {" + starting + " ?start pdb:parent* ?snap }"
                 + " UNION"
                 + " { { SELECT DISTINCT ?snap WHERE {" + starting + " ?start pdb:parent* ?snap } }"
                 + "   ?snap a pdb:Snapshot ; ?p ?o "
@@ -494,6 +506,6 @@ public final class VersionGraph {
         if (start.snapshotIri() != null) {
             return "BIND(" + SparqlText.iri(start.snapshotIri()) + " AS ?start)";
         }
-        return SnapshotCatalog.addressPattern("?start", catalog.readable(start.ref()));
+        return catalog.addressPattern("?start", catalog.readable(start.ref()));
     }
 }

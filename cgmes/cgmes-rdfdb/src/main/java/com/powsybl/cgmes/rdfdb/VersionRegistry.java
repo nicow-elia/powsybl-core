@@ -60,8 +60,10 @@ import java.util.stream.Collectors;
  * edit. It is the cache token. This object holds the registry as last read &mdash; read in the same request as the
  * schema check, so no listing costs more than before &mdash; and every edit and every snapshot write is guarded on
  * the revision it was checked against: an edit through another connection makes the next write through this one
- * refuse, and the write re-reads the registry and retries. Reads never use the cache: they join the rank in SPARQL,
- * so a stale cache can only make a write lose a race, never a read return a wrong snapshot.</p>
+ * refuse, and the write re-reads the registry and retries. A read at a named version takes its candidate names
+ * and their ranks from the cache too, and requires the revision they were read at inside its query: a stale cache
+ * binds nothing, and the reader re-reads the registry and asks again ({@link #changedAfterMiss}). So the cache is
+ * used only while its revision is the store's, and a stale one can cost a request, never a wrong answer.</p>
  *
  * <p>Every edit is one guarded request and one read-back. An edit that lost a race is refused with an
  * {@link RdfDbConflictException} and changes nothing.</p>
@@ -571,6 +573,48 @@ public final class VersionRegistry {
             throw new RdfDbException(what + " in scenario '" + scenario + "' (registry: " + this + "); register it"
                     + " or write into a permissive scenario");
         }
+    }
+
+    /**
+     * What a read at a named version looks for, from the cached registry: the names ranking at or below it with
+     * their ranks, as {@code VALUES}, the snapshot carrying one of them, and the revision the list is valid at.
+     *
+     * <p>A name the cache does not hold may have been registered through another connection, so the registry is
+     * read first (one request); a name it still does not hold binds nothing. The revision is part of the pattern:
+     * a cache that went stale binds nothing either, and the reader then asks {@link #changedAfterMiss}.</p>
+     *
+     * @param var     the snapshot variable; the pattern also uses {@code var} plus {@code N} and {@code R}
+     * @param version the version name
+     * @return the pattern, ending with a space
+     */
+    String candidates(String var, String version) {
+        State s = state();
+        if (s.entry(version).isEmpty()) {
+            refresh();
+            s = state();
+        }
+        Optional<Entry> named = s.entry(version);
+        if (named.isEmpty()) {
+            return "FILTER(false) ";
+        }
+        int bound = named.get().rank();
+        String values = s.entries().stream().filter(e -> e.rank() <= bound)
+                .map(e -> "(" + SparqlText.str(e.name()) + " " + SparqlText.integer(e.rank()) + ")")
+                .collect(Collectors.joining(" "));
+        return "VALUES (" + var + "N " + var + "R) { " + values + " } " + var + " pdb:version " + var + "N . "
+                + "FILTER EXISTS { " + schemaNode + " pdb:rev " + SparqlText.integer(s.rev()) + " } ";
+    }
+
+    /**
+     * After a read at a named version found nothing: whether the registry changed since it was cached, which makes
+     * the read worth asking again. One request, on a miss only.
+     *
+     * @return whether the revision changed
+     */
+    boolean changedAfterMiss() {
+        long cached = state().rev();
+        refresh();
+        return state().rev() != cached;
     }
 
     /**

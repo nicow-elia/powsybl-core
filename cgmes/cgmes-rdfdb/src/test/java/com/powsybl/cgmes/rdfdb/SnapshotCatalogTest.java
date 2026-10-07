@@ -439,6 +439,34 @@ class SnapshotCatalogTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
+    void aStaleRegistryCacheIsRefreshedBeforeTheReadAnswers(String backend) {
+        try (RdfDbConnection db = open(backend)) {
+            SnapshotCatalog catalog = db.snapshots(S);
+            catalog.registry().create(List.of("DA", "ID", "RT"), false);
+            SnapshotInfo da = catalog.putFull(microGridBe(), null, at(S, "DA"), null, params(), ReportNode.NO_OP);
+            SnapshotInfo id = catalog.putDiff(change(da, SSH, "urn:uuid:ssh-stale", "12.0"), at(S, "ID"));
+            assertThat(catalog.find(at(S, "RT"))).contains(id);
+            assertThat(catalog.registry().rev()).isEqualTo(1);
+
+            // Another connection moves RT below ID: RT now means DA, and this catalogue's cache does not know
+            SnapshotCatalog other = new SnapshotCatalog(db, S);
+            other.registry().rerank(Map.of("RT", 15));
+            UpdatePlan plan = db.versionGraph(S).plan(id.iri(), at(S, "RT"), new RdfDbUpdateOptions());
+            assertThat(plan.to()).isEqualTo(da.iri());
+            assertThat(catalog.registry().rev()).isEqualTo(2);
+
+            other.registry().rerank(Map.of("RT", 25));
+            assertThat(catalog.find(at(S, "RT"))).contains(id);
+            assertThat(catalog.assembly(BASE, "RT")).containsExactly(Map.entry(BE, id));
+            assertThat(catalog.registry().rev()).isEqualTo(3);
+            other.registry().rerank(Map.of("RT", 15));
+            assertThat(catalog.assembly(BASE, "RT")).containsExactly(Map.entry(BE, da));
+            assertThat(catalog.registry().rev()).isEqualTo(4);
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("com.powsybl.cgmes.rdfdb.Backends#backends")
     void anAssemblyTakesEachAuthorityAtOrBelowTheVersion(String backend) {
         try (RdfDbConnection db = open(backend)) {
             SnapshotCatalog catalog = db.snapshots(S);

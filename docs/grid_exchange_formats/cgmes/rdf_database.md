@@ -580,8 +580,11 @@ so no listing or read costs more than before; every snapshot write is guarded on
 checked against and on the revision, so a registry edited through another connection makes the write refuse, and
 the writer re-reads the registry and retries (at most three times; *"the version registry of scenario 'S' changed
 (rev 3 → 4) …"*). An appended name costs one guarded request and no read-back: the snapshot write that follows is
-guarded on it. **Reads never use the cache**: `find`, the plan query, `assembly` and the listings join the rank in
-SPARQL, so a stale cache can only make a write lose a race, never a read return a wrong snapshot.
+guarded on it. **A read uses the cache only at the store's revision**: a read at a named version takes the names
+ranking at or below it, with their ranks, from the cache and hands them to its query as `VALUES`, together with
+the revision they were read at (`FILTER EXISTS { <schema> pdb:rev 3 }`). A stale cache therefore binds nothing;
+the reader then re-reads the registry (one request, on a miss only) and, if the revision moved, asks again. A
+stale cache costs a request, never a wrong snapshot. The listings join the rank of each snapshot in SPARQL.
 
 ### Writing snapshots
 
@@ -830,12 +833,14 @@ is between two medians of the same warm state.
   a read joins the rank in the query it already sends. A write under a registered name stays at seven requests; the
   first write under a name a permissive registry does not hold yet is one more (the guarded append); an edit of
   the registry is two (the guarded edit, the read-back). Asserted by `RdfDbRequestCountTest`.
-* **A named version costs a candidate scan of its moment.** "The highest rank at or below `v`" is a sub-select over
-  the snapshots of that moment, so its cost grows with the number of versions one timestamp holds, while an exact
-  address or the head is one lookup. At the extreme of `ScaleVersioningBenchmarkTest` — two hundred versions of
-  one timestamp — planning to a named version takes 8.6 ms at depth 1 and 81 ms at depth 200 in process (an exact
-  address: 1.0 and 13.7 ms) and 10 ms and 136 ms on loopback Fuseki (6.9 and 127 ms). A day with a handful of
-  versions per timestamp does not see it; a caller that knows the version exists can pass `exactly()`.
+* **A named version is resolved from the cached registry.** "The highest rank at or below `v`" hands the query
+  the names ranking at or below `v` with their ranks as `VALUES` (and the revision they are valid at), so the
+  query looks up those names at the moment and keeps the highest — one request, like an exact address or the
+  head. At the extreme of `ScaleVersioningBenchmarkTest` — two hundred versions of one timestamp — planning to a
+  named version takes 0.8 ms at depth 1 and 16 ms at depth 200 in process, and 4.2 ms and 127 ms on loopback
+  Fuseki, measured in the module build — the level of the exact addresses before the registry (0.8 / 9.3 ms and
+  3.9 / 100 ms). An earlier form that joined the registry node of every snapshot of the moment took 8.6 / 81 ms
+  and 10 / 136 ms.
 * Planning, fetching and composing a fifty-difference chain stays well under 100 ms on both backends (40 ms on
   Fuseki, 4 ms in process), which is the bound the build asserts.
 * **Target missed: the plan query at chain depth fifty.** It was budgeted at 10 ms and takes 31 ms on loopback
