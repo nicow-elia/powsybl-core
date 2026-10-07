@@ -333,6 +333,43 @@ class RdfDbRequestCountTest {
                 8 * 3);
     }
 
+    /**
+     * A composition of two authorities against the two loads it replaces, each on a fresh connection so that each
+     * pays its schema check: one chain query for both, one model read, the boundary once.
+     */
+    @Test
+    void aCompositionCostsFewerRequestsThanTheLoadsItReplaces() {
+        BenchMeters.FusekiMeter.install();
+        try (EmbeddedFuseki fuseki = EmbeddedFuseki.inMemory()) {
+            String scenario = "composed";
+            try (RdfDbConnection db = RdfDbConnection.open(fuseki.database())) {
+                db.clear(scenario);
+                db.snapshots(scenario).putFull(CgmesConformity1Catalog.microGridBaseCaseBE().dataSource(), null,
+                        SnapshotRef.of(scenario, Backends.BE, null, "1"), null, params(), ReportNode.NO_OP);
+                db.snapshots(scenario).putFull(CgmesConformity1Catalog.microGridBaseCaseNL().dataSource(), null,
+                        SnapshotRef.of(scenario, Backends.NL, null, "1"), null, params(), ReportNode.NO_OP);
+            }
+            int singles = 0;
+            for (String authority : List.of(Backends.BE, Backends.NL)) {
+                try (RdfDbConnection db = RdfDbConnection.open(fuseki.database())) {
+                    BenchMeters.FusekiMeter.Reading mark = BenchMeters.FusekiMeter.mark();
+                    RdfDbNetworkLoader.load(db, SnapshotRef.latest(scenario, authority), null, params(),
+                            ReportNode.NO_OP);
+                    singles += since(mark);
+                }
+            }
+            try (RdfDbConnection db = RdfDbConnection.open(fuseki.database())) {
+                BenchMeters.FusekiMeter.Reading mark = BenchMeters.FusekiMeter.mark();
+                RdfDbNetworkLoader.loadComposed(db, SnapshotRef.of(scenario, null, null, null),
+                        List.of(Backends.BE, Backends.NL), null, params(), ReportNode.NO_OP);
+                int composed = since(mark);
+                // 2 + graphs(n) - 2 (n - 1) + 2 n for n = 2 and nine graphs per tree
+                assertAtMost("composing two authorities (" + singles + " for the two loads)", composed, 22);
+                assertAtMost("composing two authorities, against the two loads", composed, singles - 1);
+            }
+        }
+    }
+
     private static void assertAtMost(String what, int requests, int bound) {
         LOGGER.info("{}: {} request(s), bound {}", what, requests, bound);
         assertTrue(requests <= bound,

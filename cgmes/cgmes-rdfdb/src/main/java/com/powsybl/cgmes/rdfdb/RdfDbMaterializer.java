@@ -18,7 +18,12 @@ import com.powsybl.iidm.network.NetworkFactory;
 import com.powsybl.triplestore.api.TripleStoreOptions;
 import com.powsybl.triplestore.impl.rdf4j.TripleStoreRDF4J;
 import com.powsybl.triplestore.impl.rdf4j.sparql.ScenarioGraphNames;
+import org.eclipse.rdf4j.model.Resource;
 import org.eclipse.rdf4j.model.Statement;
+import org.eclipse.rdf4j.model.util.Values;
+import org.eclipse.rdf4j.model.vocabulary.RDF;
+import org.eclipse.rdf4j.repository.RepositoryConnection;
+import org.eclipse.rdf4j.repository.RepositoryResult;
 import org.eclipse.rdf4j.repository.sail.SailRepository;
 import org.eclipse.rdf4j.sail.memory.MemoryStore;
 import org.slf4j.Logger;
@@ -30,12 +35,14 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
 import java.util.function.UnaryOperator;
+import java.util.stream.Collectors;
 
 /**
  * Builds the network of a stored state that no difference can reach, by materialising the data first.
@@ -257,6 +264,175 @@ final class RdfDbMaterializer {
     }
 
     /**
+     * Materialise the snapshots of several modelling authorities into one store and convert them as one network.
+     *
+     * <p>What a CGM is, built from its IGMs as they are stored: every authority's graphs in one store under
+     * context names of their own, the boundary once (the first authority's, which every authority has to name),
+     * every graph speaking the first authority's subject base (relative identifiers resolve against the base of
+     * the files they were parsed from, and the conversion joins by IRI), each authority's differences applied to
+     * its own graphs, and then the precedence: one {@code DELETE} per later authority removes every statement of
+     * its graphs whose subject and property an earlier authority's graphs state, so the first one in the list
+     * wins. The flat conversion of that store pairs the tie lines on the boundary nodes, exactly as it does for
+     * the assembled files.</p>
+     *
+     * @param db          the open connection
+     * @param scenario    the scenario
+     * @param snapshots   the snapshot of each authority, in precedence order
+     * @param plans       how to build each of them, in the same order
+     * @param stateModels the stored model of every identifier in the plans' target states
+     * @param owned       the authorities a write-back of the network goes to
+     * @param factory     the factory the network is created with
+     * @param params      the CGMES import parameters
+     * @param rn          where the load reports
+     * @return the network and the timings
+     */
+    static RdfDbNetworkLoader.LoadResult materializeComposed(RdfDbConnection db, String scenario,
+                                                             List<SnapshotInfo> snapshots,
+                                                             List<MaterializationPlan> plans,
+                                                             Map<String, StoredModel> stateModels,
+                                                             List<String> owned, NetworkFactory factory,
+                                                             Properties params, ReportNode rn) {
+        RdfDbNames.checkScenario(scenario);
+        if (db.database().queryMode() == RdfDatabase.QueryMode.REMOTE) {
+            throw new RdfDbException("Scenario '" + scenario + "' is versioned, which the REMOTE query mode cannot"
+                    + " read: a composition is built in a local store. Load it in LOCAL query mode"
+                    + " (RdfDatabase.withQueryMode)");
+        }
+        // The subject base each authority's graphs were parsed with, and the first one's, which the store speaks
+        List<String> bases = plans.stream().map(plan -> subjectBase(plan, stateModels)).toList();
+        String base = bases.get(0);
+        TripleStoreRDF4J local = new TripleStoreRDF4J(new SailRepository(new MemoryStore()),
+                TripleStoreNetworkLoader.importer().tripleStoreOptions(params));
+        boolean handedOver = false;
+        try {
+            Map<String, String> localToRemote = new LinkedHashMap<>();
+            Map<String, UnaryOperator<Statement>> mappings = new LinkedHashMap<>();
+            List<Map<String, String>> contexts = new ArrayList<>();
+            List<GraphInfo> graphs = new ArrayList<>();
+            for (int i = 0; i < plans.size(); i++) {
+                String own = bases.get(i);
+                Map<String, String> contextOfSubset = Profiles.map();
+                int index = 0;
+                for (Map.Entry<String, MaterializationPlan.FullSource> entry : plans.get(i).startModel().entrySet()) {
+                    String subset = entry.getKey();
+                    if (!Profiles.isStandard(subset)) {
+                        continue;
+                    }
+                    if (Profiles.isBoundary(subset) && i > 0) {
+                        checkSameBoundary(plans, i, subset, snapshots);
+                        continue;
+                    }
+                    String localName = ScenarioGraphNames.CONTEXTS + "a" + i + "_model" + index++ + "_" + subset
+                            + ".xml";
+                    localToRemote.put(localName, entry.getValue().graph());
+                    contextOfSubset.put(subset, localName);
+                    graphs.add(new GraphInfo(scenario, localName, subset, entry.getValue().graph()));
+                    StoredModel model = stateModels.get(entry.getValue().modelId());
+                    String parsedWith = Profiles.isBoundary(subset) && model != null ? model.subjectBase() : own;
+                    if (!base.isEmpty() && !parsedWith.isEmpty() && !parsedWith.equals(base)) {
+                        mappings.put(localName, GraphFetcher.rebase(parsedWith, base));
+                    }
+                }
+                contexts.add(contextOfSubset);
+            }
+            long fetchStart = System.nanoTime();
+            GraphFetcher.FetchStatistics fetchStatistics = new GraphFetcher(db, scenario)
+                    .fetchInto(local, localToRemote, mappings);
+            Duration fetchWallClock = Duration.ofNanos(System.nanoTime() - fetchStart);
+
+            long applyStart = System.nanoTime();
+            Map<String, DifferenceModel> byId = fetchSteps(db, plans);
+            for (int i = 0; i < plans.size(); i++) {
+                String own = bases.get(i);
+                applySteps(local, plans.get(i), contexts.get(i), byId,
+                        stored -> stored.equals(own) && !base.isEmpty() ? base : stored);
+            }
+            for (int i = 1; i < plans.size(); i++) {
+                local.update(precedence(contexts.subList(0, i), contexts.get(i)));
+            }
+            Map<String, String> owners = owners(local, snapshots, contexts, base);
+            Duration applyDiffs = Duration.ofNanos(System.nanoTime() - applyStart);
+
+            long convertStart = System.nanoTime();
+            Network network = TripleStoreNetworkLoader.load(local, factory, params, rn);
+            Duration convert = Duration.ofNanos(System.nanoTime() - convertStart);
+            handedOver = true;
+            network.setCaseDate(snapshots.get(0).timestamp().atZone(ZoneOffset.UTC));
+            Map<String, String> modelIds = Profiles.map();
+            plans.get(0).targetState().forEach((subset, id) -> {
+                if (Profiles.isStandard(subset)) {
+                    modelIds.put(subset, id);
+                }
+            });
+            RdfDbProvenanceImpl provenance = new RdfDbProvenanceImpl(db.database(), scenario, graphs,
+                    Instant.now(), modelIds);
+            provenance.compose(snapshots, owned, owners);
+            network.addExtension(RdfDbProvenance.class, provenance);
+            LOGGER.info("Composed {} of scenario '{}': {} difference(s), {} objects owned", snapshots, scenario,
+                    byId.size(), owners.size());
+            return new RdfDbNetworkLoader.LoadResult(network, LoadStatistics.of(Duration.ZERO, fetchWallClock,
+                    fetchStatistics, applyDiffs, Duration.ZERO, convert));
+        } finally {
+            if (!handedOver) {
+                local.close();
+            }
+        }
+    }
+
+    /**
+     * Refuse a later authority that names another boundary model than the first one: a CGM has one boundary, and
+     * the first authority's is the one fetched.
+     */
+    private static void checkSameBoundary(List<MaterializationPlan> plans, int i, String subset,
+                                          List<SnapshotInfo> snapshots) {
+        MaterializationPlan.FullSource first = plans.get(0).startModel().get(subset);
+        String mine = plans.get(i).startModel().get(subset).modelId();
+        if (first == null || !first.modelId().equals(mine)) {
+            throw new RdfDbException("the composition of " + snapshots.get(0) + " and " + snapshots.get(i)
+                    + " names two " + subset + " boundaries (" + (first == null ? "none" : first.modelId()) + ", "
+                    + mine + "), and a common grid model has one; nothing was loaded");
+        }
+    }
+
+    /**
+     * The precedence of the earlier authorities over one later one: every statement of the later one's graphs
+     * whose subject and property a graph of an earlier one states.
+     */
+    private static String precedence(List<Map<String, String>> earlier, Map<String, String> later) {
+        return "DELETE { GRAPH ?gi { ?s ?p ?o } } WHERE { VALUES ?ge {"
+                + earlier.stream().flatMap(contexts -> contexts.values().stream())
+                        .map(SparqlText::iri).map(iri -> " " + iri).collect(Collectors.joining())
+                + " } VALUES ?gi {" + later.values().stream().map(SparqlText::iri).map(iri -> " " + iri)
+                        .collect(Collectors.joining())
+                + " } GRAPH ?ge { ?s ?p ?x } GRAPH ?gi { ?s ?p ?o } }";
+    }
+
+    /**
+     * The modelling authority of every object of a composition: the first one whose graphs type it, read off the
+     * local store before the conversion, keyed by master resource identifier.
+     */
+    private static Map<String, String> owners(TripleStoreRDF4J local, List<SnapshotInfo> snapshots,
+                                              List<Map<String, String>> contexts, String base) {
+        String prefix = base + "_";
+        Map<String, String> owners = new HashMap<>();
+        try (RepositoryConnection connection = local.getRepository().getConnection()) {
+            for (int i = 0; i < contexts.size(); i++) {
+                String authority = snapshots.get(i).modellingAuthority();
+                Resource[] graphs = contexts.get(i).values().stream().map(Values::iri).toArray(Resource[]::new);
+                try (RepositoryResult<Statement> typed = connection.getStatements(null, RDF.TYPE, null, graphs)) {
+                    typed.forEach(statement -> {
+                        String subject = statement.getSubject().stringValue();
+                        if (subject.startsWith(prefix)) {
+                            owners.putIfAbsent(subject.substring(prefix.length()), authority);
+                        }
+                    });
+                }
+            }
+        }
+        return owners;
+    }
+
+    /**
      * The data of a snapshot on a local store, without converting it.
      *
      * <p>What a file ingestion needs: to say what changed between the parent state and a new instance file, the
@@ -378,11 +554,25 @@ final class RdfDbMaterializer {
     /** Fetch every difference of the plan in one request and apply them, folded, one profile at a time. */
     private static void applySteps(RdfDbConnection db, TripleStoreRDF4J local, MaterializationPlan plan,
                                    Map<String, String> contextOfSubset) {
-        if (plan.steps().isEmpty()) {
-            return;
-        }
-        List<StoredModel> all = plan.steps().stream().map(UpdatePlan.DiffStep::model).toList();
-        Map<String, DifferenceModel> byId = RdfDbDiffSource.fetchById(db, all);
+        applySteps(local, plan, contextOfSubset, fetchSteps(db, List.of(plan)), UnaryOperator.identity());
+    }
+
+    /** Every difference the plans apply, in one request; none for plans without a step. */
+    private static Map<String, DifferenceModel> fetchSteps(RdfDbConnection db, List<MaterializationPlan> plans) {
+        List<StoredModel> all = plans.stream().flatMap(plan -> plan.steps().stream())
+                .map(UpdatePlan.DiffStep::model).toList();
+        return all.isEmpty() ? Map.of() : RdfDbDiffSource.fetchById(db, all);
+    }
+
+    /**
+     * Apply the differences of a plan, folded, one profile at a time.
+     *
+     * @param subjectBase the subject base a difference is applied with, given the one it was stored with: the
+     *                    identity, unless the store speaks another base than the plan's graphs were parsed with
+     */
+    private static void applySteps(TripleStoreRDF4J local, MaterializationPlan plan,
+                                   Map<String, String> contextOfSubset, Map<String, DifferenceModel> byId,
+                                   UnaryOperator<String> subjectBase) {
         stepsBySubset(plan).forEach((subset, steps) -> {
             String contextName = contextOfSubset.get(subset);
             if (contextName == null) {
@@ -393,7 +583,7 @@ final class RdfDbMaterializer {
             List<DifferenceModel> models = steps.stream().map(step -> byId.get(step.model().id())).toList();
             DifferenceModel folded = models.size() == 1 ? models.get(0)
                     : DifferenceModel.compose(models, target.toHeader());
-            CgmesDiffImport.applyToGraph(local, folded, contextName, target.subjectBase());
+            CgmesDiffImport.applyToGraph(local, folded, contextName, subjectBase.apply(target.subjectBase()));
         });
     }
 

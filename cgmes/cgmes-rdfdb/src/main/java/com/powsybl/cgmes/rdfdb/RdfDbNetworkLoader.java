@@ -38,6 +38,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -738,6 +739,115 @@ public final class RdfDbNetworkLoader {
         LOGGER.info("Loaded network {} from snapshot {} of {}: {}", materialised.network().getId(), ref,
                 db.database(), statistics.summary());
         return new LoadResult(materialised.network(), statistics, materialised.extraProfiles());
+    }
+
+    // ------------------------------------------------------------------ composition
+
+    /**
+     * Build one network from the snapshots several modelling authorities hold at one moment, the first one winning.
+     *
+     * <p>The form of {@link #loadComposed(RdfDbConnection, SnapshotRef, List, List, Set, NetworkFactory, Properties,
+     * ReportNode)} that writes back into the first authority's tree only and reads every profile.</p>
+     *
+     * @param db          the open connection
+     * @param moment      the scenario, the timestamp and the version; no modelling authority
+     * @param authorities the modelling authorities, in precedence order
+     * @param factory     the factory the network is created with
+     * @param params      the CGMES import parameters
+     * @param reportNode  where the load reports
+     * @return the network and the timings
+     */
+    public static LoadResult loadComposed(RdfDbConnection db, SnapshotRef moment, List<String> authorities,
+                                          NetworkFactory factory, Properties params, ReportNode reportNode) {
+        return loadComposed(db, moment, authorities, null, null, factory, params, reportNode);
+    }
+
+    /**
+     * Build one network from the snapshots several modelling authorities hold at one moment: a common grid model
+     * of their individual grid models, loaded at once.
+     *
+     * <p>Each authority is resolved at the moment as an ordinary load would resolve it &mdash; its own tree, the
+     * timestamp (the base timestamp of its tree when {@code null}), the latest version at or below the named one
+     * &mdash; and all of them in one chain query. The snapshots are materialised into one local store with the
+     * boundary once and one subject base, and converted as one flat network: the tie lines are paired on the
+     * boundary nodes, as for the assembled files. A property two authorities state has the value of the earlier
+     * one in {@code authorities}; that order is the only composition rule.</p>
+     *
+     * <p>Nothing about the composition is stored: the network's {@link RdfDbProvenance#composition()} names the
+     * snapshots, {@link RdfDbProvenance#owned()} the trees a recorded change is written into
+     * ({@link RdfDbExport#export(Network, java.util.Collection, RdfDbConnection, SnapshotRef,
+     * com.powsybl.cgmes.conversion.export.CgmesDiffExport.ExportOptions, ReportNode)} routes each change to the
+     * tree of the object it is on), and
+     * {@link RdfDbProvenance#ownerOf(String)} the authority of each object. A composed network is not updated in
+     * place and holds no variant: to reach another moment, compose again.</p>
+     *
+     * @param db          the open connection
+     * @param moment      the scenario, the timestamp and the version; the modelling authority must be {@code null},
+     *                    the authorities are the list
+     * @param authorities the modelling authorities, in precedence order, each once
+     * @param owned       the authorities a recorded change may be written into, a subset of {@code authorities};
+     *                    {@code null} for the first one
+     * @param profiles    the profiles to read, or {@code null} or empty for every standard profile; custom profiles
+     *                    are not composed
+     * @param factory     the factory the network is created with
+     * @param params      the CGMES import parameters
+     * @param reportNode  where the load reports
+     * @return the network and the timings
+     * @throws RdfDbException if an authority holds no snapshot at the moment (naming it), the list is empty or names
+     *                        one twice, {@code owned} names one outside it, or two authorities name different
+     *                        boundaries; nothing is loaded then
+     */
+    public static LoadResult loadComposed(RdfDbConnection db, SnapshotRef moment, List<String> authorities,
+                                          List<String> owned, Set<String> profiles, NetworkFactory factory,
+                                          Properties params, ReportNode reportNode) {
+        Objects.requireNonNull(db);
+        Objects.requireNonNull(moment);
+        Objects.requireNonNull(authorities);
+        String scenario = moment.scenario();
+        if (moment.modellingAuthority() != null) {
+            throw new RdfDbException("the moment " + moment + " of a composition names no modelling authority:"
+                    + " the authorities are the list " + authorities);
+        }
+        if (authorities.isEmpty() || new HashSet<>(authorities).size() != authorities.size()) {
+            throw new RdfDbException("a composition names each modelling authority once, and at least one: "
+                    + authorities + (authorities.isEmpty() ? "" : " names one twice"));
+        }
+        List<String> writers = owned == null ? List.of(authorities.get(0)) : List.copyOf(owned);
+        writers.stream().filter(authority -> !authorities.contains(authority)).findFirst().ifPresent(stranger -> {
+            throw new RdfDbException("the owned modelling authority '" + stranger + "' is not in the composition "
+                    + authorities + ": a composed network writes only into trees it was composed of");
+        });
+        long t0 = System.nanoTime();
+        SnapshotCatalog catalog = db.snapshots(scenario);
+        catalog.checkSchema();
+        VersionGraph versionGraph = db.versionGraph(scenario);
+        Map<String, VersionGraph.Start> starts = new LinkedHashMap<>();
+        authorities.forEach(authority -> starts.put(authority, new VersionGraph.Start(null,
+                new SnapshotRef(scenario, authority, moment.timestamp(), moment.version(), moment.exact()))));
+        VersionGraph.Chains chains = versionGraph.chains(starts);
+        List<SnapshotInfo> snapshots = new ArrayList<>();
+        List<MaterializationPlan> plans = new ArrayList<>();
+        for (String authority : authorities) {
+            List<SnapshotInfo> chain = chains.bySide().get(authority);
+            if (chain.isEmpty()) {
+                throw new RdfDbException("modelling authority '" + authority + "' holds no snapshot at "
+                        + starts.get(authority).ref() + ", and a common grid model of " + authorities
+                        + " needs every one of them; nothing was loaded");
+            }
+            snapshots.add(chain.get(0));
+            plans.add(versionGraph.materialization(chain, chains.fullGraphs(), chains.diffs()).project(profiles));
+        }
+        Map<String, StoredModel> stateModels = db.catalog(scenario).models(plans.stream()
+                .flatMap(plan -> plan.targetState().values().stream()).collect(Collectors.toSet()));
+        LoadResult materialised = RdfDbMaterializer.materializeComposed(db, scenario, snapshots, plans, stateModels,
+                writers, factory == null ? NetworkFactory.findDefault() : factory, params,
+                reportNode == null ? ReportNode.NO_OP : reportNode);
+        Duration readCatalog = Duration.ofNanos(System.nanoTime() - t0).minus(materialised.statistics().total());
+        LoadStatistics statistics = materialised.statistics()
+                .withListGraphs(readCatalog.isNegative() ? Duration.ZERO : readCatalog);
+        LOGGER.info("Composed network {} of {} at {} of {}: {}", materialised.network().getId(), authorities,
+                moment, db.database(), statistics.summary());
+        return new LoadResult(materialised.network(), statistics);
     }
 
     private static LoadResult materialize(RdfDbConnection db, SnapshotRef ref, Set<String> profiles,
