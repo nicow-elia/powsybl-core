@@ -55,10 +55,11 @@ sequenceDiagram
     Note over E: families and blocks of the mapping,<br/>Refusal for what a receiver of changes cannot take
     E-->>X: Result (DifferenceModelSet, exported events)
     X->>C: putDiff(set, SnapshotRef)
+    Note over C: the version name from the cached VersionRegistry:<br/>rank above the head's, or appended (permissive)
     C->>S: accept(set) with the snapshot node
     S->>F: per difference model, in a one-member set:<br/>check(set).route() == FAST
     S->>F: checkVariantSafe(model).route() == FAST
-    S->>D: one guarded INSERT ... WHERE<br/>(model nodes, forward/reverse graphs, snapshot node)
+    S->>D: one guarded INSERT ... WHERE<br/>(model nodes, forward/reverse graphs, snapshot node;<br/>guards: chain, rank join, name at its rank, pdb:rev)
     D-->>C: written, or nothing (guard failed)
     C-->>X: SnapshotInfo
     Note over X: NetworkIdentity.advance rebuilds CgmesMetadataModels,<br/>RdfDbProvenance points at the new snapshot
@@ -70,7 +71,7 @@ sequenceDiagram
 | the statements of one profile, forward and reverse | `DifferenceModel` in a `DifferenceModelSet` | cgmes-conversion |
 | "every statement is in a block an in-place update reads" | `FastRouteCapabilities.check(set).route() == FAST`, per difference model wrapped in a one-member set → `pdb:fastPredicatesOnly` on the difference model node | cgmes-conversion decides, rdfdb stores |
 | "every property is per-variant state" (the network-dependent cases are left to apply time) | `FastRouteCapabilities.checkVariantSafe(set).route() == FAST` → `pdb:variantSafe` on the difference model node | cgmes-conversion decides, rdfdb stores |
-| the address of the new snapshot, the version rule, the chain guards | `SnapshotRef`, the guarded `INSERT` | rdfdb |
+| the address of the new snapshot (its version a name of the scenario's version registry), the rank rule, the chain and registry guards | `SnapshotRef`, `VersionRegistry`, the guarded `INSERT` | rdfdb; the conversion never sees a version |
 | where the sending network now stands | `CgmesMetadataModels`, `RdfDbProvenance` | rdfdb writes the extension the conversion defines |
 
 rdfdb never inspects a family, a block or an update query: the verdict crosses as a `Decision`, of which it keeps

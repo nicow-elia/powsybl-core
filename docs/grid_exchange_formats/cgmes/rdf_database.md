@@ -483,11 +483,12 @@ A snapshot is addressed by **`(scenario, modellingAuthority, timestamp, version)
 | `scenario` | `String`, non-blank | the base grid model — in practice **one day** | **refused**: there is no default scenario and no "latest scenario" anywhere in this API | refused |
 | `modellingAuthority` | `String`, non-blank | the tree the snapshot is stored under, normally the `md:Model.modelingAuthoritySet` of its equipment and steady state hypothesis files, verbatim, for instance `http://elia.be/CGMES/2.4.15` | **refused**, naming the authorities the scenario holds: guessing would load another TSO's grid | taken from the EQ and SSH headers of what is written (`putFull`, `putAsDiff`, `putDiff`); refused when neither states one (a difference of the state variables alone must name its authority), and naming the authorities found per profile, when they disagree. An explicit authority is taken whatever the files state |
 | `timestamp` | `java.time.Instant`, second precision | the moment, equal to `md:Model.scenarioTime` of the snapshot's members | the base timestamp of that authority's tree, which is its root's | the same; `putFull` takes the steady state file's scenario time |
-| `version` | `Integer`, at least 1 | the position in the chain of one timestamp | the head of that chain | the head's plus one, 1 for a root or a new timestamp |
+| `version` | `String`, a name registered in the scenario's version registry (`"DA"`, `"ID"`, `"RT"`, or `"1"`, `"2"`, …) | the position in the chain of one timestamp, ordered by the name's **rank** | the head of that chain; a named version means the snapshot of that moment ranking **highest at or below** it (`exact` for that name only) | the lowest registered name ranking above the head's (the lowest registered one for a root or a new timestamp); a permissive registry appends a generated name when there is none |
 
 ```java
-SnapshotRef.of("2016-01-01", "http://elia.be/CGMES/2.4.15", Instant.parse("2016-01-01T08:30:00Z"), 2);
-SnapshotRef.of("2016-01-01", mas, OffsetDateTime.parse("2016-01-01T09:30:00+01:00").toInstant(), 2); // the same
+SnapshotRef.of("2016-01-01", "http://elia.be/CGMES/2.4.15", Instant.parse("2016-01-01T08:30:00Z"), "ID");
+SnapshotRef.of("2016-01-01", mas, OffsetDateTime.parse("2016-01-01T09:30:00+01:00").toInstant(), "ID"); // the same
+SnapshotRef.of("2016-01-01", mas, instant, "RT").exactly(); // RT and nothing below it
 SnapshotRef.latest("2016-01-01", mas);            // base timestamp, head
 SnapshotRef.latestAt("2016-01-01", mas, instant); // that timestamp, head
 ```
@@ -497,10 +498,15 @@ only built by saying where it is. The one place a zone-less text is still read i
 CGMES header, which the MicroGrid conformity files write without a zone; it is read as UTC. There are no labels and
 no per-scenario offset: rendering a moment in a local zone is the caller's.
 
-The version is an integer that **only grows** inside the chain of one timestamp: an explicit version on a write
-must be greater than the head's — gaps are allowed, so an operator may number `10, 20, 30` — and a write that names
-none gets the head's plus one (`SnapshotCatalog.nextVersion(ref)` says which). The CGMES header's own
-`md:Model.version` stays what it is, a per-document counter, and is not tied to the snapshot version.
+The version is a **name**, and names are ordered by the scenario's version registry (next section): inside the
+chain of one timestamp a new version **ranks above** the head it is written on, and names may be sparse — a chain
+`DA → RT` that never had an `ID` is fine. A read at a named version means the snapshot of that moment whose version
+ranks **highest at or below** it: asking for `RT` at a timestamp that only reached `ID` reads `ID`, and asking for
+`DA` there reads `DA`. `SnapshotRef.exactly()` asks for that name and nothing else, and is absent (refused by
+`require` and the loads with the usual *"holds no snapshot (…, =RT)"*) when the moment does not carry it; a name
+the registry does not hold names nothing. `exact` is part of the address (its fifth component, `exact()`), writes
+ignore it. The CGMES header's own `md:Model.version` stays what it is, a per-document counter, and is not tied to
+the snapshot version.
 
 **Profiles are not a key.** What a snapshot covers is a property of the stored state —
 `SnapshotInfo.profiles()`, the keys of its `pdb:state` — and, on every operation, the caller's **projection**:
@@ -526,13 +532,64 @@ Several days in one database are **several scenarios**. Inside a scenario every 
 tree** with exactly one root; a second root of the same authority is refused. All trees of a scenario live in its
 one metadata graph and **share its boundary**.
 
+### The version registry
+
+Every scenario holds a **version registry**: one `pdb:Version` node per name, with its `pdb:rank` (an integer,
+sparse: an appended name gets the highest rank plus 10) and optionally `pdb:transient true`. A snapshot stores the
+*name* of its version, never a rank: every comparison joins the name to its registry node, so a rerank rewrites a
+few nodes and not the history. `SnapshotCatalog.registry()` returns it as a `VersionRegistry`:
+
+```java
+VersionRegistry registry = db.snapshots("2016-01-01").registry();
+registry.create(List.of("DA", "ID", "RT"), false);   // ranks 10, 20, 30; strict
+registry.add("RT2");                                 // 40, above every other
+registry.insert("ID2", "ID");                        // 25, the midpoint after ID
+registry.rerank(Map.of("RT2", 35));                  // refused if a version chain would lose its order
+registry.rename("RT2", "late");                      // only a name no snapshot carries
+registry.markTransient("ID2", true);
+registry.delete("ID2");                              // a transient name goes with its (leaf) snapshots
+registry.names(); registry.rank("ID"); registry.isPermissive(); registry.rev();
+```
+
+**Strict or permissive.** `create(names, permissive)` makes a **strict** registry unless asked otherwise: a write
+under a name it does not hold is refused with *"version 'X' is not registered in scenario 'S' (registry: [DA 10,
+ID 20, RT 30]); register it or write into a permissive scenario"*. A **permissive** one appends the unknown name
+above every other on its first write. A scenario whose first root is written without a registry **bootstraps a
+permissive one** with the root's name at rank 10 — which is what keeps a caller who never heard of the registry
+working with `"1"`, `"2"`, … in the order it writes them.
+
+**What a write takes.** A named version that is registered must rank above the head's version of the same
+timestamp, else *"version '20' (rank 20) is not above the parent '30' (rank 30) of (S, A, T): a new version ranks
+above the head it is written on"*. No name means the lowest registered name ranking above the head's — for a root
+or a new timestamp, the lowest registered name; when there is none, a strict registry refuses (*"no version of the
+registry ranks above 'RT' (rank 30) in scenario 'S' …"*) and a permissive one appends a generated name, the
+smallest number above the registry's size that is not a name yet (`"2"` after `"1"`). A timestamp root's version is
+not compared with the snapshot it hangs off: that one belongs to another timestamp.
+
+**Edits.** `add`, `insert` (refused *"no rank between 'A' (20) and 'B' (21) …: rerank first"* when no integer is
+left), `rerank` (accepted when, for every snapshot written as the next version of another, the new rank of its
+version stays above its parent's — the refusal names the first such pair; `pdb:TimestampEdge`s are not ordered by
+rank), `rename` and `delete` of a name no snapshot carries (refused naming the snapshot that carries it: the
+snapshot IRI carries the name), `delete` of a **transient** name together with the snapshots that carry it, which
+must all be leaves (refused naming the child otherwise), and `markTransient`.
+
+**The revision.** The schema node carries `pdb:rev`, 1 when the registry is created and one more on every edit.
+Every edit is one request guarded on it plus one read-back; an edit that lost a race is a `RdfDbConflictException`
+that changed nothing. The registry is read **in the same request as the schema check** and cached per catalogue,
+so no listing or read costs more than before; every snapshot write is guarded on the name at the rank it was
+checked against and on the revision, so a registry edited through another connection makes the write refuse, and
+the writer re-reads the registry and retries (at most three times; *"the version registry of scenario 'S' changed
+(rev 3 → 4) …"*). An appended name costs one guarded request and no read-back: the snapshot write that follows is
+guarded on it. **Reads never use the cache**: `find`, the plan query, `assembly` and the listings join the rank in
+SPARQL, so a stale cache can only make a write lose a race, never a read return a wrong snapshot.
+
 ### Writing snapshots
 
 ```java
 try (RdfDbConnection db = RdfDbConnection.open(RdfDatabase.sparql("http://localhost:3030/ds"))) {
     SnapshotCatalog catalog = db.snapshots("2016-01-01");
 
-    // The root of one TSO's tree: authority and timestamp from the files, version 1
+    // The root of one TSO's tree: authority and timestamp from the files, version "1" of a permissive registry
     SnapshotInfo be = catalog.putFull(belgium, boundary, SnapshotRef.latest("2016-01-01", null), null,
             new Properties(), ReportNode.NO_OP);
     // Another authority of the same day: same boundary, its own tree
@@ -567,7 +624,9 @@ with the first-root guard behind it):
    told where the head is: *"update the network to the head and re-record"*;
 5. the chain is linear — a second child along a `pdb:VersionEdge` is refused with *"the linear scheme allows no
    forks"*;
-6. versions only grow: *"version 20 is not greater than the head version 20 of (…): versions only grow"*;
+6. versions only grow, by rank: *"version '20' (rank 20) is not above the parent '30' (rank 30) of (…): a new
+   version ranks above the head it is written on"*; the guard of the write joins the rank of every snapshot of the
+   moment and requires the name registered at the rank that was checked and the registry at its revision;
 7. a snapshot describes one moment: a member stating another `md:Model.scenarioTime` is refused (its members may
    state other modelling authorities: the snapshot is stored under the one its address names);
 8. nothing crosses a scenario, and nothing but the shared boundary crosses a modelling authority: every
@@ -588,7 +647,9 @@ whose boundary is compared with the winner's. Writers of two scenarios never tou
 Map<String, SnapshotInfo> cgm = db.snapshots("2016-01-01").assembly(instant, null);  // the head of each authority
 ```
 
-An authority with no snapshot at that moment (or at that version) is absent from the map, not refused: compare its
+A named version is taken per authority at or below it: `assembly(t, "ID")` is `{BE: ID, NL: DA}` when NL never
+reached `ID` at that moment. An authority with no snapshot at that moment (or none at or below that version) is
+absent from the map, not refused: compare its
 keys with `modellingAuthorities()` to see which (pypowsybl's `assembly()` shows such an authority as a row with no
 snapshot). The shared boundary is in the `pdb:state`
 of every entry. Loading a CGM as one network stays the caller's: load each entry by its `ref()` and merge. A stored
@@ -597,16 +658,18 @@ assembly is deliberately not written — nothing would read it, and a wrong one 
 ### Reading a version, and the one query that decides how
 
 ```java
-Network n = RdfDbNetworkLoader.load(db, SnapshotRef.of("2016-01-01", mas, null, 2), null, params, reportNode);
+Network n = RdfDbNetworkLoader.load(db, SnapshotRef.of("2016-01-01", mas, null, "ID"), null, params, reportNode);
 Network ssh = RdfDbNetworkLoader.load(db, ref, Set.of(CgmesSubset.EQUIPMENT, CgmesSubset.STEADY_STATE_HYPOTHESIS),
         null, params, reportNode);                                       // a profile projection
-UpdateResult r = RdfDbNetworkLoader.update(n, db, SnapshotRef.of("2016-01-01", mas, null, 4), options, params, rn);
+UpdateResult r = RdfDbNetworkLoader.update(n, db, SnapshotRef.of("2016-01-01", mas, null, "RT"), options, params, rn);
 ```
 
 `update` sends **one** query. A `UNION` binds the two ends — the snapshot the network is at (from its provenance,
 or matched by the model identifiers it carries) and the snapshot the caller asked for, resolved by its address in
 the same query (an open timestamp joins the root of the authority's tree, an open version excludes every snapshot
-with a version successor) — and a `pdb:parent*` property path walks each of them up to the root. The client then
+with a version successor, a named version is a sub-select of the snapshots of that moment ranking at or below it,
+ordered by the joined rank and limited to one) — and a `pdb:parent*` property path walks each of them up to the
+root. The client then
 takes the deepest snapshot both sides reached as the lowest common ancestor and reads the path off the two chains:
 up from A, each difference *inverted*, then down to B, each one forward.
 
@@ -622,9 +685,9 @@ its authority, so `"network is at scenario 'A', target is scenario 'B': diffs ne
 string arithmetic. Walking from the last timestamp of one day to the first of the next is therefore a full reload,
 by design — it keeps every chain bounded and lets a database hold as many days as it likes.
 
-A worked example on the chain A(1) → B(2) → C(3) → D(4): `plan(A, B)` is one forward step; `plan(D, C)` is one
-inverted step; `plan(A, D)` is `FULL` when C states something the fast route cannot apply, and the reason names
-C's difference; `plan(D, 2)` is two inverted steps.
+A worked example on the chain A("1") → B("2") → C("3") → D("4"): `plan(A, B)` is one forward step; `plan(D, C)` is
+one inverted step; `plan(A, D)` is `FULL` when C states something the fast route cannot apply, and the reason names
+C's difference; `plan(D, "2")` is two inverted steps.
 
 ### Materialisation and checkpoints
 
@@ -637,7 +700,7 @@ profile projection walks only the profiles it names.
 That is what makes a checkpoint useful without breaking anything:
 
 ```java
-Checkpoint.create(db, SnapshotRef.of("2016-01-01", mas, null, 50));
+Checkpoint.create(db, SnapshotRef.of("2016-01-01", mas, null, "50"));
 ```
 
 It copies one graph per profile the chain touched, applies the differences to the copies **on the database** with
@@ -652,10 +715,12 @@ When to run it: `UpdatePlan.checkpointRecommended()` says so once the distance t
 graphs passes `RdfDbUpdateOptions.setCheckpointAfter` (100 by default). As a rule of thumb, once every hundred
 versions, or once per timestamp. It is idempotent and is not on any hot path.
 
-### Metadata graph (schema v3)
+### Metadata graph (schema v4)
 
-Schema v1 above, plus the snapshot nodes and the schema marker. Every v1 model node stays valid and is read
-unchanged.
+Schema v1 above, plus the snapshot nodes, the version registry and the schema marker. Every v1 model node stays
+valid and is read unchanged. Schema 4 differs from schema 3 in the version: a snapshot's `pdb:version` is a
+registered name (a plain string) where it was an `xsd:integer`, and the `pdb:Version` nodes and `pdb:rev` /
+`pdb:permissive` on the schema node are new.
 
 ```turtle
 @prefix pdb: <http://powsybl.org/ns/rdfdb#> .
@@ -664,10 +729,16 @@ unchanged.
 @prefix be:  <http://powsybl.org/rdfdb/2016-01-01/http%3A%2F%2Felia.be%2FCGMES%2F2.4.15/snapshot/2016-01-01T00%3A00%3A00Z/> .
 # graph <http://powsybl.org/rdfdb/2016-01-01/meta>
 
-<http://powsybl.org/rdfdb/2016-01-01/schema> pdb:schema 3 ; pdb:scenario "2016-01-01" .
+<http://powsybl.org/rdfdb/2016-01-01/schema> pdb:schema 4 ; pdb:scenario "2016-01-01" ;
+    pdb:rev 2 ; pdb:permissive true .   # the registry's revision: 1 at the bootstrap, +1 per edit
+
+# the version registry: one node per name, its rank the only order versions have
+<http://powsybl.org/rdfdb/2016-01-01/version/1> a pdb:Version ; pdb:name "1" ; pdb:rank 10 ;
+    pdb:scenario "2016-01-01" ; pdb:created "2026-10-07T12:00:00Z"^^xsd:dateTime .
+<http://powsybl.org/rdfdb/2016-01-01/version/2> a pdb:Version ; pdb:name "2" ; pdb:rank 20 ; … .
 
 be:1 a pdb:Snapshot ; pdb:scenario "2016-01-01" ; pdb:modellingAuthority "http://elia.be/CGMES/2.4.15" ;
-    pdb:timestamp "2016-01-01T00:00:00Z"^^xsd:dateTime ; pdb:version 1 ; pdb:kind pdb:Full ; pdb:depth 0 ;
+    pdb:timestamp "2016-01-01T00:00:00Z"^^xsd:dateTime ; pdb:version "1" ; pdb:kind pdb:Full ; pdb:depth 0 ;
     pdb:timestampRoot be:1 ;
     pdb:member <urn:uuid:eq-1>, <urn:uuid:ssh-1>, <urn:uuid:eqbd> ;   # what this snapshot adds
     pdb:state  <urn:uuid:eq-1>, <urn:uuid:ssh-1>, <urn:uuid:eqbd> ;   # what a reader is at once it reaches it
@@ -676,7 +747,7 @@ be:1 a pdb:Snapshot ; pdb:scenario "2016-01-01" ; pdb:modellingAuthority "http:/
 <urn:uuid:eqbd> a md:FullModel ; pdb:subset "EQ_BD" ; pdb:snapshot be:1 .   # + the v1 terms; the profile makes it the boundary
 
 be:2 a pdb:Snapshot ; pdb:modellingAuthority "http://elia.be/CGMES/2.4.15" ;
-    pdb:timestamp "2016-01-01T00:00:00Z"^^xsd:dateTime ; pdb:version 2 ; pdb:kind pdb:Diff ;
+    pdb:timestamp "2016-01-01T00:00:00Z"^^xsd:dateTime ; pdb:version "2" ; pdb:kind pdb:Diff ;
     pdb:parent be:1 ; pdb:edge pdb:VersionEdge ; pdb:depth 1 ;
     pdb:timestampRoot be:1 ; pdb:member <urn:uuid:ssh-d2> ;
     pdb:state <urn:uuid:eq-1>, <urn:uuid:ssh-d2>, <urn:uuid:eqbd> .
@@ -689,26 +760,29 @@ be:2 a pdb:Snapshot ; pdb:modellingAuthority "http://elia.be/CGMES/2.4.15" ;
 <http://powsybl.org/rdfdb/2016-01-01/http%3A%2F%2Ftennet.nl%2FCGMES%2F2.4.15/snapshot/2016-01-01T00%3A00%3A00Z/1>
     a pdb:Snapshot ; pdb:modellingAuthority "http://tennet.nl/CGMES/2.4.15" ; … ; pdb:state <urn:uuid:eqbd>, … .
 
-# after Checkpoint.create(db, SnapshotRef.of("2016-01-01", "http://elia.be/CGMES/2.4.15", null, 2)):
+# after Checkpoint.create(db, SnapshotRef.of("2016-01-01", "http://elia.be/CGMES/2.4.15", null, "2")):
 be:2 pdb:full <http://powsybl.org/rdfdb/2016-01-01/materialized/http%3A%2F%2Felia.be%2FCGMES%2F2.4.15/…/2/SSH>,
     <urn:uuid:eq-1>, <urn:uuid:eqbd> .
 ```
 
-The snapshot IRI is `http://powsybl.org/rdfdb/<scenario>/<authority>/snapshot/<ISO instant>/<version>`, every
-segment percent-encoded, and `RdfDbNames.refOf` reads all four keys back off it without a request. A second
+The snapshot IRI is `http://powsybl.org/rdfdb/<scenario>/<authority>/snapshot/<ISO instant>/<version name>`, every
+segment percent-encoded (a version name may hold `/` and `:`), and `RdfDbNames.refOf` reads all four keys back off
+it without a request. The IRI is minted once, which is why a name a snapshot carries cannot be renamed. A registry
+node is `http://powsybl.org/rdfdb/<scenario>/version/<name>` (`RdfDbNames.versionNode`). A second
 scenario repeats the whole structure under `http://powsybl.org/rdfdb/<other scenario>/`, with no edge of any kind
 between the two.
 
-**No migration.** A scenario whose metadata graph has snapshots but no `pdb:schema 3` — in particular one written
+**No migration.** A scenario whose metadata graph has snapshots but no `pdb:schema 4` — in particular one written
 by the earlier `(scenario, timestep, version)` schema, recognisable by its `pdb:Catalog` node or its `pdb:timestep`
 keys — is refused at the first read or write that touches it:
 
 > scenario 'S' was written by the (scenario, timestep, version) schema of an earlier release (a pdb:Catalog node);
-> this release reads only stores of schema 3, addressed by (scenario, modelling authority, timestamp, version).
+> this release reads only stores of schema 4, addressed by (scenario, modelling authority, timestamp, version).
 > There is no migration: clear the scenario (RdfDbConnection.clear) and re-ingest it
 
-A graph carrying another schema number is refused the same way (*"carries pdb:schema 4, and this release reads
-only stores of schema 3"*). `RdfDbConnection.clear(scenario)` still works on such a scenario: it is the way out.
+A graph carrying another schema number — a store of schema 3, whose versions are integers, in particular — is
+refused the same way (*"carries pdb:schema 3, and this release reads only stores of schema 4: read it with the
+release that wrote it, or clear the scenario and re-ingest it"*). `RdfDbConnection.clear(scenario)` still works on such a scenario: it is the way out.
 The earlier schema lived inside one unreleased change, and re-ingesting a day costs minutes.
 
 A snapshot node carries no boolean that repeats what its links already say:
@@ -720,8 +794,10 @@ A snapshot node carries no boolean that repeats what its links already say:
 * whether a materialisation may start at a snapshot is *having* a `pdb:full` link. `SnapshotInfo.hasFull()` and
   the `has_full` column are `!fullModels().isEmpty()`, computed from the rows the listing already returns.
 
-The typed literals of the key (`xsd:dateTime`, `xsd:integer`) are written in one lexical form and matched as
-constants and compared numerically on both backends, which `RdfDbSparqlSemanticsTest` asserts.
+The typed literals (`xsd:dateTime` of the key, `xsd:integer` of the depth, the rank and the revision) are written in
+one lexical form and matched as constants and compared numerically on both backends, which
+`RdfDbSparqlSemanticsTest` asserts — including the rank joined by name under a `FILTER`, the sub-select ordered by
+it, and an edit guarded on the revision.
 
 `pdb:graph` is a **string literal**, not an IRI: the in-process backend keeps the graphs of an unversioned
 scenario under the plain instance file name, and a CGMES file name is not always writable as an IRI — the CGMES 3
@@ -750,6 +826,16 @@ is between two medians of the same warm state.
   20 % the measurement spreads by.
 * An update over fifty differences costs about as much as one: the differences travel in a single request and are
   folded into one per profile before they are applied.
+* **The version registry costs no request on a read.** Its rows come with the schema check, once per catalogue;
+  a read joins the rank in the query it already sends. A write under a registered name stays at seven requests; the
+  first write under a name a permissive registry does not hold yet is one more (the guarded append); an edit of
+  the registry is two (the guarded edit, the read-back). Asserted by `RdfDbRequestCountTest`.
+* **A named version costs a candidate scan of its moment.** "The highest rank at or below `v`" is a sub-select over
+  the snapshots of that moment, so its cost grows with the number of versions one timestamp holds, while an exact
+  address or the head is one lookup. At the extreme of `ScaleVersioningBenchmarkTest` — two hundred versions of
+  one timestamp — planning to a named version takes 8.6 ms at depth 1 and 81 ms at depth 200 in process (an exact
+  address: 1.0 and 13.7 ms) and 10 ms and 136 ms on loopback Fuseki (6.9 and 127 ms). A day with a handful of
+  versions per timestamp does not see it; a caller that knows the version exists can pass `exactly()`.
 * Planning, fetching and composing a fifty-difference chain stays well under 100 ms on both backends (40 ms on
   Fuseki, 4 ms in process), which is the bound the build asserts.
 * **Target missed: the plan query at chain depth fifty.** It was budgeted at 10 ms and takes 31 ms on loopback
@@ -1067,7 +1153,7 @@ Map<String, RdfDbExport.VariantExport> written =
 ```
 
 * the target of a variant is the successor of **that variant's** snapshot: same scenario, same modelling
-  authority, same timestamp, next version of that timestamp's chain (or the `Integer newVersion` given). A
+  authority, same timestamp, next version of that timestamp's chain (or the `String newVersion` given). A
   caller-given scenario time that is not the variant's timestamp is an error, not a silent move;
 * the export runs inside the variant's scope, so the values written are that variant's and the `Supersedes` names
   that variant's model;
@@ -1181,8 +1267,11 @@ and 10, while `lv : sep` stayed between 9 and 11 throughout.
   stays under a quarter of ninety-six full steady-state models.
 * **There are no wall-time labels.** The key is an instant; rendering it in a local zone, daylight saving
   included, is the caller's.
-* **A snapshot cannot be deleted**; a scenario can be dropped whole (`RdfDbConnection.clear`,
+* **Only a transient version's leaf snapshots can be deleted** (`VersionRegistry.delete` of a transient name);
+  any other snapshot stays, and a scenario can be dropped whole (`RdfDbConnection.clear`,
   `SnapshotCatalog.dropAll`).
+* **A version name a snapshot carries cannot be renamed.** The snapshot IRI carries the name and addresses are read
+  back off IRIs (`RdfDbNames.refOf`); `rename` is for names no snapshot carries yet, `rerank` changes the order.
 * **The pre-versioning entry points mean "the newest snapshot" on a versioned scenario.**
   `RdfDbNetworkLoader.load(db, scenario, …)` and `update(…, DiffTarget.head(), …)` delegate to the snapshot path
   when the scenario holds snapshots of exactly one modelling authority (a scenario of several is refused with the
@@ -1196,8 +1285,8 @@ and 10, while `lv : sep` stayed between 9 and 11 throughout.
 * **`loadCgmes` is refused on a versioned scenario**: its instance files are immutable graphs a snapshot refers
   to, and a second, unversioned set next to them would be unreachable. Use `SnapshotCatalog.putFull` for the root
   and `putAsDiff` for a timestamp.
-* **No migration of an earlier store.** A scenario of the earlier `(scenario, timestep, version)` schema is refused
-  with a message; clear it and ingest it again.
+* **No migration of an earlier store.** A scenario of schema 3 (integer versions) or of the earlier
+  `(scenario, timestep, version)` schema is refused with a message; clear it and ingest it again.
 * **`REMOTE` query mode cannot read a versioned scenario**: the differences would have to be applied on the
   server. `Checkpoint` is what applies them there, and it produces graphs a plain load can read.
 * **Authentication** is HTTP basic or a fixed header.
