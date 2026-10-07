@@ -364,7 +364,7 @@ reader who knows CGMES can read the metadata graph without knowing PowSyBl.
 | Term | Meaning |
 |---|---|
 | `pdb:kind` | `pdb:Full` (an uploaded instance file) or `pdb:Diff` (a recorded difference) |
-| `pdb:subset` | the CGMES profile: `EQ`, `SSH`, `TP`, `SV`, `EQ_BD`, … |
+| `pdb:subset` | the profile: one of the nine CGMES subsets `EQ`, `SSH`, `TP`, `SV`, `EQ_BD`, …, or a custom name (see [Profiles are names](#profiles-are-names-custom-ones-are-stored-whole)) |
 | `pdb:scenario` | the raw scenario name |
 | `pdb:graph` | the named graph of a full model |
 | `pdb:forwardGraph`, `pdb:reverseGraph` | the named graphs of a difference |
@@ -531,6 +531,55 @@ under it, or X to open a second tree"*.
 Several days in one database are **several scenarios**. Inside a scenario every modelling authority owns **one
 tree** with exactly one root; a second root of the same authority is refused. All trees of a scenario live in its
 one metadata graph and **share its boundary**.
+
+### Profiles are names; custom ones are stored whole
+
+A profile is a **name**, `[A-Z][A-Z0-9_]*`. The nine CGMES subsets are constants of `Profiles` (`Profiles.EQ`,
+`SSH`, `TP`, `SV`, `DY`, `DL`, `GL`, `EQ_BD`, `TP_BD`; `Profiles.STANDARD` in the order of `CgmesSubset`,
+`Profiles.BOUNDARY` the two boundary ones), and every map and projection of the API is keyed by the name
+(`Set<String>`, `Map<String, …>`, listed in `Profiles.ORDER`: the nine first, then the custom ones by name). A
+projection with a malformed name is refused (`Profiles.check`).
+
+Any other name is a **custom profile**: an operational configuration, a market overlay, a TSO's own CIM
+extension — a file shipped beside the instance files that the CGMES conversion does not read. The profile of a
+file is read off its name: the standard subset the conversion recognises (`…_EQ_…`, `…_SSH.`, `_BD` for the
+boundary) first, otherwise the **last `_TOKEN` before the extension**, when it is `[A-Z][A-Z0-9]*` and not
+version-like: `Grid_OP.xml` holds `OP`, `MicroGrid_BC_BE_CFG.xml` holds `CFG`. A file that names no profile —
+`Grid.xml`, `Grid_SC_V2.xml` — is refused by `putFull` and `putAsDiff` with *"cannot tell the profile of 'X': name
+the file <base>_<PROFILE>.xml, …"*; an unversioned upload (`loadCgmes`) uploads it and leaves it unregistered,
+with a warning. Like every CGMES file, a custom one must declare the RDF and a CIM namespace, or the data source
+does not list it, and it must carry an `md:FullModel` header to be a member of a snapshot.
+
+A custom profile follows four rules:
+
+1. **it is always stored whole**: a `md:FullModel` node with `pdb:kind pdb:Full` and `pdb:subset "CFG"`, its
+   statements one immutable graph — never a difference, so never `pdb:fastPredicatesOnly` or `pdb:variantSafe`;
+2. `putFull` stores it with the other files of the root; `putAsDiff` stores it only when the projection **lists**
+   it, as a new member of the difference snapshot with a `pdb:full` link (not a checkpoint: `hasFull()` counts the
+   standard profiles only), and only when the file is not the model the parent already states. An unlisted custom
+   profile is inherited from the parent, like `TP` and `SV`, and reported as ignored;
+3. **it is never part of the network**: a load fetches only the standard profiles into the store the conversion
+   reads (whose queries read every graph of the store, so a foreign graph there would be read too), and the
+   provenance names only the graphs it transferred;
+4. **it is handed to the caller as a graph**: `RdfDbNetworkLoader.loadWithStatistics(…).extraProfiles()` names
+   the graph of every custom profile of the snapshot (profile → graph IRI, as the metadata graph records it),
+   `SnapshotCatalog.graphsOf(ref)` names it for any snapshot without a load (two requests: the address, the state
+   models; a standard profile whose state is still its instance file is listed too, one whose state is a
+   difference is not), and `RdfDbConnection.fetchGraph(scenario, graphIri)` reads the statements (one Graph Store
+   request, or none when the graph cache holds it).
+
+```java
+SnapshotCatalog catalog = db.snapshots("2016-01-01");
+catalog.putAsDiff(filesOf1100, null, SnapshotRef.latestAt("2016-01-01", mas, at1100),
+        Set.of(Profiles.EQ, Profiles.SSH, "CFG"), importParams, reportNode);   // CFG stored whole
+LoadResult loaded = RdfDbNetworkLoader.loadWithStatistics(db, SnapshotRef.latestAt("2016-01-01", mas, at1100),
+        null, null, importParams, reportNode);
+List<Statement> cfg = db.fetchGraph("2016-01-01", loaded.extraProfiles().get("CFG"));
+```
+
+A projection on a load may name a custom profile (`{EQ, SSH, CFG}` returns `CFG` in `extraProfiles()`); one that
+does not leaves it out. An update between snapshots walks past a whole member: it is the custom profile's new
+state, not a step to apply.
 
 ### The version registry
 
@@ -759,6 +808,14 @@ be:2 a pdb:Snapshot ; pdb:modellingAuthority "http://elia.be/CGMES/2.4.15" ;
     md:Model.Supersedes <urn:uuid:ssh-1> ; md:Model.modelingAuthoritySet "http://elia.be/CGMES/2.4.15" ;
     md:Model.scenarioTime "2016-01-01T00:00:00Z" .   # + the v1 terms
 
+# putAsDiff(…, {EQ, SSH, CFG}, …) of a version that also ships a new custom profile file: stored whole
+be:3 a pdb:Snapshot ; pdb:version "3" ; pdb:kind pdb:Diff ; pdb:parent be:2 ; … ;
+    pdb:member <urn:uuid:ssh-d3>, <urn:uuid:cfg-3> ;
+    pdb:state <urn:uuid:eq-1>, <urn:uuid:ssh-d3>, <urn:uuid:eqbd>, <urn:uuid:cfg-3> ;
+    pdb:full <urn:uuid:cfg-3> .                     # the custom profile's state, no checkpoint
+<urn:uuid:cfg-3> a md:FullModel ; pdb:kind pdb:Full ; pdb:subset "CFG" ; pdb:snapshot be:3 ;
+    pdb:graph "http://powsybl.org/rdfdb/2016-01-01/graph/urn%3Auuid%3Acfg-3" .   # + the v1 terms
+
 # the root of a second authority links the same boundary model and uploads nothing of it
 <http://powsybl.org/rdfdb/2016-01-01/http%3A%2F%2Ftennet.nl%2FCGMES%2F2.4.15/snapshot/2016-01-01T00%3A00%3A00Z/1>
     a pdb:Snapshot ; pdb:modellingAuthority "http://tennet.nl/CGMES/2.4.15" ; … ; pdb:state <urn:uuid:eqbd>, … .
@@ -794,8 +851,9 @@ A snapshot node carries no boolean that repeats what its links already say:
   column of a snapshot listing — `SnapshotInfo.fast()` in Java, the `fast` column of `db.snapshots(...)` in
   Python — is *derived*: the conjunction over the difference members of the snapshot, read in the same request
   that returns the snapshot, and a snapshot with no difference member is `true`;
-* whether a materialisation may start at a snapshot is *having* a `pdb:full` link. `SnapshotInfo.hasFull()` and
-  the `has_full` column are `!fullModels().isEmpty()`, computed from the rows the listing already returns.
+* whether a materialisation may start at a snapshot is *having* a `pdb:full` link of a standard profile.
+  `SnapshotInfo.hasFull()` and the `has_full` column are computed from the rows the listing already returns; the
+  whole graph of a custom profile does not count.
 
 The typed literals (`xsd:dateTime` of the key, `xsd:integer` of the depth, the rank and the revision) are written in
 one lexical form and matched as constants and compared numerically on both backends, which
@@ -920,7 +978,10 @@ ingested one.
 
 The profiles compared are the caller's projection, `EQ` and `SSH` when it names none. A listed profile the files do
 not carry is refused; a file of a profile that is not compared is read for its header alone, reported, and the
-snapshot inherits the parent's state of it. The boundary is never compared.
+snapshot inherits the parent's state of it. The boundary is never compared. A listed **custom** profile is not
+compared either: its file is stored whole as a new member of the snapshot, unless it is the model the parent
+already states (see [Profiles are names](#profiles-are-names-custom-ones-are-stored-whole)); a timestamp whose only
+change is such a file is still a new snapshot.
 
 What the comparison does and does not call a change:
 

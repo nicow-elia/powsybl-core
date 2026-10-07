@@ -123,6 +123,18 @@ back to the full route with the importer's reasons.
 | "this cannot be applied in place" | `CgmesDiffNotApplicableException.getDecision()` → `Decision.reasons()` | cgmes-conversion |
 | the route and the reasons the caller sees | `UpdateResult.Route` (`NOOP`, `DIFF_APPLIED`, `FULL_RELOAD`, `FULL_REQUIRED`, `VARIANT_REFUSED`), `UpdateResult.reasons()` | rdfdb |
 | a materialised state as a network | a local `TripleStoreRDF4J`, `TripleStoreNetworkLoader.load` | rdfdb fills the store, the conversion converts it unchanged |
+| what the network does not hold: the custom profiles of the snapshot | `LoadResult.extraProfiles()` (profile → graph IRI), `SnapshotCatalog.graphsOf(ref)`, `RdfDbConnection.fetchGraph(scenario, graphIri)` → `List<Statement>` | rdfdb: only the nine standard profiles reach the conversion's store |
+
+**What the adapter hands to the application.** The conversion reads the nine CGMES subsets and nothing else, and
+most of its queries run over every graph of the store it is given, so a graph of another vocabulary there would be
+read by them. A custom profile (`Profiles`: any name other than the nine, read off the file name — `Grid_CFG.xml`
+holds `CFG`) is therefore never fetched into that store. The application gets it next to the network instead: the
+load answers `extraProfiles()`, the graph of every custom profile of the snapshot (a load projection may name a
+custom profile to keep it or leave it out to drop it), and `fetchGraph` returns its statements as RDF4J
+`Statement`s, the graph exactly as the file carried it. For a snapshot that is not loaded, `graphsOf(ref)` names
+the same graphs in two requests. A custom profile is stored whole on every write that carries it (`putFull`, and
+`putAsDiff` when the projection lists it), so it never reaches the difference import, the fast route or the
+variant verdicts.
 
 What a caller sees. Java: the `UpdateResult` (route, reasons, statistics, the network — a new instance on
 `FULL_RELOAD`), an `RdfDbException` for a request that cannot be served at all (an address the scenario does not
@@ -234,7 +246,8 @@ surface (block 1 of the list), grouped by purpose:
 | triple-store transport | `TripleStoreRDF4JSparql`, `SparqlEndpoint`, `GraphStoreClient`, `ScenarioGraphNames` | talk to the endpoint, name scenario graphs | — (moves out together with rdfdb) |
 
 Block 2 of the list is ordinary public API used as any client uses it (`Network`, the variant manager, network
-events, `CgmesSubset`, the difference model types, `CgmesMetadataModels`, `ReportNode`, data sources, the import
+events, `CgmesSubset` — converted at the boundary by rdfdb's own `Profiles`, since every map of the module is keyed by
+the profile name — the difference model types, `CgmesMetadataModels`, `ReportNode`, data sources, the import
 post-processors). See [what the module depends on](rdf_database.md#what-the-module-depends-on-and-what-depends-on-it)
 for the dependency rules.
 
