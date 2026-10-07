@@ -247,6 +247,17 @@ class RdfDbRequestCountTest {
         RdfDbNetworkLoader.changesBetween(db, ref(scenario, 1, Instant.parse("2014-06-01T12:00:00Z")),
                 ref(scenario, 1, Instant.parse("2014-06-01T17:00:00Z")));
         assertAtMost("the changes between two timestamps", since(between), 3);
+
+        // An archive cutoff is one guarded request and its read-back, and it costs a read nothing: it rides in the
+        // schema check, and the refusal is a filter inside the query that resolves the address
+        BenchMeters.FusekiMeter.Reading cutoff = BenchMeters.FusekiMeter.mark();
+        catalog.setArchiveCutoff(Instant.parse("2014-06-01T12:00:00Z"), "archive");
+        assertAtMost("setting an archive cutoff", since(cutoff), 2);
+        BenchMeters.FusekiMeter.Reading behindTheCutoff = BenchMeters.FusekiMeter.mark();
+        RdfDbNetworkLoader.changesBetween(db, ref(scenario, 1, Instant.parse("2014-06-01T12:00:00Z")),
+                ref(scenario, 1, Instant.parse("2014-06-01T17:00:00Z")));
+        assertAtMost("the changes between two timestamps with an archive cutoff", since(behindTheCutoff), 3);
+        catalog.setArchiveCutoff(null, null);
         Network sender = RdfDbNetworkLoader.load(db, ref(scenario, 1), null, params(),
                 ReportNode.NO_OP);
         RdfDbExport.export(sender, Changes.record(sender, n -> Changes.moveLoad(n, 4.0)), db,

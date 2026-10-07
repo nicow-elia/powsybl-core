@@ -123,6 +123,8 @@ public final class SnapshotCatalog {
     private final Map<String, SnapshotInfo> rootByAuthority = new ConcurrentHashMap<>();
     /** The version registry of the scenario, read with the schema check and cached; see {@link VersionRegistry}. */
     private final VersionRegistry registry;
+    /** The archive cutoff as last read with the schema check, {@code null} when the scenario has none. */
+    private volatile Archive archive;
     private volatile IngestStatistics lastIngest;
     /** Runs between the parse of a root and its guarded write, so that a test can make a concurrent writer win. */
     private Runnable beforeRootWrite;
@@ -200,7 +202,44 @@ public final class SnapshotCatalog {
             throw new RdfDbException("the address " + ref + " names no modelling authority, and a read needs one:"
                     + " scenario '" + scenario + "' holds " + modellingAuthorities());
         }
+        Archive known = archive;
+        if (known != null && known.holds(timestampOf(ref))) {
+            throw known.refusal(ref);
+        }
         return ref;
+    }
+
+    /** The timestamp an address names: its own, or the base timestamp of its tree; {@code null} without a tree. */
+    private Instant timestampOf(SnapshotRef ref) {
+        return ref.timestamp() != null ? ref.timestamp()
+                : root(ref.modellingAuthority()).map(SnapshotInfo::timestamp).orElse(null);
+    }
+
+    /** The timestamp of what a refusal names: an address, a snapshot IRI of this scenario; {@code null} otherwise. */
+    private Instant timestampNamed(Object what) {
+        if (what instanceof SnapshotRef ref) {
+            return ref.modellingAuthority() == null ? ref.timestamp() : timestampOf(ref);
+        }
+        SnapshotRef named = what instanceof String iri ? RdfDbNames.refOf(iri) : null;
+        return named == null ? null : named.timestamp();
+    }
+
+    /**
+     * The archive cutoff of the scenario: the moment before which its states were moved elsewhere.
+     *
+     * @param cutoff   the first moment still served; a snapshot of an earlier timestamp is refused
+     * @param location where the earlier states went, as the refusal names it
+     */
+    private record Archive(Instant cutoff, String location) {
+
+        boolean holds(Instant timestamp) {
+            return timestamp != null && timestamp.isBefore(cutoff);
+        }
+
+        RdfDbException refusal(Object what) {
+            return new RdfDbException("snapshot " + what + " is in the archive at " + location + ": states before "
+                    + cutoff + " are not served by this store");
+        }
     }
 
     /**
@@ -228,7 +267,9 @@ public final class SnapshotCatalog {
                 + " { " + SparqlText.iri(schemaNode) + " pdb:schema ?v BIND(\"schema\" AS ?k) }"
                 + " UNION { ?x a " + SparqlText.iri(SnapshotRows.LEGACY_CATALOG) + " BIND(\"catalog\" AS ?k) }"
                 + " UNION { ?x " + SparqlText.iri(SnapshotRows.LEGACY_TIMESTEP) + " ?ts BIND(\"timestep\" AS ?k) }"
-                + " UNION { ?x a pdb:Snapshot BIND(\"snapshot\" AS ?k) }" + registry.readBranches() + " } }");
+                + " UNION { ?x a pdb:Snapshot BIND(\"snapshot\" AS ?k) }"
+                + " UNION { " + SparqlText.iri(schemaNode) + " pdb:archiveCutoff ?v ; pdb:archiveLocation ?n"
+                + " BIND(\"archive\" AS ?k) }" + registry.readBranches() + " } }");
         Map<String, Value> found = new LinkedHashMap<>();
         rows.forEach(row -> found.put(SnapshotRows.text(row, "k"), row.get("v")));
         if (found.containsKey("catalog")) {
@@ -247,7 +288,102 @@ public final class SnapshotCatalog {
             throw SnapshotRows.legacySchema(scenario, "snapshots without a pdb:schema marker");
         }
         registry.load(rows);
+        archive = rows.stream().filter(row -> "archive".equals(SnapshotRows.text(row, "k"))).findFirst()
+                .map(row -> new Archive(SnapshotRows.instantOf(row.get("v")), SnapshotRows.text(row, "n")))
+                .orElse(null);
         schemaChecked = true;
+    }
+
+    // ------------------------------------------------------------------ the archive cutoff
+
+    /**
+     * Set or clear the archive cutoff of the scenario.
+     *
+     * <p>An owner who moved the states of a scenario before a moment to an archive tells the store so: from then on
+     * every read that resolves an address &mdash; {@link #find}, {@link #require}, a load, an update, a plan,
+     * {@link #assembly}, a bulk load of variants, the changes between two snapshots &mdash; refuses a snapshot whose
+     * timestamp is before the cutoff, with a text naming the location, and a write into such a timestamp is refused
+     * the same way. The listings ({@link #snapshots()}, {@link #timestamps}, {@link #versions}, {@link #verify()})
+     * still show the archived snapshots, and the walk of a plan still passes through them: the ancestry is metadata,
+     * only the graphs are gone. A root is not exempt; set the cutoff at a {@linkplain #rollover rollover}, so that
+     * the materialisation of every later timestamp starts at full graphs that stay.</p>
+     *
+     * <p>The cutoff lives on the schema node of the scenario ({@code pdb:archiveCutoff}, {@code pdb:archiveLocation}),
+     * is read with the schema check (no request of its own), and is decided inside the query that resolves an
+     * address, so a cutoff set through another connection holds there at once. One request guarded by the registry
+     * revision ({@code pdb:rev}, which it bumps), and one to read it back.</p>
+     *
+     * @param cutoff   the first moment still served, or {@code null} together with {@code location} to clear it
+     * @param location where the earlier states went (a URL, a path, a name), as the refusal names it
+     * @throws RdfDbException         if only one of the two is given, or the scenario holds no snapshot tree yet
+     * @throws RdfDbConflictException if the registry or the cutoff changed meanwhile through another connection
+     */
+    public void setArchiveCutoff(Instant cutoff, String location) {
+        if ((cutoff == null) != (location == null) || location != null && location.isBlank()) {
+            throw new RdfDbException("an archive cutoff and its location are set together, or cleared together (both"
+                    + " null); got " + cutoff + " and " + (location == null ? null : "'" + location + "'"));
+        }
+        checkSchema();
+        long rev = registry.rev();
+        if (rev == 0) {
+            throw new RdfDbException("scenario '" + scenario + "' holds no snapshot tree, so there is nothing to"
+                    + " archive: write a root first");
+        }
+        String node = SparqlText.iri(schemaNode);
+        String graph = SparqlText.iri(metaGraph);
+        connection.sparql(scenario).update(RdfDbVocabulary.PREFIXES + "DELETE { GRAPH " + graph + " { " + node
+                + " pdb:rev " + SparqlText.integer(rev) + " ; pdb:archiveCutoff ?c ; pdb:archiveLocation ?l } }"
+                + " INSERT { GRAPH " + graph + " { " + node + " pdb:rev " + SparqlText.integer(rev + 1)
+                + (cutoff == null ? "" : " ; pdb:archiveCutoff " + SparqlText.dateTime(cutoff)
+                        + " ; pdb:archiveLocation " + SparqlText.str(location))
+                + " } } WHERE { GRAPH " + graph + " { " + node + " pdb:rev " + SparqlText.integer(rev)
+                + " OPTIONAL { " + node + " pdb:archiveCutoff ?c } OPTIONAL { " + node + " pdb:archiveLocation ?l }"
+                + " } }");
+        readSchema();
+        Archive now = archive;
+        boolean applied = cutoff == null ? now == null : now != null && now.cutoff().equals(cutoff);
+        if (registry.rev() != rev + 1 || !applied) {
+            throw new RdfDbConflictException("the schema node of scenario '" + scenario + "' changed (rev " + rev
+                    + " → " + registry.rev() + ") while this connection set the archive cutoff: nothing was changed"
+                    + " by it; the cutoff is now " + (now == null ? "none" : now.cutoff() + " at " + now.location())
+                    + ", retry");
+        }
+        LOGGER.info("Archive cutoff of scenario '{}': {}", scenario,
+                cutoff == null ? "cleared" : cutoff + " at " + location);
+    }
+
+    /**
+     * The archive cutoff of the scenario, as last read.
+     *
+     * @return the first moment still served, or empty when every state is served
+     */
+    public Optional<Instant> archiveCutoff() {
+        checkSchema();
+        Archive known = archive;
+        return known == null ? Optional.empty() : Optional.of(known.cutoff());
+    }
+
+    /**
+     * Where the states before the archive cutoff went, as last read.
+     *
+     * @return the location, or empty when the scenario has no cutoff
+     */
+    public Optional<String> archiveLocation() {
+        checkSchema();
+        Archive known = archive;
+        return known == null ? Optional.empty() : Optional.of(known.location());
+    }
+
+    /**
+     * The graph pattern that excludes a snapshot of a timestamp before the archive cutoff, evaluated by the store,
+     * so that a cutoff another connection set holds before this catalogue has read it.
+     *
+     * @param timestamp the timestamp expression: a variable or an {@code xsd:dateTime} literal
+     * @param var       a variable prefix unique in the query
+     */
+    private String notArchived(String timestamp, String var) {
+        return "FILTER NOT EXISTS { " + SparqlText.iri(schemaNode) + " pdb:archiveCutoff " + var + "Cutoff FILTER("
+                + timestamp + " < " + var + "Cutoff) } ";
     }
 
     // ------------------------------------------------------------------ reads
@@ -366,6 +502,17 @@ public final class SnapshotCatalog {
      * @return the exception to throw
      */
     RdfDbException noSuchSnapshot(Object what) {
+        // A store may have archived the address since this catalogue read the schema node: one more request, on the
+        // failure only, so that the refusal names the archive instead of saying the snapshot does not exist
+        readSchema();
+        Archive known = archive;
+        if (known != null) {
+            List<Object> archived = (what instanceof Collection<?> all ? all.stream().map(Object.class::cast)
+                    : Stream.of(what)).filter(one -> known.holds(timestampNamed(one))).toList();
+            if (!archived.isEmpty()) {
+                return known.refusal(archived.size() == 1 ? archived.get(0) : archived);
+            }
+        }
         return new RdfDbException("scenario '" + scenario + "' holds no snapshot " + what + ", and nothing was loaded"
                 + " or written; it holds " + snapshots().stream().map(SnapshotInfo::toString).toList());
     }
@@ -391,10 +538,10 @@ public final class SnapshotCatalog {
      */
     String addressPattern(String var, SnapshotRef ref) {
         String authority = SparqlText.str(ref.modellingAuthority());
+        String timestamp = ref.timestamp() == null ? var + "Base" : SparqlText.dateTime(ref.timestamp());
         StringBuilder pattern = new StringBuilder(var).append(" a pdb:Snapshot ; pdb:modellingAuthority ")
-                .append(authority).append(" ; pdb:timestamp ")
-                .append(ref.timestamp() == null ? var + "Base" : SparqlText.dateTime(ref.timestamp()))
-                .append(" . ");
+                .append(authority).append(" ; pdb:timestamp ").append(timestamp).append(" . ")
+                .append(notArchived(timestamp, var));
         if (ref.timestamp() == null) {
             pattern.append(var).append("Root pdb:depth ").append(SparqlText.integer(0))
                     .append(" ; pdb:modellingAuthority ").append(authority)
@@ -661,16 +808,29 @@ public final class SnapshotCatalog {
     public Map<String, SnapshotInfo> assembly(Instant timestamp, String version) {
         Objects.requireNonNull(timestamp);
         SnapshotRef moment = SnapshotRef.of(scenario, null, timestamp, version);
+        Archive known = archive;
+        if (known != null && known.holds(timestamp)) {
+            throw known.refusal(moment);
+        }
         Map<String, SnapshotInfo> byAuthority = assemblyOf(moment);
         if (byAuthority.isEmpty() && version != null && registry.changedAfterMiss()) {
             byAuthority = assemblyOf(moment);
+        }
+        if (byAuthority.isEmpty()) {
+            // Nothing at the moment, or archived through another connection: the refusal of the archive wins
+            readSchema();
+            known = archive;
+            if (known != null && known.holds(timestamp)) {
+                throw known.refusal(moment);
+            }
         }
         return byAuthority;
     }
 
     private Map<String, SnapshotInfo> assemblyOf(SnapshotRef moment) {
         // Every snapshot of the moment, or every one at or below the version; the deepest of each authority wins
-        String restriction = "?s pdb:timestamp " + SparqlText.dateTime(moment.timestamp()) + " . "
+        String timestamp = SparqlText.dateTime(moment.timestamp());
+        String restriction = "?s pdb:timestamp " + timestamp + " . " + notArchived(timestamp, "?s")
                 + (moment.version() == null ? "" : registry.candidates("?s", moment.version()));
         Map<String, SnapshotInfo> byAuthority = new TreeMap<>();
         snapshotsWhere(restriction, "").values().forEach(info -> byAuthority.merge(info.modellingAuthority(), info,

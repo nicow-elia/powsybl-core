@@ -87,12 +87,12 @@ final class VariantBulkLoader {
             starts.put(side(i), new VersionGraph.Start(null, refs.get(i)));
         }
         VersionGraph.Chains chains = graph.chains(starts);
-        List<String> missing = new ArrayList<>();
+        List<SnapshotRef> missing = new ArrayList<>();
         List<SnapshotInfo> targets = new ArrayList<>();
         for (int i = 0; i < refs.size(); i++) {
             List<SnapshotInfo> chain = chains.bySide().get(side(i));
             if (chain == null || chain.isEmpty()) {
-                missing.add(refs.get(i).toString());
+                missing.add(refs.get(i));
             } else {
                 targets.add(chain.get(0));
             }
