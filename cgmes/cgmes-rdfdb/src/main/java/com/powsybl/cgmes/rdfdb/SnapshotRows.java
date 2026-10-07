@@ -90,10 +90,11 @@ final class SnapshotRows {
      * The {@code OPTIONAL} block a snapshot listing adds to bind {@link #RANK}: the registry node whose name is the
      * row's object.
      *
-     * <p>A name is registered once, so this multiplies no row either; it binds on the {@code pdb:version} row and
-     * on no other row of a store written here, and the grouping reads it on that row only.</p>
+     * <p>A name is registered once, so this multiplies no row either; it is joined on the {@code pdb:version} row
+     * only, and the grouping reads it on that row.</p>
      */
-    static final String RANK_CLAUSE = " OPTIONAL { ?vn pdb:name ?o ; pdb:rank ?" + RANK + " } ";
+    static final String RANK_CLAUSE = " OPTIONAL { FILTER(?p = pdb:version) ?vn pdb:name ?o ; pdb:rank ?" + RANK
+            + " } ";
 
     /**
      * The key term of the earlier {@code (scenario, timestep, version)} schema.
