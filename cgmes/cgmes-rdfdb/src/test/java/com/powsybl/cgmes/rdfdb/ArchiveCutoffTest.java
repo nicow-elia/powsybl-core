@@ -72,8 +72,7 @@ class ArchiveCutoffTest {
         try (RdfDbConnection db = day(backend)) {
             SnapshotCatalog catalog = db.snapshots(S);
             catalog.setArchiveCutoff(T1, LOCATION);
-            assertThat(catalog.archiveCutoff()).contains(T1);
-            assertThat(catalog.archiveLocation()).contains(LOCATION);
+            assertThat(catalog.archiveCutoff()).contains(new SnapshotCatalog.ArchiveCutoff(T1, LOCATION));
 
             // The base, by its open address and by its timestamp: roots are not exempt
             assertThatThrownBy(() -> load(db, ref(S, 1))).isInstanceOf(RdfDbException.class)
@@ -211,7 +210,6 @@ class ArchiveCutoffTest {
 
             catalog.setArchiveCutoff(null, null);
             assertThat(catalog.archiveCutoff()).isEmpty();
-            assertThat(catalog.archiveLocation()).isEmpty();
             assertThat(catalog.registry().rev()).isEqualTo(rev + 2);
             Networks.assertSameNetwork(Network.read(microGridBe(), params()), load(db, ref(S, 1)), IDENTITY);
 
@@ -236,7 +234,7 @@ class ArchiveCutoffTest {
             // re-reads the schema node to name the archive
             assertThatThrownBy(() -> load(db, ref(S, 1, BASE))).isInstanceOf(RdfDbException.class)
                     .hasMessage(refusal(ref(S, 1, BASE)));
-            assertThat(mine.archiveCutoff()).contains(T1);
+            assertThat(mine.archiveCutoff()).contains(new SnapshotCatalog.ArchiveCutoff(T1, LOCATION));
         }
     }
 

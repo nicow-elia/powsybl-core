@@ -30,9 +30,10 @@ import java.util.stream.Collectors;
  * <h2>Versions are names</h2>
  * <p>A snapshot stores the <em>name</em> of its version ({@code "DA"}, {@code "ID"}, {@code "RT"}, or {@code "1"},
  * {@code "2"}, …); the registry gives every name a <strong>rank</strong>, and the ranks are the only order versions
- * have. A snapshot never stores a rank: every comparison joins the name to its {@code pdb:Version} node, so a
- * {@link #rerank} rewrites a few nodes and not the history. Ranks are sparse &mdash; an appended name gets the
- * highest rank plus 10 &mdash; so that a name can be {@linkplain #insert inserted} between two others later.</p>
+ * have. A snapshot never stores a rank; a listing joins it from the name's {@code pdb:Version} node, and a read
+ * takes the ranks from the cached registry, so a {@link #rerank} rewrites a few nodes and not the history. Ranks
+ * are sparse &mdash; an appended name gets the highest rank plus 10 &mdash; so that a name can be
+ * {@linkplain #insert inserted} between two others later.</p>
  *
  * <h2>Strict and permissive</h2>
  * <p>A <strong>strict</strong> scenario writes only registered names: the registry is the contract of a process

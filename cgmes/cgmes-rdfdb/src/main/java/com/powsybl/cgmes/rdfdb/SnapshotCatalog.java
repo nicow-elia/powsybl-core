@@ -124,7 +124,7 @@ public final class SnapshotCatalog {
     /** The version registry of the scenario, read with the schema check and cached; see {@link VersionRegistry}. */
     private final VersionRegistry registry;
     /** The archive cutoff as last read with the schema check, {@code null} when the scenario has none. */
-    private volatile Archive archive;
+    private volatile ArchiveCutoff archive;
     private volatile IngestStatistics lastIngest;
     /** Runs between the parse of a root and its guarded write, so that a test can make a concurrent writer win. */
     private Runnable beforeRootWrite;
@@ -202,7 +202,7 @@ public final class SnapshotCatalog {
             throw new RdfDbException("the address " + ref + " names no modelling authority, and a read needs one:"
                     + " scenario '" + scenario + "' holds " + modellingAuthorities());
         }
-        Archive known = archive;
+        ArchiveCutoff known = archive;
         if (known != null && known.holds(timestampOf(ref))) {
             throw known.refusal(ref);
         }
@@ -217,7 +217,7 @@ public final class SnapshotCatalog {
      * @return the refusal, or empty when the snapshot is served
      */
     Optional<RdfDbException> archived(String snapshotIri) {
-        Archive known = archive;
+        ArchiveCutoff known = archive;
         SnapshotRef ref = RdfDbNames.refOf(snapshotIri);
         return known != null && ref != null && known.holds(ref.timestamp())
                 ? Optional.of(known.refusal(ref)) : Optional.empty();
@@ -239,12 +239,12 @@ public final class SnapshotCatalog {
     }
 
     /**
-     * The archive cutoff of the scenario: the moment before which its states were moved elsewhere.
+     * The archive cutoff of a scenario: the moment before which its states were moved elsewhere, and where.
      *
      * @param cutoff   the first moment still served; a snapshot of an earlier timestamp is refused
      * @param location where the earlier states went, as the refusal names it
      */
-    private record Archive(Instant cutoff, String location) {
+    public record ArchiveCutoff(Instant cutoff, String location) {
 
         boolean holds(Instant timestamp) {
             return timestamp != null && timestamp.isBefore(cutoff);
@@ -303,7 +303,7 @@ public final class SnapshotCatalog {
         }
         registry.load(rows);
         archive = rows.stream().filter(row -> "archive".equals(SnapshotRows.text(row, "k"))).findFirst()
-                .map(row -> new Archive(SnapshotRows.instantOf(row.get("v")), SnapshotRows.text(row, "n")))
+                .map(row -> new ArchiveCutoff(SnapshotRows.instantOf(row.get("v")), SnapshotRows.text(row, "n")))
                 .orElse(null);
         schemaChecked = true;
     }
@@ -357,7 +357,7 @@ public final class SnapshotCatalog {
                 + " OPTIONAL { " + node + " pdb:archiveCutoff ?c } OPTIONAL { " + node + " pdb:archiveLocation ?l }"
                 + " } }");
         readSchema();
-        Archive now = archive;
+        ArchiveCutoff now = archive;
         boolean applied = cutoff == null ? now == null : now != null && now.cutoff().equals(cutoff);
         if (registry.rev() != rev + 1 || !applied) {
             throw new RdfDbConflictException("the schema node of scenario '" + scenario + "' changed (rev " + rev
@@ -372,23 +372,11 @@ public final class SnapshotCatalog {
     /**
      * The archive cutoff of the scenario, as last read.
      *
-     * @return the first moment still served, or empty when every state is served
+     * @return the first moment still served and where the earlier states went, or empty when every state is served
      */
-    public Optional<Instant> archiveCutoff() {
+    public Optional<ArchiveCutoff> archiveCutoff() {
         checkSchema();
-        Archive known = archive;
-        return known == null ? Optional.empty() : Optional.of(known.cutoff());
-    }
-
-    /**
-     * Where the states before the archive cutoff went, as last read.
-     *
-     * @return the location, or empty when the scenario has no cutoff
-     */
-    public Optional<String> archiveLocation() {
-        checkSchema();
-        Archive known = archive;
-        return known == null ? Optional.empty() : Optional.of(known.location());
+        return Optional.ofNullable(archive);
     }
 
     /**
@@ -523,7 +511,7 @@ public final class SnapshotCatalog {
         // A store may have archived the address since this catalogue read the schema node: one more request, on the
         // failure only, so that the refusal names the archive instead of saying the snapshot does not exist
         readSchema();
-        Archive known = archive;
+        ArchiveCutoff known = archive;
         if (known != null) {
             List<Object> archived = (what instanceof Collection<?> all ? all.stream().map(Object.class::cast)
                     : Stream.of(what)).filter(one -> known.holds(timestampNamed(one))).toList();
@@ -821,7 +809,7 @@ public final class SnapshotCatalog {
     public Map<String, SnapshotInfo> assembly(Instant timestamp, String version) {
         Objects.requireNonNull(timestamp);
         SnapshotRef moment = SnapshotRef.of(scenario, null, timestamp, version);
-        Archive known = archive;
+        ArchiveCutoff known = archive;
         if (known != null && known.holds(timestamp)) {
             throw known.refusal(moment);
         }

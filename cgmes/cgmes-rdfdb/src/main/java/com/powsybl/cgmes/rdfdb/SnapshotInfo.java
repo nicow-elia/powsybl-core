@@ -143,7 +143,7 @@ public record SnapshotInfo(String scenario, String iri, String modellingAuthorit
      * @return the address this snapshot answers to
      */
     public SnapshotRef ref() {
-        return new SnapshotRef(scenario, modellingAuthority, timestamp, version);
+        return SnapshotRef.of(scenario, modellingAuthority, timestamp, version);
     }
 
     /**

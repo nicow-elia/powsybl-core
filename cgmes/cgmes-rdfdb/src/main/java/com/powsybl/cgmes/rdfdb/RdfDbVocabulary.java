@@ -175,8 +175,8 @@ public final class RdfDbVocabulary {
      * The version of a snapshot: the registered name, a plain string literal equal to the {@link #NAME} of one
      * {@link #VERSION_CLASS} node of the scenario.
      *
-     * <p>A snapshot never stores a rank. Every comparison of versions joins the name to its registry node, so a
-     * rerank rewrites one node and not the history.</p>
+     * <p>A snapshot never stores a rank; a listing joins it from the registry node of the name (and a read takes it
+     * from the cached registry), so a rerank rewrites one node and not the history.</p>
      */
     public static final String VERSION = NS + "version";
 

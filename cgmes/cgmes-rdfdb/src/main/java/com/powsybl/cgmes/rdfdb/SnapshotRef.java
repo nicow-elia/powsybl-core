@@ -96,7 +96,7 @@ public record SnapshotRef(String scenario, String modellingAuthority, Instant ti
      * @param timestamp          the moment, or {@code null} for the base timestamp
      * @param version            the version name, or {@code null}
      */
-    public SnapshotRef(String scenario, String modellingAuthority, Instant timestamp, String version) {
+    private SnapshotRef(String scenario, String modellingAuthority, Instant timestamp, String version) {
         this(scenario, modellingAuthority, timestamp, version, false);
     }
 

@@ -61,7 +61,7 @@ class RdfDbProvenanceVariantTest {
 
     private static RdfDbProvenanceImpl.BoundState state(int version, String modelId) {
         RdfDbProvenanceImpl.BoundState bound = new RdfDbProvenanceImpl.BoundState();
-        bound.ref = new SnapshotRef(SCENARIO, BE, TIMESTAMP, String.valueOf(version));
+        bound.ref = SnapshotRef.of(SCENARIO, BE, TIMESTAMP, String.valueOf(version));
         bound.snapshotIri = RdfDbNames.snapshot(SCENARIO, BE, TIMESTAMP, String.valueOf(version));
         bound.modelIds.put(Profiles.SSH, modelId);
         bound.caseDate = BOUND_CASE_DATE;

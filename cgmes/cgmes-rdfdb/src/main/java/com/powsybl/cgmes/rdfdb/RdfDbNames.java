@@ -265,7 +265,7 @@ public final class RdfDbNames {
             return null;
         }
         try {
-            return new SnapshotRef(scenario, ScenarioGraphNames.decode(segments[0]),
+            return SnapshotRef.of(scenario, ScenarioGraphNames.decode(segments[0]),
                     Instant.parse(ScenarioGraphNames.decode(segments[2])), ScenarioGraphNames.decode(segments[3]));
         } catch (DateTimeParseException | NumberFormatException | RdfDbException e) {
             return null;

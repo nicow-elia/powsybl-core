@@ -588,8 +588,8 @@ state, not a step to apply.
 
 Every scenario holds a **version registry**: one `pdb:Version` node per name, with its `pdb:rank` (an integer,
 sparse: an appended name gets the highest rank plus 10) and optionally `pdb:transient true`. A snapshot stores the
-*name* of its version, never a rank: every comparison joins the name to its registry node, so a rerank rewrites a
-few nodes and not the history. `SnapshotCatalog.registry()` returns it as a `VersionRegistry`:
+*name* of its version, never a rank: a listing joins the rank from the name's registry node and a read takes it
+from the cached registry, so a rerank rewrites a few nodes and not the history. `SnapshotCatalog.registry()` returns it as a `VersionRegistry`:
 
 ```java
 VersionRegistry registry = db.snapshots("2016-01-01").registry();
@@ -1094,8 +1094,7 @@ topology change. The layer does not roll over by itself; the rule is the caller'
 
 ```java
 catalog.setArchiveCutoff(Instant.parse("2016-01-01T12:00:00Z"), "s3://grid-archive/2016-01-01");
-catalog.archiveCutoff();     // Optional[2016-01-01T12:00:00Z]
-catalog.archiveLocation();   // Optional[s3://grid-archive/2016-01-01]
+catalog.archiveCutoff();     // Optional[ArchiveCutoff[cutoff=2016-01-01T12:00:00Z, location=s3://grid-archive/2016-01-01]]
 catalog.setArchiveCutoff(null, null);   // served again
 ```
 
